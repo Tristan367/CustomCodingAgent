@@ -75,11 +75,6 @@ def _parse(value: str) -> datetime | None:
     return dt.astimezone()
 
 
-def humandate(value: str) -> str:
-    dt = _parse(value)
-    return dt.strftime("%b %-d, %Y") if dt else value
-
-
 def humantime(value: str) -> str:
     """Relative for recent timestamps, absolute once it stops being useful."""
     dt = _parse(value)
@@ -103,7 +98,6 @@ def clocktime(value: str) -> str:
     return dt.strftime("%H:%M:%S") if dt else value
 
 
-templates.env.filters["humandate"] = humandate
 templates.env.filters["humantime"] = humantime
 templates.env.filters["clocktime"] = clocktime
 templates.env.filters["toolcalls"] = normalize_tool_calls

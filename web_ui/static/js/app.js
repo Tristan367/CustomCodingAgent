@@ -179,6 +179,10 @@ async function streamRequest(url, options) {
 
 function handleEvent(event, stream) {
   switch (event.type) {
+    case 'turn_start':
+      attachMessageActions(event.user_message_id);
+      break;
+
     case 'reasoning':
       if (!stream.reasoningEl) stream.reasoningEl = appendReasoning();
       stream.reasoningEl.textContent += event.text;
@@ -267,12 +271,31 @@ function appendMessage(role, text) {
   node.appendChild(el('div', 'msg-role', role));
   const body = el('div', 'msg-content');
   const content = el('div', 'content-text');
+  content.dataset.raw = text;
   content.innerHTML = md.render(text);
   body.appendChild(content);
   node.appendChild(body);
   App.els.messages.appendChild(node);
   autoscroll();
   return node;
+}
+
+/* Give the just-sent user bubble its database id and hover actions. */
+function attachMessageActions(messageId) {
+  if (!messageId) return;
+  const bubbles = App.els.messages.querySelectorAll('.message.user');
+  const node = bubbles[bubbles.length - 1];
+  if (!node || node.id) return;
+  node.id = `msg-${messageId}`;
+
+  const side = el('span', 'msg-side');
+  const actions = el('span', 'msg-actions');
+  actions.append(
+    button('edit', '', () => editMessage(messageId)),
+    button('retry', '', () => retryFrom(messageId)),
+  );
+  side.append(actions, el('span', 'msg-time', new Date().toTimeString().slice(0, 8)));
+  node.appendChild(side);
 }
 
 function appendReasoning() {
@@ -361,7 +384,6 @@ function toolSummary(name, args) {
     case 'webfetch': return `Fetching ${truncate(args.url, 80)}`;
     case 'vision': return `Looking at ${truncate(args.url, 70)}`;
     case 'task': return `Subagent: ${args.description || ''}`;
-    case 'todowrite': return 'Updating task list';
     default: return name;
   }
 }

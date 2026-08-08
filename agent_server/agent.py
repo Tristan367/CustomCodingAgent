@@ -151,6 +151,14 @@ async def run(session_id: str) -> AsyncIterator[dict]:
     outcome = "done"
 
     try:
+        # Tell the client the database id of the turn it just started, so the
+        # message bubble it optimistically rendered can gain its edit/retry
+        # actions without a full re-render.
+        rows = await db.get_messages(session_id)
+        last_user = next((r for r in reversed(rows) if r["role"] == "user"), None)
+        if last_user is not None:
+            yield {"type": "turn_start", "user_message_id": last_user["id"]}
+
         async for event in _loop(session, provider, ctx, abort):
             if event["type"] in ("permission", "question", "compaction_required"):
                 outcome = "waiting"

@@ -84,9 +84,14 @@ def to_api_message(row: dict) -> dict:
         tool_calls = normalize_tool_calls(row.get("tool_calls"))
         if tool_calls:
             msg["tool_calls"] = tool_calls
-        # Required on tool-call turns; harmlessly ignored otherwise.
-        if row.get("reasoning_content"):
-            msg["reasoning_content"] = row["reasoning_content"]
+            # Required: the API rejects an open tool turn whose assistant message
+            # is missing its reasoning_content. Verified against the live API.
+            if row.get("reasoning_content"):
+                msg["reasoning_content"] = row["reasoning_content"]
+        # Assistant messages without tool calls always terminate a turn, and the
+        # API neither needs nor uses their reasoning. Dropping it shrinks the
+        # context, and the rule is keyed on an immutable property of the row, so
+        # the prompt prefix stays byte-stable and remains cacheable.
     elif role == "tool":
         msg["tool_call_id"] = row.get("tool_call_id") or ""
 

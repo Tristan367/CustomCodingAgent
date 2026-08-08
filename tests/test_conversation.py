@@ -130,7 +130,7 @@ def test_empty_assistant_message_is_removed():
 # ── build_messages ──────────────────────────────────────────────────────────
 
 def test_build_emits_wire_format_with_reasoning():
-    """reasoning_content must survive: DeepSeek 400s without it on tool turns."""
+    """reasoning_content must survive on tool turns: DeepSeek 400s without it."""
     rows = [
         row(1, "user", "read it"),
         row(2, "assistant", "", reasoning_content="I should read",
@@ -142,6 +142,17 @@ def test_build_emits_wire_format_with_reasoning():
     assert assistant["tool_calls"][0]["type"] == "function"
     assert assistant["reasoning_content"] == "I should read"
     assert msgs[3] == {"role": "tool", "content": "contents", "tool_call_id": "c1"}
+
+
+def test_reasoning_dropped_on_turn_ending_messages():
+    """Assistant turns without tool calls do not need reasoning echoed back.
+    Dropping it shrinks context, and keying on tool_calls keeps the prefix stable
+    so the prompt cache still hits."""
+    rows = [
+        row(1, "user", "hi"),
+        row(2, "assistant", "hello", reasoning_content="a long private monologue"),
+    ]
+    assert "reasoning_content" not in build_messages("S", [], rows)[2]
 
 
 def test_compaction_summaries_precede_history():

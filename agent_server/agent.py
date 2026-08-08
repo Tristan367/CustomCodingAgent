@@ -130,14 +130,17 @@ async def _loop(
         if event["type"] in ("permission", "question"):
             return
 
+    # Rebuilt every round, but deterministic per session, so the cached prompt
+    # prefix survives. See build_system_prompt for why that matters.
+    system_prompt = await build_system_prompt(
+        session.get("prompt_profile") or "default", session["project_dir"], session_id
+    )
+
     for _round in range(MAX_TOOL_ROUNDS):
         if abort.is_set():
             yield {"type": "aborted"}
             return
 
-        system_prompt = await build_system_prompt(
-            session.get("prompt_profile") or "default", session["project_dir"]
-        )
         rows = await db.get_messages(session_id)
         messages = build_messages(system_prompt, await db.get_compactions(session_id), rows)
 

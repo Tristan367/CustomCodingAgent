@@ -71,8 +71,15 @@ BUILTIN_PROFILES: dict[str, str] = {
 PROFILE_NAMES = list(BUILTIN_PROFILES)
 
 
-async def build_system_prompt(profile: str, project_dir: str) -> str:
-    """Assemble the prompt: profile body + user preferences + environment."""
+async def build_system_prompt(profile: str, project_dir: str, session_id: str = "") -> str:
+    """Assemble the prompt: profile body + user preferences + environment.
+
+    The result must be byte-identical across every request in a session.
+    DeepSeek prices a cached prompt prefix at roughly 1/120th of an uncached one,
+    and the cache matches on prefix, so a single changing character in the system
+    prompt re-bills the whole conversation at the miss rate. That is why the
+    environment block is snapshotted per session instead of being recomputed.
+    """
     body = await db.get_setting(f"profile_{profile}", "") or BUILTIN_PROFILES.get(
         profile, BASE_PROMPT
     )
@@ -82,11 +89,28 @@ async def build_system_prompt(profile: str, project_dir: str) -> str:
     if prefs:
         parts.append(f"# User preferences\n{prefs}")
 
-    parts.append(environment_block(project_dir))
+    parts.append(environment_block(project_dir, session_id))
     return "\n\n".join(parts)
 
 
-def environment_block(project_dir: str) -> str:
+# session_id -> rendered environment block. Frozen for the life of the process
+# so that files created mid-session cannot invalidate the prompt cache.
+_env_cache: dict[str, str] = {}
+
+
+def clear_env_cache(session_id: str = ""):
+    if session_id:
+        _env_cache.pop(session_id, None)
+    else:
+        _env_cache.clear()
+
+
+def environment_block(project_dir: str, session_id: str = "") -> str:
+    key = session_id or project_dir
+    cached = _env_cache.get(key)
+    if cached is not None:
+        return cached
+
     lines = [
         "# Environment",
         f"Working directory: {project_dir}",
@@ -96,12 +120,16 @@ def environment_block(project_dir: str) -> str:
     ]
     listing = _top_level(project_dir)
     if listing:
-        lines.append(f"Top-level contents: {listing}")
+        lines.append(f"Top-level contents at session start: {listing}")
     lines.append(
         "\nAll relative paths resolve against the working directory. Do not invent "
-        "absolute paths -- verify with `glob` or `read` before using one."
+        "absolute paths -- verify with `glob` or `read` before using one. The listing "
+        "above is a snapshot from when this session started; re-check it if you need "
+        "the current state."
     )
-    return "\n".join(lines)
+    block = "\n".join(lines)
+    _env_cache[key] = block
+    return block
 
 
 def _is_git_repo(project_dir: str) -> bool:

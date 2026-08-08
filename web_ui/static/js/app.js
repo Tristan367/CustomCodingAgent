@@ -13,7 +13,15 @@ const App = {
 
 function initSession() {
   const view = document.getElementById('session-view');
+  const previous = App.sessionId;
   App.sessionId = view ? view.dataset.sessionId : null;
+  if (previous && previous !== App.sessionId) {
+    // Switching tabs must not leave the old session's reader running: it would
+    // keep writing into whichever transcript is on screen now, and it holds
+    // App.streaming true so the new tab refuses to attach to its own run.
+    // The server run is untouched -- only this page stops listening.
+    detachStream();
+  }
   App.els = {
     form: document.getElementById('chat-form'),
     textarea: document.getElementById('chat-textarea'),
@@ -158,6 +166,7 @@ async function resolveToolCall(toolCallId, action, value, scope, grantPath) {
    looks exactly like it was cancelled. */
 async function attachIfRunning() {
   if (!App.sessionId || App.streaming) return;
+  const target = App.sessionId;
   let running = false;
   try {
     const data = await (await fetch('/api/status')).json();
@@ -165,8 +174,9 @@ async function attachIfRunning() {
   } catch (_) {
     return;
   }
-  if (!running) return;
-  await streamRequest(`/api/sessions/${App.sessionId}/attach`, { method: 'GET' }, true);
+  // The user may have moved on while /api/status was in flight.
+  if (!running || App.sessionId !== target) return;
+  await streamRequest(`/api/sessions/${target}/attach`, { method: 'GET' }, true);
 }
 
 async function streamRequest(url, options, attached = false) {
@@ -175,6 +185,7 @@ async function streamRequest(url, options, attached = false) {
 
   const stream = {
     assistantEl: null, contentEl: null, text: '', reasoningEl: null, attached,
+    sessionId: App.sessionId,
   };
   const status = showStatus(attached ? 'Reattaching' : 'Sending');
 
@@ -210,6 +221,9 @@ async function streamRequest(url, options, attached = false) {
         } catch (_) {
           continue;
         }
+        // A late event from a session the user has navigated away from must not
+        // be drawn into the transcript now on screen.
+        if (stream.sessionId !== App.sessionId) continue;
         handleEvent(event, stream);
       }
     }
@@ -406,6 +420,14 @@ function setStreaming(active) {
   App.streaming = active;
   if (App.els.send) App.els.send.hidden = active;
   if (App.els.stop) App.els.stop.hidden = !active;
+}
+
+/* Stop listening without stopping the run. */
+function detachStream() {
+  if (App.abortController) App.abortController.abort();
+  App.abortController = null;
+  stopAllElapsed();
+  setStreaming(false);
 }
 
 async function stopStreaming() {

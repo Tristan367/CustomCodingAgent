@@ -7,6 +7,10 @@ from agent_server.tools.base import ToolContext, ToolResult
 
 MAX_IMAGES = 6
 
+DEFAULT_SEQUENCE_PROMPT = (
+    "These frames were captured in order. Describe what changes between them, "
+    "and note anything that looks broken or stuck."
+)
 DEFAULT_PROMPT = (
     "Describe this image in detail. Include any text, layout, components, "
     "colours, and anything that looks wrong or out of place."
@@ -89,6 +93,7 @@ async def screenshot(
     interval_ms: int = 500,
     actions: list[dict] | None = None,
     prompt: str | None = None,
+    analyze: bool = True,
     **_,
 ) -> ToolResult:
     """Capture a page (optionally a timed sequence) and optionally analyse it."""
@@ -115,17 +120,28 @@ async def screenshot(
     body = f"Captured {len(shots)} screenshot{'s' if len(shots) != 1 else ''} of {url}:\n{listing}"
     title = f"screenshot {url[:60]} ({len(shots)} frame{'s' if len(shots) != 1 else ''})"
 
-    if prompt:
-        try:
-            answer = await engine.analyze(
-                [data for _, data in shots[:MAX_IMAGES]],
-                prompt,
-                [Path(p).name for p, _ in shots[:MAX_IMAGES]],
-            )
-            body += f"\n\n{answer}"
-        except engine.VisionError as e:
-            body += f"\n\n(analysis failed: {e})"
-    else:
-        body += "\n\nPass these paths to the `vision` tool to have them described or compared."
+    if not analyze:
+        body += "\n\nNot analysed. Pass these paths to `vision` when you want them read."
+        return ToolResult(output=body, title=title)
+
+    # Analysing is the default. Returning paths and asking the model to call
+    # `vision` itself cost a whole extra round trip to learn what it had just
+    # captured, which is the only reason to take a screenshot at all.
+    question = prompt or (
+        DEFAULT_SEQUENCE_PROMPT if len(shots) > 1 else DEFAULT_PROMPT
+    )
+    try:
+        answer = await engine.analyze(
+            [data for _, data in shots[:MAX_IMAGES]],
+            question,
+            [Path(p).name for p, _ in shots[:MAX_IMAGES]],
+        )
+        body += f"\n\n{answer}"
+    except engine.VisionError as e:
+        body += (
+            f"\n\n(could not analyse: {e})"
+            "\nThe files above were still captured; retry `vision` on them once the "
+            "rig is reachable."
+        )
 
     return ToolResult(output=body, title=title)

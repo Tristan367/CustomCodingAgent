@@ -262,16 +262,24 @@ register(Tool(
 register(Tool(
     name="screenshot",
     description=(
-        "Capture a web page to PNG files and return their paths. Use `count` and "
+        "Capture a web page and have it described back to you. Use `count` and "
         "`interval_ms` to record a sequence, which is how you inspect animations, "
         "loading states, or anything that changes over time. `actions` lets you click, "
         "fill, hover, or scroll before capturing so you can reach a specific state. "
-        "Add `prompt` to have the result described immediately, or feed the returned "
-        "paths to `vision` later."
+        "Pass `prompt` to ask something specific about what was captured -- a "
+        "targeted question is answered far faster than an open one. Set "
+        "`analyze: false` to only save the files and look at them later."
     ),
     parameters={
         "type": "object",
         "properties": {
+                "analyze": {
+                    "type": "boolean",
+                    "description": (
+                        "Defaults to true: the capture is described in the same "
+                        "call. Set false to only save the files."
+                    ),
+                },
             "url": {"type": "string", "description": "Page to capture (http, https, or file://)"},
             "selector": {"type": "string", "description": "CSS selector to crop to"},
             "full_page": {"type": "boolean", "description": "Whole scrollable page"},

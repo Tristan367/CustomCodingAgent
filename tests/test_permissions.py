@@ -1,7 +1,8 @@
 """Tests for the permission gates.
 
-The filesystem gate is the security-relevant one: shell auto-approval must never
-imply permission to write outside the project directory.
+Two properties matter most here: shell auto-approval must never imply permission
+to write outside the project directory, and no grant may ever leak from one
+session into another.
 """
 
 import sys
@@ -18,14 +19,22 @@ from agent_server.tools.bash import is_read_only  # noqa: E402
 pytestmark = pytest.mark.asyncio
 
 
+SESSION = "sess-a"
+OTHER = "sess-b"
+
+
 @pytest.fixture
 async def clean_db(tmp_path, monkeypatch):
     monkeypatch.setattr("agent_server.database.DB_PATH", tmp_path / "perm.db")
-    permissions._cache = None
     await db.close()
     await db.init_db()
+    for sid in (SESSION, OTHER):
+        await db._execute(
+            "INSERT INTO sessions (id, name, project_dir, created_at, last_active_at)"
+            " VALUES (?,?,?,?,?)",
+            (sid, sid, str(tmp_path), "now", "now"),
+        )
     yield tmp_path
-    permissions._cache = None
     await db.close()
 
 
@@ -53,18 +62,20 @@ async def test_mutating_commands_need_approval(command):
 async def test_writes_inside_project_need_no_prompt(clean_db):
     project = str(clean_db)
     assert await permissions.check(
-        "write", {"filePath": f"{project}/src/a.py"}, project, False
+        "write", {"filePath": f"{project}/src/a.py"}, SESSION, project, False
     ) is None
 
 
 async def test_relative_paths_resolve_against_the_project(clean_db):
     project = str(clean_db)
-    assert await permissions.check("edit", {"filePath": "src/a.py"}, project, False) is None
+    assert await permissions.check("edit", {"filePath": "src/a.py"}, SESSION, project, False) is None
 
 
 async def test_writes_outside_project_prompt(clean_db):
     project = str(clean_db)
-    prompt = await permissions.check("write", {"filePath": "/tmp/elsewhere/x.py"}, project, False)
+    prompt = await permissions.check(
+        "write", {"filePath": "/tmp/elsewhere/x.py"}, SESSION, project, False
+    )
     assert prompt is not None
     assert prompt["kind"] == "path"
     assert prompt["path"] == "/tmp/elsewhere/x.py"
@@ -75,7 +86,8 @@ async def test_shell_auto_approve_does_not_grant_filesystem_access(clean_db):
     is not agreeing to let the agent rewrite files anywhere on the machine."""
     project = str(clean_db)
     prompt = await permissions.check(
-        "write", {"filePath": "/home/someone/.ssh/config"}, project, shell_auto_approve=True
+        "write", {"filePath": "/home/someone/.ssh/config"}, SESSION, project,
+        shell_auto_approve=True,
     )
     assert prompt is not None
     assert prompt["kind"] == "path"
@@ -87,39 +99,62 @@ async def test_granting_a_directory_persists(clean_db):
     outside.mkdir(exist_ok=True)
     target = f"{outside}/x.py"
 
-    assert await permissions.check("write", {"filePath": target}, project, False) is not None
-    await permissions.allow_directory(str(outside))
-    assert await permissions.check("write", {"filePath": target}, project, False) is None
-
-    # And a fresh read of the setting still sees it.
-    permissions._cache = None
-    assert await permissions.check("write", {"filePath": target}, project, False) is None
+    assert await permissions.check("write", {"filePath": target}, SESSION, project, False) is not None
+    await permissions.allow_directory(SESSION, str(outside))
+    assert await permissions.check("write", {"filePath": target}, SESSION, project, False) is None
 
 
 async def test_revoking_a_directory_restores_the_prompt(clean_db):
     project = str(clean_db)
     outside = clean_db.parent / "outside2"
     outside.mkdir(exist_ok=True)
-    await permissions.allow_directory(str(outside))
-    await permissions.revoke_directory(str(outside))
-    assert await permissions.check("write", {"filePath": f"{outside}/x"}, project, False) is not None
+    await permissions.allow_directory(SESSION, str(outside))
+    await permissions.revoke_directory(SESSION, str(outside))
+    assert await permissions.check(
+        "write", {"filePath": f"{outside}/x"}, SESSION, project, False
+    ) is not None
 
 
 async def test_denied_paths_can_never_be_allowed(clean_db):
     project = str(clean_db)
-    await permissions.allow_directory("/proc")
-    prompt = await permissions.check("write", {"filePath": "/proc/self/mem"}, project, False)
+    await permissions.allow_directory(SESSION, "/proc")
+    prompt = await permissions.check(
+        "write", {"filePath": "/proc/self/mem"}, SESSION, project, False
+    )
     assert prompt is not None
     assert prompt["kind"] == "denied"
 
 
 async def test_shell_gate_still_applies(clean_db):
     project = str(clean_db)
-    assert await permissions.check("bash", {"command": "ls"}, project, False) is None
-    prompt = await permissions.check("bash", {"command": "rm -rf x"}, project, False)
+    assert await permissions.check("bash", {"command": "ls"}, SESSION, project, False) is None
+    prompt = await permissions.check("bash", {"command": "rm -rf x"}, SESSION, project, False)
     assert prompt["kind"] == "shell"
-    assert await permissions.check("bash", {"command": "rm -rf x"}, project, True) is None
+    assert await permissions.check("bash", {"command": "rm -rf x"}, SESSION, project, True) is None
 
 
 async def test_read_is_not_gated(clean_db):
-    assert await permissions.check("read", {"filePath": "/etc/hosts"}, str(clean_db), False) is None
+    assert await permissions.check(
+        "read", {"filePath": "/etc/hosts"}, SESSION, str(clean_db), False
+    ) is None
+
+
+async def test_grants_do_not_leak_between_sessions(clean_db):
+    """A grant made while supervising one task must not silently apply to another."""
+    project = str(clean_db)
+    outside = clean_db.parent / "shared"
+    outside.mkdir(exist_ok=True)
+    target = f"{outside}/x.py"
+
+    await permissions.allow_directory(SESSION, str(outside))
+    assert await permissions.check("write", {"filePath": target}, SESSION, project, False) is None
+    assert await permissions.check("write", {"filePath": target}, OTHER, project, False) is not None
+    assert await permissions.list_allowed(OTHER) == []
+
+
+async def test_deleting_a_session_drops_its_grants(clean_db):
+    outside = clean_db.parent / "gone"
+    outside.mkdir(exist_ok=True)
+    await permissions.allow_directory(SESSION, str(outside))
+    await db.delete_session(SESSION)
+    assert await permissions.list_allowed(SESSION) == []

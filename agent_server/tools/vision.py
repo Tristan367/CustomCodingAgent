@@ -1,85 +1,131 @@
-"""Vision: screenshot a URL or describe an image via the local Ollama rig.
+"""Vision tools: look at images, and capture web pages to look at."""
 
-VisionHelper exposes a synchronous, Playwright-backed API. Playwright's sync
-interface raises if constructed inside a running event loop, so every call here
-is dispatched to a worker thread.
-"""
-
-import asyncio
-import sys
 from pathlib import Path
 
-from agent_server.config import VISION_HELPER_PATH, VISION_OLLAMA_URL
+from agent_server import vision as engine
 from agent_server.tools.base import ToolContext, ToolResult
 
-SCREENSHOT_TIMEOUT = 120
-_import_lock = asyncio.Lock()
+MAX_IMAGES = 6
 
-
-def _load_helper():
-    """Import VisionHelper's `core` module, adding it to sys.path once."""
-    if VISION_HELPER_PATH not in sys.path:
-        sys.path.insert(0, VISION_HELPER_PATH)
-    import core  # type: ignore
-
-    return core
+DEFAULT_PROMPT = (
+    "Describe this image in detail. Include any text, layout, components, "
+    "colours, and anything that looks wrong or out of place."
+)
 
 
 async def vision(
     ctx: ToolContext,
     *,
-    url: str,
     prompt: str | None = None,
+    paths: list[str] | str | None = None,
+    url: str | None = None,
     selector: str | None = None,
+    full_page: bool = False,
     width: int = 1280,
     height: int = 900,
     **_,
 ) -> ToolResult:
-    title = f"vision {url[:70]}"
-    if not Path(VISION_HELPER_PATH).is_dir():
+    """Analyse local image files and/or a freshly captured web page."""
+    images: list[bytes] = []
+    labels: list[str] = []
+    title_bits: list[str] = []
+
+    if isinstance(paths, str):
+        paths = [paths]
+    paths = [p for p in (paths or []) if p]
+
+    if not paths and not url:
         return ToolResult.error(
-            f"VisionHelper not found at {VISION_HELPER_PATH}. Set VISION_HELPER_PATH.", title
+            "give either `paths` (image files to look at) or `url` (a page to capture)",
+            "vision",
         )
+    if len(paths) > MAX_IMAGES:
+        return ToolResult.error(f"at most {MAX_IMAGES} images per call", "vision")
 
-    def _run() -> str:
-        core = _load_helper()
-        shot = core.capture_screenshot(
-            url=url, selector=selector, crop=bool(selector), width=width, height=height
-        )
-        return core.analyze(
-            shot, prompt=prompt or core.DEFAULT_PROMPT, ollama_url=VISION_OLLAMA_URL
-        )
+    for raw in paths:
+        path = ctx.resolve(raw)
+        try:
+            images.append(engine.load_image(path))
+        except engine.VisionError as e:
+            return ToolResult.error(str(e), "vision")
+        labels.append(path.name)
+        title_bits.append(f"{path.name} ({engine.describe_image_file(path)})")
+
+    if url:
+        try:
+            shots = await engine.capture(
+                url, selector=selector, full_page=full_page, width=width, height=height
+            )
+        except Exception as e:  # noqa: BLE001
+            return ToolResult.error(f"could not capture {url}: {e}", "vision")
+        for saved, data in shots:
+            images.append(data)
+            labels.append(Path(saved).name)
+        title_bits.append(url)
 
     try:
-        # Playwright sync API cannot run on the event loop thread.
-        result = await asyncio.wait_for(asyncio.to_thread(_run), timeout=SCREENSHOT_TIMEOUT)
-    except asyncio.TimeoutError:
-        return ToolResult.error(f"vision timed out after {SCREENSHOT_TIMEOUT}s", title)
+        answer = await engine.analyze(images, prompt or DEFAULT_PROMPT, labels)
+    except engine.VisionError as e:
+        return ToolResult.error(str(e), "vision")
+
+    header = f"Looked at {len(images)} image{'s' if len(images) != 1 else ''}: " + ", ".join(labels)
+    return ToolResult(
+        output=f"{header}\n\n{answer}",
+        title=f"vision: {', '.join(title_bits)[:90]}",
+    )
+
+
+async def screenshot(
+    ctx: ToolContext,
+    *,
+    url: str,
+    selector: str | None = None,
+    full_page: bool = False,
+    width: int = 1280,
+    height: int = 900,
+    wait_for: str | None = None,
+    delay_ms: int = 0,
+    count: int = 1,
+    interval_ms: int = 500,
+    actions: list[dict] | None = None,
+    prompt: str | None = None,
+    **_,
+) -> ToolResult:
+    """Capture a page (optionally a timed sequence) and optionally analyse it."""
+    if not url:
+        return ToolResult.error("`url` is required", "screenshot")
+
+    try:
+        shots = await engine.capture(
+            url,
+            selector=selector,
+            full_page=full_page,
+            width=width,
+            height=height,
+            wait_for=wait_for,
+            delay_ms=delay_ms,
+            count=count,
+            interval_ms=interval_ms,
+            actions=actions,
+        )
     except Exception as e:  # noqa: BLE001
-        return ToolResult.error(f"{type(e).__name__}: {e}", title)
+        return ToolResult.error(f"capture failed: {e}", f"screenshot {url[:60]}")
 
-    return ToolResult(output=result, title=title)
+    listing = "\n".join(f"  {i + 1}. {path}" for i, (path, _) in enumerate(shots))
+    body = f"Captured {len(shots)} screenshot{'s' if len(shots) != 1 else ''} of {url}:\n{listing}"
+    title = f"screenshot {url[:60]} ({len(shots)} frame{'s' if len(shots) != 1 else ''})"
 
+    if prompt:
+        try:
+            answer = await engine.analyze(
+                [data for _, data in shots[:MAX_IMAGES]],
+                prompt,
+                [Path(p).name for p, _ in shots[:MAX_IMAGES]],
+            )
+            body += f"\n\n{answer}"
+        except engine.VisionError as e:
+            body += f"\n\n(analysis failed: {e})"
+    else:
+        body += "\n\nPass these paths to the `vision` tool to have them described or compared."
 
-async def describe_image(image_path: str, prompt: str | None = None) -> str:
-    """Describe a user-uploaded image. Used by the chat image-attach flow."""
-    def _run() -> str:
-        core = _load_helper()
-        return core.analyze_image_file(
-            image_path=image_path,
-            prompt=prompt or "Describe this image in detail.",
-            ollama_url=VISION_OLLAMA_URL,
-        )
-
-    return await asyncio.wait_for(asyncio.to_thread(_run), timeout=SCREENSHOT_TIMEOUT)
-
-
-async def rig_available() -> bool:
-    try:
-        import httpx
-
-        async with httpx.AsyncClient(timeout=4) as client:
-            resp = await client.get(f"{VISION_OLLAMA_URL}/api/tags")
-            return resp.status_code == 200
-    except Exception:  # noqa: BLE001
-        return False
+    return ToolResult(output=body, title=title)

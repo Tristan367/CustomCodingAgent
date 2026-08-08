@@ -364,7 +364,7 @@ async def _drain_pending(session: dict, ctx: ToolContext) -> AsyncIterator[dict]
 
         if call["id"] not in _approved_calls:
             prompt = await permissions.check(
-                name, args, session["project_dir"], shell_auto
+                name, args, session_id, session["project_dir"], shell_auto
             )
             if prompt is not None:
                 yield {
@@ -434,7 +434,7 @@ async def resolve_pending(
     if action == "approve":
         # Grant a persistent write scope before running, if the user asked for it.
         if scope == "directory" and grant_path:
-            await permissions.allow_directory(grant_path)
+            await permissions.allow_directory(session_id, grant_path)
         # Don't run it here. Marking it approved lets the agent loop execute it
         # and stream tool_start/tool_end, so the user sees the result.
         _approved_calls.add(tool_call_id)

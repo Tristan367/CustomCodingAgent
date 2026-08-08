@@ -6,7 +6,7 @@ from pathlib import Path
 from typing import AsyncIterator
 
 from fastapi import APIRouter, Body, File, Form, HTTPException, Request, UploadFile
-from fastapi.responses import JSONResponse, StreamingResponse
+from fastapi.responses import FileResponse, JSONResponse, StreamingResponse
 
 from agent_server import agent
 from agent_server import database as db
@@ -15,8 +15,7 @@ from agent_server import stt as stt_service
 from agent_server.compaction import compact_session, should_offer_compaction
 from agent_server.config import MIN_COMPACT_THRESHOLD, MODELS_BY_ID, UPLOAD_DIR
 from agent_server.models import ChatRequest, EditMessageRequest, ResolveRequest
-from agent_server.providers import get_provider
-from agent_server.tools.vision import describe_image
+from agent_server import vision as vision_engine
 
 router = APIRouter(prefix="/api", tags=["chat"])
 
@@ -73,35 +72,47 @@ async def chat_with_image(
     session_id: str,
     request: Request,
     message: str = Form(""),
-    image: UploadFile | None = File(None),
-    vision_prompt: str = Form("Describe this image in detail."),
+    images: list[UploadFile] = File(default=[]),
 ):
-    session = await _require_session(session_id)
-    text = message.strip()
+    """Send a message with one or more attached images.
 
-    if image is None or not image.filename:
+    The images are saved and referenced by path; the agent decides for itself
+    whether and how to look at them with the `vision` tool. Earlier versions ran
+    vision eagerly here and injected a description, which forced the user to
+    write the vision prompt and threw away the original image.
+    """
+    await _require_session(session_id)
+    text = message.strip()
+    attachments = [i for i in images if i and i.filename]
+
+    if not attachments:
         if not text:
             raise HTTPException(400, "Message or image is required")
         await db.add_message(session_id, "user", text)
         return _stream(session_id, request)
 
-    path = await _save_upload(image)
-    provider = get_provider(session["provider"])
-
-    if provider.supports_vision():
-        content = f"[image attached: {path}]"
-    else:
+    saved: list[str] = []
+    for upload in attachments[:6]:
         try:
-            description = await describe_image(str(path), vision_prompt)
-            content = (
-                f"The user attached an image. A vision model was asked "
-                f'"{vision_prompt}" and reported:\n\n{description}'
-            )
+            saved.append(await _save_image(session_id, upload))
+        except HTTPException:
+            raise
         except Exception as e:  # noqa: BLE001
-            content = f"[the user attached an image, but vision analysis failed: {e}]"
+            raise HTTPException(400, f"Could not read {upload.filename}: {e}") from e
 
+    lines = [
+        f"[Image attached: {path} ({vision_engine.describe_image_file(path)})]"
+        for path in saved
+    ]
+    noun = "image" if len(saved) == 1 else "images"
+    lines.append(
+        f"\nUse the `vision` tool on {'this path' if len(saved) == 1 else 'these paths'} "
+        f"to see the {noun}."
+    )
+    content = "\n".join(lines)
     if text:
-        content += f"\n\nUser message: {text}"
+        content += f"\n\n{text}"
+
     await db.add_message(session_id, "user", content)
     return _stream(session_id, request)
 
@@ -157,13 +168,15 @@ async def total_usage():
 
 # ── Write permissions ───────────────────────────────────────────────────────
 
-@router.get("/permissions/dirs")
-async def list_write_dirs():
-    return {"dirs": await permissions.list_allowed()}
+@router.get("/sessions/{session_id}/write-dirs")
+async def list_write_dirs(session_id: str):
+    await _require_session(session_id)
+    return {"dirs": await permissions.list_allowed(session_id)}
 
 
-@router.post("/permissions/dirs")
-async def add_write_dir(payload: dict = Body(default={})):
+@router.post("/sessions/{session_id}/write-dirs")
+async def add_write_dir(session_id: str, payload: dict = Body(default={})):
+    await _require_session(session_id)
     path = str(payload.get("path", "")).strip()
     if not path:
         raise HTTPException(400, "A path is required")
@@ -171,13 +184,14 @@ async def add_write_dir(payload: dict = Body(default={})):
     if not resolved.is_dir():
         raise HTTPException(400, f"Not a directory: {resolved}")
     if permissions.is_denied(resolved):
-        raise HTTPException(400, f"{resolved} is on the permanent deny list")
-    return {"dirs": await permissions.allow_directory(str(resolved))}
+        raise HTTPException(400, f"{resolved} can never be granted")
+    return {"dirs": await permissions.allow_directory(session_id, str(resolved))}
 
 
-@router.delete("/permissions/dirs")
-async def remove_write_dir(path: str):
-    return {"dirs": await permissions.revoke_directory(path)}
+@router.delete("/sessions/{session_id}/write-dirs")
+async def remove_write_dir(session_id: str, path: str):
+    await _require_session(session_id)
+    return {"dirs": await permissions.revoke_directory(session_id, path)}
 
 
 @router.get("/sessions/{session_id}/state")
@@ -298,27 +312,67 @@ async def transcribe(audio: UploadFile = File(...)):
     return {"text": text}
 
 
+@router.get("/files/image")
+async def serve_image(path: str):
+    """Serve an attached or captured image.
+
+    Restricted to the directories this app writes into, so a crafted path cannot
+    turn the endpoint into an arbitrary file read.
+    """
+    from agent_server.vision import CAPTURE_DIR
+
+    try:
+        resolved = Path(path).expanduser().resolve()
+    except OSError:
+        raise HTTPException(400, "Bad path") from None
+
+    roots = [UPLOAD_DIR.resolve(), CAPTURE_DIR.resolve()]
+    if not any(_within(resolved, root) for root in roots):
+        raise HTTPException(403, "Outside the allowed image directories")
+    if not resolved.is_file():
+        raise HTTPException(404, "Not found")
+    return FileResponse(resolved)
+
+
+def _within(path: Path, root: Path) -> bool:
+    try:
+        path.relative_to(root)
+        return True
+    except ValueError:
+        return False
+
+
 # ── Images ──────────────────────────────────────────────────────────────────
 
-@router.post("/sessions/{session_id}/analyze-image")
-async def analyze_image(
-    session_id: str,
-    image: UploadFile = File(...),
-    prompt: str = Form("Describe this image in detail."),
-):
-    await _require_session(session_id)
-    path = await _save_upload(image)
-    try:
-        description = await describe_image(str(path), prompt)
-    except Exception as e:  # noqa: BLE001
-        raise HTTPException(502, f"Vision analysis failed: {e}") from e
-    return {"description": description}
+ALLOWED_IMAGE_TYPES = {".png", ".jpg", ".jpeg", ".gif", ".webp", ".bmp", ".tif", ".tiff", ".avif", ".heic"}
 
 
-async def _save_upload(image: UploadFile) -> Path:
-    suffix = Path(image.filename or "").suffix or ".png"
-    if suffix.lower() not in {".png", ".jpg", ".jpeg", ".gif", ".webp", ".bmp"}:
+async def _save_image(session_id: str, upload: UploadFile) -> str:
+    """Normalise an upload to PNG and store it under the session's directory.
+
+    Browsers happily hand over a WebP named `.jpg`, and the vision backend
+    rejects WebP outright, so the bytes are decoded and re-encoded rather than
+    trusting the extension.
+    """
+    suffix = Path(upload.filename or "").suffix.lower()
+    if suffix and suffix not in ALLOWED_IMAGE_TYPES:
         raise HTTPException(400, f"Unsupported image type: {suffix}")
-    path = UPLOAD_DIR / f"{uuid.uuid4().hex}{suffix}"
-    path.write_bytes(await image.read())
-    return path
+
+    raw = await upload.read()
+    if not raw:
+        raise HTTPException(400, "Empty image upload")
+    if len(raw) > 40 * 1024 * 1024:
+        raise HTTPException(400, "Image is larger than 40 MB")
+
+    try:
+        data = await vision_engine.normalize_in_thread(raw)
+    except vision_engine.VisionError as e:
+        raise HTTPException(400, str(e)) from e
+
+    directory = UPLOAD_DIR / session_id
+    directory.mkdir(parents=True, exist_ok=True)
+    stem = Path(upload.filename or "image").stem[:40] or "image"
+    safe = "".join(c for c in stem if c.isalnum() or c in "-_") or "image"
+    path = directory / f"{safe}-{uuid.uuid4().hex[:6]}.png"
+    path.write_bytes(data)
+    return str(path)

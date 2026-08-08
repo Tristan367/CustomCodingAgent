@@ -1,6 +1,7 @@
 """FastAPI application: page routes, HTMX partials, and settings."""
 
 import json
+import re
 from contextlib import asynccontextmanager
 from datetime import datetime, timezone
 from pathlib import Path
@@ -39,7 +40,7 @@ from agent_server.system_prompt import (
 )
 from agent_server import permissions
 from agent_server.tools.registry import TOOLS, get_tool
-from agent_server.tools.vision import rig_available
+from agent_server.vision import rig_available
 
 BASE_DIR = Path(__file__).resolve().parent.parent
 TEMPLATE_DIR = BASE_DIR / "web_ui" / "templates"
@@ -95,11 +96,47 @@ def humantime(value: str) -> str:
 
 def clocktime(value: str) -> str:
     dt = _parse(value)
-    return dt.strftime("%H:%M:%S") if dt else value
+    if dt is None:
+        return value
+    return dt.strftime("%-I:%M %p").lower().replace("am", "AM").replace("pm", "PM")
+
+
+def tildepath(value: str) -> str:
+    """Render /home/you/projects/x as ~/projects/x."""
+    if not value:
+        return value
+    home = str(Path.home())
+    if value == home:
+        return "~"
+    if value.startswith(home + "/"):
+        return "~" + value[len(home):]
+    return value
 
 
 templates.env.filters["humantime"] = humantime
+_ATTACHMENT_RE = re.compile(r"^\[Image attached: (?P<path>.+?) \((?P<meta>[^)]*)\)\]$", re.M)
+_ATTACHMENT_HINT = re.compile(r"^Use the `vision` tool on th(?:is path|ese paths) to see the images?\.$", re.M)
+
+
+def extract_attachments(content: str) -> list[dict]:
+    """Attachment paths recorded in a user message, for rendering as thumbnails."""
+    return [
+        {"path": m.group("path"), "meta": m.group("meta")}
+        for m in _ATTACHMENT_RE.finditer(content or "")
+    ]
+
+
+def strip_attachments(content: str) -> str:
+    """The message without the plumbing the model needs but the user does not."""
+    text = _ATTACHMENT_RE.sub("", content or "")
+    text = _ATTACHMENT_HINT.sub("", text)
+    return text.strip()
+
+
 templates.env.filters["clocktime"] = clocktime
+templates.env.filters["tildepath"] = tildepath
+templates.env.filters["attachments"] = extract_attachments
+templates.env.filters["withoutattachments"] = strip_attachments
 templates.env.filters["toolcalls"] = normalize_tool_calls
 
 
@@ -127,7 +164,22 @@ async def _session_context(session: dict) -> dict:
         "pending": await _pending_prompt(session, messages),
         "sound_enabled": await _sound_enabled(),
         "threshold_steps": THRESHOLD_STEPS,
+        "allowed_dirs": await permissions.list_allowed(session["id"]),
+        "retryable_id": _retryable_message_id(messages),
     }
+
+
+def _retryable_message_id(messages: list[dict]) -> int | None:
+    """The trailing user message, if the model never answered it.
+
+    Editing or retrying a turn the assistant already responded to would rewrite
+    history the user has read, so those actions are only offered on a turn that
+    produced no reply -- which is exactly the failed/aborted case worth redoing.
+    """
+    if not messages:
+        return None
+    last = messages[-1]
+    return last["id"] if last["role"] == "user" else None
 
 
 async def _pending_prompt(session: dict, messages: list[dict]) -> dict | None:
@@ -148,7 +200,9 @@ async def _pending_prompt(session: dict, messages: list[dict]) -> dict | None:
             "options": args.get("options") or [],
         }
     shell_auto = bool(session.get("bash_auto_approve")) or agent.runtime_auto_approve(session["id"])
-    prompt = await permissions.check(name, args, session["project_dir"], shell_auto)
+    prompt = await permissions.check(
+        name, args, session["id"], session["project_dir"], shell_auto
+    )
     if prompt is None:
         return None
     return {
@@ -164,7 +218,6 @@ async def _home_context(error: str = "") -> dict:
     return {
         "sessions": await db.list_sessions(),
         "totals": await db.get_total_cost(),
-        "allowed_dirs": await permissions.list_allowed(),
         "sound_enabled": await _sound_enabled(),
         "stt": stt_availability(),
         "settings": await db.get_all_settings(),

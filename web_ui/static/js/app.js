@@ -85,22 +85,22 @@ async function onSubmit(event) {
   }
 
   const message = App.els.textarea.value.trim();
-  const imageInput = document.getElementById('image-input');
-  const hasImage = imageInput && imageInput.files.length > 0;
-  if (!message && !hasImage) return;
+  const attachments = pendingImages.slice();
+  if (!message && !attachments.length) return;
 
-  appendMessage('user', message || '(image)');
+  appendUserMessage(message, attachments);
   App.els.textarea.value = '';
   Persist.clearDraft();
   autosize(App.els.textarea);
+  pendingImages = [];
+  renderAttachments();
 
   let endpoint, body, headers = {};
-  if (hasImage) {
+  if (attachments.length) {
     endpoint = `/api/sessions/${App.sessionId}/chat-with-image`;
     body = new FormData();
     body.append('message', message);
-    body.append('image', imageInput.files[0]);
-    imageInput.value = '';
+    for (const file of attachments) body.append('images', file, file.name);
   } else {
     endpoint = `/api/sessions/${App.sessionId}/chat`;
     headers['Content-Type'] = 'application/json';
@@ -131,6 +131,7 @@ async function streamRequest(url, options) {
   App.abortController = new AbortController();
 
   const stream = { assistantEl: null, contentEl: null, text: '', reasoningEl: null };
+  const status = showStatus('Sending');
 
   try {
     const resp = await fetch(url, { ...options, signal: App.abortController.signal });
@@ -170,6 +171,8 @@ async function streamRequest(url, options) {
   } catch (err) {
     if (err.name !== 'AbortError') appendNotice('error', err.message);
   } finally {
+    status.remove();
+    flushRender(stream);
     if (stream.assistantEl) stream.assistantEl.classList.remove('streaming');
     setStreaming(false);
     App.abortController = null;
@@ -178,8 +181,12 @@ async function streamRequest(url, options) {
 }
 
 function handleEvent(event, stream) {
+  // Any event means the request landed; the placeholder has done its job.
+  if (event.type !== 'turn_start') clearStatus();
+
   switch (event.type) {
     case 'turn_start':
+      setStatusText('Waiting for the model');
       attachMessageActions(event.user_message_id);
       break;
 
@@ -200,8 +207,7 @@ function handleEvent(event, stream) {
         stream.contentEl = stream.assistantEl.querySelector('.content-text');
       }
       stream.text += event.text;
-      stream.contentEl.innerHTML = md.render(stream.text);
-      autoscroll();
+      scheduleRender(stream);
       break;
 
     case 'tool_start':
@@ -244,6 +250,38 @@ function handleEvent(event, stream) {
   }
 }
 
+/* Re-rendering markdown on every token is O(n^2): each token re-parses and
+ * re-highlights the whole message so far. On a long answer with code blocks that
+ * is enough to lock up the tab. Coalesce into at most one render per frame, and
+ * no more often than RENDER_INTERVAL_MS. */
+const RENDER_INTERVAL_MS = 90;
+let renderQueued = false;
+let lastRenderAt = 0;
+
+function scheduleRender(stream) {
+  stream.dirty = true;
+  if (renderQueued) return;
+  renderQueued = true;
+  requestAnimationFrame(() => {
+    renderQueued = false;
+    const now = performance.now();
+    if (now - lastRenderAt < RENDER_INTERVAL_MS) {
+      setTimeout(() => scheduleRender(stream), RENDER_INTERVAL_MS - (now - lastRenderAt));
+      return;
+    }
+    lastRenderAt = now;
+    flushRender(stream);
+  });
+}
+
+function flushRender(stream) {
+  if (!stream.dirty || !stream.contentEl) return;
+  stream.dirty = false;
+  stream.contentEl.dataset.raw = stream.text;
+  stream.contentEl.innerHTML = md.render(stream.text);
+  autoscroll();
+}
+
 function setStreaming(active) {
   App.streaming = active;
   if (App.els.send) App.els.send.hidden = active;
@@ -264,6 +302,33 @@ function el(tag, className, html) {
   if (className) node.className = className;
   if (html !== undefined) node.innerHTML = html;
   return node;
+}
+
+/* A transient "Sending / Waiting" line, so there is feedback in the second or
+ * two before the first token arrives. */
+let statusEl = null;
+
+function showStatus(text) {
+  clearStatus();
+  const node = el('div', 'message status-line');
+  node.appendChild(el('div', 'msg-role', ''));
+  const body = el('div', 'msg-content');
+  body.append(el('span', 'spinner-dot'), el('span', 'status-text', text));
+  node.appendChild(body);
+  App.els.messages.appendChild(node);
+  statusEl = node;
+  autoscroll();
+  return { remove: clearStatus };
+}
+
+function setStatusText(text) {
+  const label = statusEl && statusEl.querySelector('.status-text');
+  if (label) label.textContent = text;
+}
+
+function clearStatus() {
+  if (statusEl) statusEl.remove();
+  statusEl = null;
 }
 
 function appendMessage(role, text) {
@@ -296,6 +361,24 @@ function attachMessageActions(messageId) {
   );
   side.append(actions, el('span', 'msg-time', new Date().toTimeString().slice(0, 8)));
   node.appendChild(side);
+}
+
+/* The user's own bubble, with thumbnails for anything attached. */
+function appendUserMessage(text, attachments) {
+  const node = appendMessage('user', text || '');
+  if (!attachments || !attachments.length) return node;
+  const tray = el('div', 'msg-attachments');
+  for (const file of attachments) {
+    const img = document.createElement('img');
+    img.alt = file.name;
+    img.title = file.name;
+    const reader = new FileReader();
+    reader.onload = (e) => { img.src = e.target.result; };
+    reader.readAsDataURL(file);
+    tray.appendChild(img);
+  }
+  node.querySelector('.msg-content').appendChild(tray);
+  return node;
 }
 
 function appendReasoning() {
@@ -851,14 +934,19 @@ function button(label, className, onClick) {
 
 /* ── Dictation ───────────────────────────────────────────────────────────── */
 
+const MIC_TITLE = 'Dictate \u2014 click to toggle, or hold Ctrl+Space to talk';
+
 const Dictation = {
   recording: false,
+  starting: false,      // set synchronously, before any await
+  pushToTalk: false,
   recorder: null,
   chunks: [],
   streamRef: null,
   audioCtx: null,
   analyser: null,
   rafId: null,
+  meterGeneration: 0,   // stale animation loops check this and exit
   els: {},
 
   init() {
@@ -870,6 +958,7 @@ const Dictation = {
   },
 
   async toggle() {
+    this.pushToTalk = false;
     if (this.recording) {
       const text = await this.stop();
       if (text) insertAtCursor(App.els.textarea, text);
@@ -878,51 +967,102 @@ const Dictation = {
     }
   },
 
+  /* Hold to talk: start on keydown, transcribe and insert on release. */
+  async hold() {
+    if (this.recording || this.starting) return;
+    this.pushToTalk = true;
+    await this.start();
+  },
+
+  async release() {
+    if (!this.pushToTalk) return;
+    this.pushToTalk = false;
+    if (!this.recording) return;
+    const text = await this.stop();
+    if (text) insertAtCursor(App.els.textarea, text);
+  },
+
   async start() {
+    // Guard synchronously. Setting `recording` after the await let two quick
+    // triggers both get through, which spawned a second meter loop that nothing
+    // tracked and that then ran forever.
+    if (this.recording || this.starting) return;
     if (!navigator.mediaDevices || !window.MediaRecorder) {
       appendNotice('error', 'This browser cannot record audio.');
       return;
     }
+    this.starting = true;
+
+    let stream;
     try {
-      this.streamRef = await navigator.mediaDevices.getUserMedia({
+      stream = await navigator.mediaDevices.getUserMedia({
         audio: { echoCancellation: true, noiseSuppression: true, channelCount: 1 },
       });
     } catch (err) {
+      this.starting = false;
       appendNotice('error', `Microphone unavailable: ${err.message}`);
       return;
     }
 
-    this.chunks = [];
-    const mime = ['audio/webm;codecs=opus', 'audio/webm', 'audio/ogg;codecs=opus', 'audio/mp4']
-      .find((t) => MediaRecorder.isTypeSupported(t)) || '';
-    this.recorder = new MediaRecorder(this.streamRef, mime ? { mimeType: mime } : undefined);
-    this.recorder.ondataavailable = (e) => { if (e.data.size) this.chunks.push(e.data); };
-    this.recorder.start(250);
+    // A toggle-off may have landed while getUserMedia was in flight.
+    if (!this.starting) {
+      stream.getTracks().forEach((t) => t.stop());
+      return;
+    }
 
-    this.recording = true;
-    this.els.button.classList.add('recording');
-    this.els.button.title = 'Stop dictation';
-    this.startMeter();
+    try {
+      this.streamRef = stream;
+      this.chunks = [];
+      const mime = ['audio/webm;codecs=opus', 'audio/webm', 'audio/ogg;codecs=opus', 'audio/mp4']
+        .find((t) => MediaRecorder.isTypeSupported(t)) || '';
+      this.recorder = new MediaRecorder(stream, mime ? { mimeType: mime } : undefined);
+      this.recorder.ondataavailable = (e) => { if (e.data.size) this.chunks.push(e.data); };
+      this.recorder.onerror = () => { this.teardown(); };
+      this.recorder.start(250);
+      this.recording = true;
+      this.els.button.classList.add('recording');
+      this.startMeter();
+    } catch (err) {
+      appendNotice('error', `Could not start recording: ${err.message}`);
+      this.teardown();
+    } finally {
+      this.starting = false;
+    }
   },
 
   async stop() {
-    if (!this.recording) return '';
+    this.starting = false;
+    if (!this.recording || !this.recorder) {
+      this.teardown();
+      return '';
+    }
     this.recording = false;
     this.els.button.classList.remove('recording');
     this.els.button.classList.add('transcribing');
     this.stopMeter();
 
-    const blob = await new Promise((resolve) => {
-      this.recorder.onstop = () => resolve(new Blob(this.chunks, { type: this.recorder.mimeType }));
-      this.recorder.stop();
-    });
-    this.streamRef.getTracks().forEach((t) => t.stop());
-    this.streamRef = null;
+    let blob;
+    try {
+      blob = await new Promise((resolve, reject) => {
+        const timer = setTimeout(() => reject(new Error('recorder did not stop')), 5000);
+        this.recorder.onstop = () => {
+          clearTimeout(timer);
+          resolve(new Blob(this.chunks, { type: this.recorder.mimeType }));
+        };
+        this.recorder.stop();
+      });
+    } catch (err) {
+      appendNotice('error', `Recording failed: ${err.message}`);
+      this.teardown();
+      return '';
+    }
+
+    this.releaseStream();
 
     let text = '';
     try {
       const form = new FormData();
-      form.append('audio', blob, mimeToName(this.recorder.mimeType));
+      form.append('audio', blob, mimeToName(this.recorder && this.recorder.mimeType));
       const resp = await fetch('/api/stt', { method: 'POST', body: form });
       const data = await resp.json();
       if (!resp.ok) throw new Error(data.detail || 'transcription failed');
@@ -931,46 +1071,83 @@ const Dictation = {
     } catch (err) {
       appendNotice('error', `Transcription failed: ${err.message}`);
     } finally {
-      this.els.button.classList.remove('transcribing');
-      this.els.button.title = 'Dictate';
+      this.teardown();
     }
     return text;
   },
 
-  startMeter() {
-    if (!this.els.meter) return;
-    this.els.meter.hidden = false;
-    this.audioCtx = new (window.AudioContext || window.webkitAudioContext)();
-    const source = this.audioCtx.createMediaStreamSource(this.streamRef);
-    this.analyser = this.audioCtx.createAnalyser();
-    this.analyser.fftSize = 512;
-    source.connect(this.analyser);
+  /* Return to a known-clean state from any path. */
+  teardown() {
+    this.recording = false;
+    this.starting = false;
+    this.pushToTalk = false;
+    this.stopMeter();
+    this.releaseStream();
+    this.recorder = null;
+    this.chunks = [];
+    if (this.els.button) {
+      this.els.button.classList.remove('recording', 'transcribing');
+      this.els.button.title = MIC_TITLE;
+    }
+  },
 
+  releaseStream() {
+    if (this.streamRef) {
+      this.streamRef.getTracks().forEach((t) => t.stop());
+      this.streamRef = null;
+    }
+  },
+
+  startMeter() {
+    if (!this.els.meter || !this.streamRef) return;
+    this.stopMeter();
+    const generation = ++this.meterGeneration;
+
+    try {
+      // One context, reused. Chrome caps concurrent AudioContexts at a handful
+      // and a leaked one is never reclaimed.
+      if (!this.audioCtx || this.audioCtx.state === 'closed') {
+        this.audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+      }
+      if (this.audioCtx.state === 'suspended') this.audioCtx.resume();
+      const source = this.audioCtx.createMediaStreamSource(this.streamRef);
+      this.analyser = this.audioCtx.createAnalyser();
+      this.analyser.fftSize = 512;
+      source.connect(this.analyser);
+    } catch (err) {
+      this.analyser = null;
+      return;   // no meter is fine; recording still works
+    }
+
+    this.els.meter.hidden = false;
     const bars = Array.from(this.els.meter.querySelectorAll('.mic-bar'));
     const data = new Uint8Array(this.analyser.frequencyBinCount);
 
     const tick = () => {
+      // A superseded loop must not keep running: that was the runaway.
+      if (generation !== this.meterGeneration || !this.recording || !this.analyser) return;
       this.analyser.getByteTimeDomainData(data);
-      // RMS deviation from the 128 midpoint, scaled to something visible.
       let sum = 0;
       for (const v of data) sum += (v - 128) ** 2;
-      const level = Math.min(1, Math.sqrt(sum / data.length) / 40);
+      const level = Math.min(1, Math.sqrt(sum / data.length) / 34);
       bars.forEach((bar, i) => {
-        const threshold = (i + 1) / bars.length;
-        const height = 20 + Math.max(0, level - threshold * 0.35) * 220;
-        bar.style.height = `${Math.min(100, height)}%`;
+        const bias = 1 - Math.abs(i - (bars.length - 1) / 2) / bars.length;
+        bar.style.height = `${Math.max(12, Math.min(100, level * 150 * bias))}%`;
       });
       this.rafId = requestAnimationFrame(tick);
     };
-    tick();
+    this.rafId = requestAnimationFrame(tick);
   },
 
   stopMeter() {
+    this.meterGeneration += 1;
     if (this.rafId) cancelAnimationFrame(this.rafId);
     this.rafId = null;
-    if (this.audioCtx) this.audioCtx.close().catch(() => {});
-    this.audioCtx = null;
-    if (this.els.meter) this.els.meter.hidden = true;
+    this.analyser = null;
+    if (this.els.meter) {
+      this.els.meter.hidden = true;
+      this.els.meter.querySelectorAll('.mic-bar').forEach((b) => { b.style.height = ''; });
+    }
   },
 };
 
@@ -1146,17 +1323,24 @@ function autosize(textarea) {
   textarea.style.height = `${Math.min(textarea.scrollHeight, 260)}px`;
 }
 
+let scrollQueued = false;
+
 function autoscroll() {
   const box = App.els.scroller;
   if (!box) return;
   // Only follow the stream if the user is already near the bottom.
-  if (box.scrollHeight - box.scrollTop - box.clientHeight < 200) scrollToBottom();
+  if (box.scrollHeight - box.scrollTop - box.clientHeight >= 200) return;
+  // Smooth scrolling per token queues hundreds of overlapping animations, so
+  // during a stream jump straight to the bottom instead.
+  scrollToBottom(App.streaming);
 }
 
 function scrollToBottom(instant) {
   const box = App.els.scroller;
-  if (!box) return;
+  if (!box || scrollQueued) return;
+  scrollQueued = true;
   requestAnimationFrame(() => {
+    scrollQueued = false;
     box.scrollTo({ top: box.scrollHeight, behavior: instant ? 'auto' : 'smooth' });
   });
 }
@@ -1170,11 +1354,40 @@ function cssEscape(value) {
   return window.CSS && CSS.escape ? CSS.escape(value) : String(value).replace(/["\\]/g, '\\$&');
 }
 
+const PUSH_TO_TALK = { code: 'Space', ctrl: true, label: 'Ctrl+Space' };
+
+function isPushToTalk(e) {
+  return e.code === PUSH_TO_TALK.code && e.ctrlKey && !e.altKey && !e.metaKey && !e.shiftKey;
+}
+
 document.addEventListener('keydown', (e) => {
   if (e.target.id === 'chat-textarea' && e.key === 'Enter' && !e.shiftKey) {
     e.preventDefault();
     App.els.form?.requestSubmit();
+    return;
   }
+  if (isPushToTalk(e)) {
+    e.preventDefault();
+    if (e.repeat) return;          // key auto-repeat, not a new press
+    Dictation.hold();
+    return;
+  }
+  if (e.key === 'Escape' && App.streaming) {
+    e.preventDefault();
+    stopStreaming();
+  }
+});
+
+document.addEventListener('keyup', (e) => {
+  if (e.code === PUSH_TO_TALK.code || e.key === 'Control') Dictation.release();
+});
+
+// Releasing the key outside the window would otherwise leave the mic hot.
+window.addEventListener('blur', () => Dictation.release());
+// Last-resort teardown: never leave a mic stream or animation loop running.
+window.addEventListener('pagehide', () => Dictation.teardown());
+document.addEventListener('visibilitychange', () => {
+  if (document.hidden && Dictation.pushToTalk) Dictation.release();
 });
 
 document.addEventListener('input', (e) => {
@@ -1186,49 +1399,65 @@ document.addEventListener('input', (e) => {
 
 /* ── Image attachment ────────────────────────────────────────────────────── */
 
-let pendingImage = null;
+/* Images ride along with the message and are referenced by path. The agent
+ * decides whether and how to look at them with the `vision` tool, rather than
+ * the UI converting them to text up front and discarding the original. */
+let pendingImages = [];
 
 function handleImageAttach(input) {
-  if (!input.files.length) return;
-  pendingImage = input.files[0];
-  const reader = new FileReader();
-  reader.onload = (e) => {
-    document.getElementById('image-preview').src = e.target.result;
-    document.getElementById('image-modal').hidden = false;
-    document.getElementById('vision-modal-prompt').focus();
-  };
-  reader.readAsDataURL(pendingImage);
-  input.value = '';
-}
-
-function cancelImageAttach() {
-  pendingImage = null;
-  document.getElementById('image-modal').hidden = true;
-}
-
-async function submitImageAttach() {
-  if (!pendingImage) return;
-  const prompt = document.getElementById('vision-modal-prompt').value.trim()
-    || 'Describe this image in detail.';
-  document.getElementById('image-modal').hidden = true;
-
-  const form = new FormData();
-  form.append('image', pendingImage);
-  form.append('prompt', prompt);
-  pendingImage = null;
-
-  const btn = document.querySelector('.upload-label');
-  btn?.classList.add('busy');
-  try {
-    const resp = await fetch(`/api/sessions/${App.sessionId}/analyze-image`, {
-      method: 'POST', body: form,
-    });
-    const data = await resp.json();
-    if (!resp.ok) throw new Error(data.detail || 'vision failed');
-    insertAtCursor(App.els.textarea, `\n\n[Image description] ${data.description}\n`);
-  } catch (err) {
-    appendNotice('error', `Vision analysis failed: ${err.message}`);
-  } finally {
-    btn?.classList.remove('busy');
+  for (const file of input.files) {
+    if (pendingImages.length >= 6) break;
+    pendingImages.push(file);
   }
+  input.value = '';
+  renderAttachments();
+}
+
+function removeAttachment(index) {
+  pendingImages.splice(index, 1);
+  renderAttachments();
+}
+
+function renderAttachments() {
+  const tray = document.getElementById('attachments');
+  if (!tray) return;
+  tray.innerHTML = '';
+  tray.hidden = pendingImages.length === 0;
+
+  pendingImages.forEach((file, i) => {
+    const chip = el('span', 'attachment');
+    const img = document.createElement('img');
+    img.alt = file.name;
+    const reader = new FileReader();
+    reader.onload = (e) => { img.src = e.target.result; };
+    reader.readAsDataURL(file);
+
+    const name = el('span', 'attachment-name');
+    name.textContent = file.name;
+    chip.append(img, name, button('\u2715', 'attachment-remove', () => removeAttachment(i)));
+    tray.appendChild(chip);
+  });
+}
+
+/* ── Per-session writable directories ────────────────────────────────────── */
+
+async function addWriteDir(form) {
+  const input = form.elements.path;
+  const path = input.value.trim();
+  if (!path) return;
+  const resp = await fetch(`/api/sessions/${App.sessionId}/write-dirs`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ path }),
+  });
+  const data = await resp.json();
+  if (!resp.ok) { alert(data.detail || 'Could not allow that path'); return; }
+  input.value = '';
+  refreshMeta();
+}
+
+async function revokeWriteDir(path) {
+  await fetch(`/api/sessions/${App.sessionId}/write-dirs?path=${encodeURIComponent(path)}`,
+    { method: 'DELETE' });
+  refreshMeta();
 }

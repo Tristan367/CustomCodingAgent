@@ -3,7 +3,7 @@
 <div id="session-meta" data-threshold="{{ usage.threshold }}" data-max-context="{{ usage.max_context }}">
     <div class="session-info">
         <span class="session-title">{{ session.name }}</span>
-        <code class="session-dir" title="{{ session.project_dir }}">{{ session.project_dir }}</code>
+        <code class="session-dir" title="{{ session.project_dir }}">{{ session.project_dir | tildepath }}</code>
         <span class="chip">{{ session.model }}</span>
         <span class="chip">{{ session.prompt_profile }}</span>
         <span class="chip">thinking: {{ session.thinking_effort or 'high' }}</span>
@@ -43,6 +43,31 @@
                 <button type="button" onclick="openThresholdModal()">Compaction threshold&hellip;</button>
                 <button type="button" onclick="navigator.clipboard.writeText(this.dataset.dir)"
                         data-dir="{{ session.project_dir }}">Copy project path</button>
+                <hr>
+                <details class="menu-settings">
+                    <summary>Writable directories ({{ allowed_dirs | length }})</summary>
+                    <div class="menu-dirs">
+                        <p class="hint">
+                            Writes inside <code>{{ session.project_dir | tildepath }}</code> are
+                            always allowed. These extra grants apply to this session only.
+                        </p>
+                        <ul class="dir-list" id="session-dirs">
+                            {% for d in allowed_dirs %}
+                            <li><code title="{{ d }}">{{ d | tildepath }}</code>
+                                <button type="button" class="icon-btn danger" title="Revoke"
+                                        data-path="{{ d }}"
+                                        onclick="revokeWriteDir(this.dataset.path)">&#10005;</button></li>
+                            {% else %}
+                            <li class="hint">No extra directories.</li>
+                            {% endfor %}
+                        </ul>
+                        <form class="inline-form" onsubmit="event.preventDefault();addWriteDir(this)">
+                            <input type="text" name="path" placeholder="/path/to/allow"
+                                   autocomplete="off" spellcheck="false">
+                            <button type="submit" class="btn-secondary">Allow</button>
+                        </form>
+                    </div>
+                </details>
                 <hr>
                 <details class="menu-settings">
                     <summary>Model settings</summary>

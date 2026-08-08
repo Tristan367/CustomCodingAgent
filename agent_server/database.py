@@ -62,6 +62,13 @@ CREATE TABLE IF NOT EXISTS compactions (
     created_at TEXT NOT NULL
 );
 
+CREATE TABLE IF NOT EXISTS session_write_dirs (
+    session_id TEXT NOT NULL REFERENCES sessions(id) ON DELETE CASCADE,
+    path TEXT NOT NULL,
+    created_at TEXT NOT NULL,
+    PRIMARY KEY (session_id, path)
+);
+
 CREATE TABLE IF NOT EXISTS settings (
     key TEXT PRIMARY KEY,
     value TEXT NOT NULL,
@@ -393,6 +400,28 @@ async def add_compaction(
 async def get_compactions(session_id: str) -> list[dict]:
     return await _fetchall(
         "SELECT * FROM compactions WHERE session_id = ? ORDER BY id ASC", (session_id,)
+    )
+
+
+# ── Per-session write grants ────────────────────────────────────────────────
+
+async def list_write_dirs(session_id: str) -> list[str]:
+    rows = await _fetchall(
+        "SELECT path FROM session_write_dirs WHERE session_id = ? ORDER BY path", (session_id,)
+    )
+    return [r["path"] for r in rows]
+
+
+async def add_write_dir(session_id: str, path: str):
+    await _execute(
+        "INSERT OR IGNORE INTO session_write_dirs (session_id, path, created_at) VALUES (?,?,?)",
+        (session_id, path, _now()),
+    )
+
+
+async def remove_write_dir(session_id: str, path: str):
+    await _execute(
+        "DELETE FROM session_write_dirs WHERE session_id = ? AND path = ?", (session_id, path)
     )
 
 

@@ -11,7 +11,7 @@ from agent_server.tools.file_ops import edit_file, read_file, write_file
 from agent_server.tools.question import ask_question
 from agent_server.tools.search import glob_search, grep_search
 from agent_server.tools.task import run_task
-from agent_server.tools.vision import vision
+from agent_server.tools.vision import screenshot, vision
 from agent_server.tools.web import webfetch
 
 Handler = Callable[..., Awaitable[ToolResult]]
@@ -215,21 +215,80 @@ register(Tool(
 register(Tool(
     name="vision",
     description=(
-        "Screenshot a web page and have a vision model describe it. Use to verify UI "
-        "changes render correctly. Accepts http(s) or file:// URLs."
+        "Look at images with a vision model and get a description back. Pass `paths` "
+        "for image files on disk (screenshots, photos, diagrams, anything the user "
+        "attached), and/or `url` to capture a web page first. Give several paths to "
+        "compare images -- each is labelled by filename, so you can ask what changed "
+        "between them. Always include a `prompt` saying what you need to know."
     ),
     parameters={
         "type": "object",
         "properties": {
-            "url": {"type": "string", "description": "URL to screenshot"},
-            "prompt": {"type": "string", "description": "What to look for"},
-            "selector": {"type": "string", "description": "CSS selector to focus on"},
+            "prompt": {
+                "type": "string",
+                "description": "What to find out, e.g. 'what error is shown?' or "
+                               "'what differs between these two?'",
+            },
+            "paths": {
+                "type": "array",
+                "items": {"type": "string"},
+                "description": "Image files to look at, in order (max 6)",
+            },
+            "url": {"type": "string", "description": "Page to capture and include"},
+            "selector": {"type": "string", "description": "CSS selector to crop the capture to"},
+            "full_page": {"type": "boolean", "description": "Capture the whole scrollable page"},
             "width": {"type": "integer", "description": "Viewport width (default 1280)"},
             "height": {"type": "integer", "description": "Viewport height (default 900)"},
         },
-        "required": ["url"],
+        "required": ["prompt"],
     },
     handler=vision,
+    vision_only=True,
+))
+
+register(Tool(
+    name="screenshot",
+    description=(
+        "Capture a web page to PNG files and return their paths. Use `count` and "
+        "`interval_ms` to record a sequence, which is how you inspect animations, "
+        "loading states, or anything that changes over time. `actions` lets you click, "
+        "fill, hover, or scroll before capturing so you can reach a specific state. "
+        "Add `prompt` to have the result described immediately, or feed the returned "
+        "paths to `vision` later."
+    ),
+    parameters={
+        "type": "object",
+        "properties": {
+            "url": {"type": "string", "description": "Page to capture (http, https, or file://)"},
+            "selector": {"type": "string", "description": "CSS selector to crop to"},
+            "full_page": {"type": "boolean", "description": "Whole scrollable page"},
+            "width": {"type": "integer", "description": "Viewport width (default 1280)"},
+            "height": {"type": "integer", "description": "Viewport height (default 900)"},
+            "wait_for": {"type": "string", "description": "Wait for this selector before capturing"},
+            "delay_ms": {"type": "integer", "description": "Extra pause before the first frame"},
+            "count": {"type": "integer", "description": "Number of frames, 1-12 (default 1)"},
+            "interval_ms": {"type": "integer", "description": "Gap between frames (default 500)"},
+            "actions": {
+                "type": "array",
+                "description": "Steps to run before capturing",
+                "items": {
+                    "type": "object",
+                    "properties": {
+                        "type": {
+                            "type": "string",
+                            "enum": ["click", "fill", "press", "hover", "scroll", "wait"],
+                        },
+                        "selector": {"type": "string"},
+                        "value": {"type": "string"},
+                    },
+                    "required": ["type"],
+                },
+            },
+            "prompt": {"type": "string", "description": "If set, describe the capture immediately"},
+        },
+        "required": ["url"],
+    },
+    handler=screenshot,
     vision_only=True,
 ))
 
@@ -282,6 +341,7 @@ async def execute_tool(
     if not result.title:
         result = ToolResult(output=result.output, is_error=result.is_error, title=name)
     return result
+
 
 __all__ = [
     "Tool", "TOOLS", "ToolContext", "ToolResult",

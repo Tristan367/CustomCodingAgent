@@ -91,37 +91,13 @@
     </section>
 
     <section class="panel">
-        <h2>Writable directories</h2>
-        <p class="hint">
-            An agent may always write inside its own project directory. Anywhere else it
-            has to ask, and shell auto-approval never covers it. Directories granted here
-            are writable by every session until you revoke them.
-        </p>
-        <ul class="dir-list" id="allowed-dirs">
-            {% for d in allowed_dirs %}
-            <li><code>{{ d }}</code>
-                <button type="button" class="icon-btn danger" title="Revoke"
-                        data-path="{{ d }}" onclick="revokeDir(this.dataset.path)">&#10005;</button>
-            </li>
-            {% else %}
-            <li class="hint">None granted. Project directories are always writable.</li>
-            {% endfor %}
-        </ul>
-        <form class="inline-form" onsubmit="event.preventDefault();addDir(this)">
-            <input type="text" name="path" placeholder="/absolute/path/to/allow"
-                   autocomplete="off" spellcheck="false">
-            <button type="submit" class="btn-secondary">Allow</button>
-        </form>
-    </section>
-
-    <section class="panel">
         <h2>Sessions <span class="count">{{ sessions | length }}</span></h2>
         <div id="session-list">
             {% for s in sessions %}
             <a class="session-card" href="/sessions/{{ s.id }}">
                 <span class="session-name">{{ s.name }}</span>
                 <span class="session-meta">
-                    <code>{{ s.project_dir }}</code>
+                    <code>{{ s.project_dir | tildepath }}</code>
                     <span class="dot">&middot;</span>{{ s.model }}
                     <span class="dot">&middot;</span>{{ s.prompt_profile }}
                     <span class="dot">&middot;</span>{{ s.last_active_at | humantime }}
@@ -151,49 +127,4 @@ function selectProjectDir(path) {
     document.getElementById('file-browser-container').hidden = true;
 }
 
-async function addDir(form) {
-    const input = form.elements.path;
-    const path = input.value.trim();
-    if (!path) return;
-    const resp = await fetch('/api/permissions/dirs', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ path }),
-    });
-    const data = await resp.json();
-    if (!resp.ok) { alert(data.detail || 'Could not allow that path'); return; }
-    input.value = '';
-    renderDirs(data.dirs);
-}
-
-async function revokeDir(path) {
-    const resp = await fetch(`/api/permissions/dirs?path=${encodeURIComponent(path)}`, { method: 'DELETE' });
-    const data = await resp.json();
-    renderDirs(data.dirs);
-}
-
-function renderDirs(dirs) {
-    const list = document.getElementById('allowed-dirs');
-    list.innerHTML = '';
-    if (!dirs.length) {
-        const li = document.createElement('li');
-        li.className = 'hint';
-        li.textContent = 'None granted. Project directories are always writable.';
-        list.appendChild(li);
-        return;
-    }
-    for (const dir of dirs) {
-        const li = document.createElement('li');
-        const code = document.createElement('code');
-        code.textContent = dir;
-        const btn = document.createElement('button');
-        btn.type = 'button';
-        btn.className = 'icon-btn danger';
-        btn.title = 'Revoke';
-        btn.textContent = '\u2715';
-        btn.addEventListener('click', () => revokeDir(dir));
-        li.append(code, btn);
-        list.appendChild(li);
-    }
-}
 </script>

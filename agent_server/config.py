@@ -61,9 +61,12 @@ THRESHOLD_STEPS = [4096 * 2 ** i for i in range(8)] + [1_000_000]
 MAX_TOOL_ROUNDS = int(os.getenv("MAX_TOOL_ROUNDS", "40"))
 MAX_TOOL_RESULT_CHARS = int(os.getenv("MAX_TOOL_RESULT_CHARS", "50000"))
 
-# ── Integrations ────────────────────────────────────────────────────────────
-VISION_HELPER_PATH = os.getenv("VISION_HELPER_PATH", str(Path.home() / "Projects/VisionHelper"))
+# ── Vision ──────────────────────────────────────────────────────────────────
 VISION_OLLAMA_URL = os.getenv("VISION_OLLAMA_URL", "http://vision-host.local:11434")
+VISION_MODEL = os.getenv("VISION_MODEL", "qwen3-vl:32b")
+VISION_TIMEOUT = int(os.getenv("VISION_TIMEOUT", "300"))
+# Downscale anything larger before sending; phone photos are needlessly huge.
+VISION_MAX_PIXELS = int(os.getenv("VISION_MAX_PIXELS", str(1600 * 1600)))
 
 WHISPER_BIN = os.getenv("WHISPER_BIN") or shutil.which("whisper-cli") or shutil.which("whisper")
 

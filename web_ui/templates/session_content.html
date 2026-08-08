@@ -7,50 +7,53 @@
 
     <div id="chat-input-area">
         <form id="chat-form" autocomplete="off">
-            <div class="input-row">
-                <textarea id="chat-textarea" name="message" rows="1"
-                          placeholder="Message the agent&#10;Enter to send &middot; Shift+Enter for a newline"></textarea>
-            </div>
-            <div class="chat-actions">
-                {% if stt_enabled %}
-                <button type="button" id="mic-btn" class="icon-btn mic" title="Dictate"
-                        aria-label="Toggle dictation">
-                    <svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true">
-                        <path fill="currentColor" d="M12 14a3 3 0 0 0 3-3V6a3 3 0 0 0-6 0v5a3 3 0 0 0 3 3z"/>
-                        <path fill="currentColor" d="M17 11a1 1 0 1 1 2 0 7 7 0 0 1-6 6.93V21a1 1 0 1 1-2 0v-3.07A7 7 0 0 1 5 11a1 1 0 1 1 2 0 5 5 0 0 0 10 0z"/>
-                    </svg>
-                </button>
-                <div id="mic-meter" class="mic-meter" hidden aria-hidden="true">
-                    <span class="mic-bar"></span><span class="mic-bar"></span><span class="mic-bar"></span>
-                    <span class="mic-bar"></span><span class="mic-bar"></span>
+            <div id="attachments" class="attachments" hidden></div>
+            <div class="composer">
+                <div class="composer-input">
+                    <textarea id="chat-textarea" name="message" rows="1"
+                              placeholder="Message the agent"></textarea>
+                    {% if stt_enabled %}
+                    <div id="mic-meter" class="mic-meter" hidden aria-hidden="true">
+                        <span class="mic-bar"></span><span class="mic-bar"></span><span class="mic-bar"></span>
+                        <span class="mic-bar"></span><span class="mic-bar"></span><span class="mic-bar"></span>
+                        <span class="mic-bar"></span><span class="mic-bar"></span><span class="mic-bar"></span>
+                    </div>
+                    {% endif %}
                 </div>
-                {% endif %}
-                <label class="upload-label icon-btn" title="Attach an image">
-                    <input type="file" accept="image/*" id="image-input" onchange="handleImageAttach(this)" hidden>
-                    <svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true">
-                        <path fill="currentColor" d="M19 5v14H5V5h14m0-2H5a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2V5a2 2 0 0 0-2-2z"/>
-                        <path fill="currentColor" d="m8.5 13.5 2 2.5 3-4 4 5H6z"/>
-                    </svg>
-                </label>
-                <span class="spacer"></span>
-                <button type="submit" id="send-btn" class="btn-primary">Send</button>
-                <button type="button" id="stop-btn" class="btn-stop" hidden onclick="stopStreaming()">Stop</button>
+                <div class="composer-actions">
+                    <button type="submit" id="send-btn" class="btn-primary composer-send"
+                            title="Send (Enter)">
+                        <svg viewBox="0 0 24 24" width="17" height="17" aria-hidden="true">
+                            <path fill="currentColor" d="M2.2 21 23 12 2.2 3l.01 7L17 12 2.21 14z"/>
+                        </svg>
+                    </button>
+                    <button type="button" id="stop-btn" class="btn-stop composer-send" hidden
+                            onclick="stopStreaming()" title="Stop (Esc)">
+                        <svg viewBox="0 0 24 24" width="15" height="15" aria-hidden="true">
+                            <rect fill="currentColor" x="6" y="6" width="12" height="12" rx="2"/>
+                        </svg>
+                    </button>
+                    {% if stt_enabled %}
+                    <button type="button" id="mic-btn" class="icon-btn mic"
+                            title="Dictate &mdash; click to toggle, or hold Ctrl+Space to talk"
+                            aria-label="Toggle dictation">
+                        <svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true">
+                            <path fill="currentColor" d="M12 14a3 3 0 0 0 3-3V6a3 3 0 0 0-6 0v5a3 3 0 0 0 3 3z"/>
+                            <path fill="currentColor" d="M17 11a1 1 0 1 1 2 0 7 7 0 0 1-6 6.93V21a1 1 0 1 1-2 0v-3.07A7 7 0 0 1 5 11a1 1 0 1 1 2 0 5 5 0 0 0 10 0z"/>
+                        </svg>
+                    </button>
+                    {% endif %}
+                    <label class="upload-label icon-btn" title="Attach images &mdash; the agent decides how to look at them">
+                        <input type="file" accept="image/*" id="image-input" multiple
+                               onchange="handleImageAttach(this)" hidden>
+                        <svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true">
+                            <path fill="currentColor" d="M19 5v14H5V5h14m0-2H5a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2V5a2 2 0 0 0-2-2z"/>
+                            <path fill="currentColor" d="m8.5 13.5 2 2.5 3-4 4 5H6z"/>
+                        </svg>
+                    </label>
+                </div>
             </div>
         </form>
-    </div>
-</div>
-
-<div id="image-modal" class="modal" hidden>
-    <div class="modal-content">
-        <h3>Attach image</h3>
-        <img id="image-preview" alt="Preview">
-        <textarea id="vision-modal-prompt" rows="3"
-                  placeholder="What should the vision model look for?"></textarea>
-        <p class="hint">The image is described by the local vision model and the description is inserted into your message.</p>
-        <div class="modal-actions">
-            <button type="button" class="btn-primary" onclick="submitImageAttach()">Describe</button>
-            <button type="button" class="btn-secondary" onclick="cancelImageAttach()">Cancel</button>
-        </div>
     </div>
 </div>
 

@@ -32,6 +32,10 @@
 
   --radius: 6px;
   --topbar-h: 42px;
+  /* Wide enough to use a portrait monitor properly, capped so lines stay
+     readable if the window is ever stretched across a landscape screen. */
+  --content-max: 1500px;
+  --content-pad: 12px;
 }
 
 * { box-sizing: border-box; }
@@ -267,8 +271,12 @@ hr { border: 0; border-top: 1px solid var(--border); margin: 6px 0; }
 
 /* ── Chat ────────────────────────────────────────────────────────────────── */
 
-#chat-container { flex: 1; min-height: 0; overflow-y: auto; scroll-behavior: smooth; }
-#messages { max-width: 980px; margin: 0 auto; padding: 16px 20px 40px; }
+#chat-container { flex: 1; min-height: 0; overflow-y: auto; }
+#messages {
+  max-width: var(--content-max);
+  margin: 0 auto;
+  padding: 14px var(--content-pad) 32px;
+}
 
 .message {
   display: grid;
@@ -558,14 +566,19 @@ hr { border: 0; border-top: 1px solid var(--border); margin: 6px 0; }
 #chat-input-area {
   border-top: 1px solid var(--border);
   background: var(--bg-raised);
-  padding: 10px 20px 12px;
+  padding: 8px var(--content-pad) 10px;
 }
-#chat-form { max-width: 980px; margin: 0 auto; }
+#chat-form { max-width: var(--content-max); margin: 0 auto; }
+
+/* Controls sit in a column beside the textarea rather than a row beneath it,
+   so they cost no vertical space in a tall window. */
+.composer { display: flex; align-items: stretch; gap: 7px; }
+.composer-input { position: relative; flex: 1; min-width: 0; display: flex; }
 
 #chat-textarea {
   width: 100%;
-  min-height: 58px;
-  max-height: 260px;
+  min-height: 76px;
+  max-height: 340px;
   padding: 9px 12px;
   background: var(--bg-inset);
   border: 1px solid var(--border-strong);
@@ -580,7 +593,22 @@ hr { border: 0; border-top: 1px solid var(--border); margin: 6px 0; }
 #chat-textarea:focus { outline: none; border-color: var(--accent-dim); }
 #chat-textarea::placeholder { color: var(--text-faint); }
 
-.chat-actions { display: flex; align-items: center; gap: 8px; margin-top: 8px; }
+.composer-actions {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  flex: 0 0 auto;
+  width: 34px;
+}
+.composer-actions .icon-btn { width: 34px; height: 34px; }
+.composer-send {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 34px;
+  height: 34px;
+  padding: 0;
+}
 
 /* ── Buttons ─────────────────────────────────────────────────────────────── */
 
@@ -633,23 +661,29 @@ hr { border: 0; border-top: 1px solid var(--border); margin: 6px 0; }
 .icon-btn.mic.transcribing { opacity: 0.55; pointer-events: none; border-color: var(--accent); color: var(--accent); }
 .icon-btn.flash { border-color: var(--warn); color: var(--warn); }
 
+/* Sits on the textarea's bottom edge so recording costs no layout space. */
 .mic-meter {
+  position: absolute;
+  left: 1px;
+  right: 1px;
+  bottom: 1px;
+  height: 22px;
   display: flex;
-  align-items: center;
-  gap: 2px;
-  height: 30px;
-  padding: 0 7px;
-  background: var(--bg-inset);
-  border: 1px solid var(--danger);
-  border-radius: 4px;
+  align-items: flex-end;
+  justify-content: center;
+  gap: 3px;
+  padding: 0 8px 4px;
+  border-radius: 0 0 var(--radius) var(--radius);
+  background: linear-gradient(to top, rgba(248, 81, 73, 0.14), transparent);
+  pointer-events: none;
 }
 .mic-bar {
   width: 3px;
-  height: 20%;
-  min-height: 3px;
+  height: 15%;
+  min-height: 2px;
   background: var(--danger);
   border-radius: 2px;
-  transition: height 70ms linear;
+  transition: height 60ms linear;
 }
 
 /* ── Home page ───────────────────────────────────────────────────────────── */
@@ -833,12 +867,16 @@ select { cursor: pointer; }
 
 /* ── Narrow screens ──────────────────────────────────────────────────────── */
 
-@media (max-width: 720px) {
+@media (max-width: 900px) {
+  :root { --content-pad: 8px; }
+  .message { grid-template-columns: 58px 1fr auto; }
+}
+
+@media (max-width: 640px) {
   .message { grid-template-columns: 1fr; gap: 3px; }
   .msg-role { text-align: left; }
-  .msg-time { display: none; }
+  .msg-side { display: none; }
   .session-dir, .session-info .chip:nth-child(n+4) { display: none; }
-  #messages, #chat-form { padding-left: 12px; padding-right: 12px; }
 }
 
 /* ── Context ring ────────────────────────────────────────────────────────── */
@@ -1040,3 +1078,70 @@ select { cursor: pointer; }
 .permission-card.permission-path .permission-head { color: var(--accent); }
 .permission-card.permission-denied { border-color: var(--danger); background: rgba(248, 81, 73, 0.07); }
 .permission-card.permission-denied .permission-head { color: var(--danger); }
+
+/* ── Attachments ─────────────────────────────────────────────────────────── */
+
+.attachments { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 7px; }
+.attachment {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 3px 4px 3px 3px;
+  background: var(--bg-inset);
+  border: 1px solid var(--border-strong);
+  border-radius: 4px;
+  font-size: 11px;
+  max-width: 220px;
+}
+.attachment img { width: 30px; height: 30px; object-fit: cover; border-radius: 3px; flex: 0 0 auto; }
+.attachment-name { color: var(--text-dim); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.attachment-remove {
+  background: none;
+  border: 0;
+  color: var(--text-faint);
+  cursor: pointer;
+  font-size: 10px;
+  padding: 2px 4px;
+  flex: 0 0 auto;
+}
+.attachment-remove:hover { color: var(--danger); }
+
+.msg-attachments { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 6px; }
+.msg-attachments img {
+  max-width: 180px;
+  max-height: 140px;
+  border-radius: 4px;
+  border: 1px solid var(--border);
+}
+
+/* ── Transient status line ───────────────────────────────────────────────── */
+
+.status-line .msg-content { display: flex; align-items: center; gap: 8px; }
+.status-line .spinner-dot { display: inline-block; }
+.status-text {
+  font-family: var(--mono);
+  font-size: 11.5px;
+  color: var(--text-faint);
+}
+.status-text::after {
+  content: '';
+  animation: dots 1.4s steps(4, end) infinite;
+}
+@keyframes dots {
+  0%   { content: ''; }
+  25%  { content: '.'; }
+  50%  { content: '..'; }
+  75%  { content: '...'; }
+}
+
+/* ── Menu-embedded directory manager ─────────────────────────────────────── */
+
+.menu-dirs { padding: 4px 10px 10px; }
+.menu-dirs .hint { margin: 0 0 6px; }
+.menu-dirs .dir-list { margin-bottom: 6px; }
+.menu-dirs .inline-form input { width: 100%; font-size: 11.5px; }
+.menu-dirs .inline-form { gap: 6px; }
+
+/* Breathing room under the prompts form so the save button isn't flush. */
+#prompts-page form { margin-bottom: 34px; }
+#prompts-page .save-btn:last-of-type { margin-bottom: 12px; }

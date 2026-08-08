@@ -1,14 +1,16 @@
 """Permission policy: what the agent may do without asking.
 
+Everything here is scoped to a single session. Nothing granted in one session
+leaks into another -- a session is the unit the user is actually watching, and a
+grant made while supervising one task should not silently apply to the next.
+
 Two independent gates:
 
-* **Shell** — non-read-only commands prompt. This can be auto-approved per
-  session, because the blast radius is something the user opted into for a
-  session they are watching.
+* **Shell** — non-read-only commands prompt. Can be auto-approved for a session.
 * **Filesystem writes outside the project directory** — always prompt, and
   deliberately *not* covered by shell auto-approval. Agreeing to let an agent run
   `npm test` in your project is not the same as agreeing to let it rewrite
-  `~/.ssh/config`. Grants here are explicit, per-directory, and persistent.
+  `~/.ssh/config`. Grants are per-directory and per-session.
 """
 
 import subprocess
@@ -19,45 +21,25 @@ from agent_server import database as db
 # Tools whose target path is checked against the write allowlist.
 WRITE_TOOLS = {"edit", "write"}
 
-# Never writable, allowlist or not. These break the machine or leak credentials.
+# Never writable, in any session, however it was granted.
 DENIED_PREFIXES = (
     "/proc", "/sys", "/dev", "/boot", "/etc/shadow", "/etc/sudoers",
 )
 
-_cache: set[str] | None = None
+
+async def list_allowed(session_id: str) -> list[str]:
+    return await db.list_write_dirs(session_id)
 
 
-async def _allowed() -> set[str]:
-    global _cache
-    if _cache is None:
-        raw = await db.get_setting("allowed_write_dirs", "")
-        _cache = {line.strip() for line in raw.splitlines() if line.strip()}
-    return set(_cache)
+async def allow_directory(session_id: str, path: str) -> list[str]:
+    await db.add_write_dir(session_id, str(Path(path).expanduser().resolve()))
+    return await list_allowed(session_id)
 
 
-async def list_allowed() -> list[str]:
-    return sorted(await _allowed())
-
-
-async def allow_directory(path: str) -> list[str]:
-    current = await _allowed()
-    current.add(str(Path(path).expanduser().resolve()))
-    await _save(current)
-    return sorted(current)
-
-
-async def revoke_directory(path: str) -> list[str]:
-    current = await _allowed()
-    current.discard(path)
-    current.discard(str(Path(path).expanduser().resolve()))
-    await _save(current)
-    return sorted(current)
-
-
-async def _save(paths: set[str]):
-    global _cache
-    _cache = paths
-    await db.set_setting("allowed_write_dirs", "\n".join(sorted(paths)))
+async def revoke_directory(session_id: str, path: str) -> list[str]:
+    await db.remove_write_dir(session_id, path)
+    await db.remove_write_dir(session_id, str(Path(path).expanduser().resolve()))
+    return await list_allowed(session_id)
 
 
 def _is_within(path: Path, parent: str) -> bool:
@@ -69,21 +51,24 @@ def _is_within(path: Path, parent: str) -> bool:
 
 
 def is_denied(path: Path) -> bool:
-    text = str(path.resolve() if path.is_absolute() else path)
+    try:
+        text = str(path.resolve())
+    except OSError:
+        text = str(path)
     return text.startswith(DENIED_PREFIXES)
 
 
-async def write_allowed(path: Path, project_dir: str) -> bool:
+async def write_allowed(session_id: str, path: Path, project_dir: str) -> bool:
     """True when this path may be written without asking."""
     if is_denied(path):
         return False
     if _is_within(path, project_dir):
         return True
-    return any(_is_within(path, allowed) for allowed in await _allowed())
+    return any(_is_within(path, allowed) for allowed in await list_allowed(session_id))
 
 
 def grant_scope(path: Path) -> str:
-    """The directory a 'always allow' grant should cover.
+    """The directory an 'always allow' grant should cover.
 
     Prefers the enclosing git repository, which is what a user means by "this
     project"; falls back to the containing directory.
@@ -99,14 +84,23 @@ def grant_scope(path: Path) -> str:
             return root
     except Exception:  # noqa: BLE001
         pass
-    return str(directory.resolve())
+    try:
+        return str(directory.resolve())
+    except OSError:
+        return str(directory)
 
 
-async def check(name: str, args: dict, project_dir: str, shell_auto_approve: bool) -> dict | None:
+async def check(
+    name: str,
+    args: dict,
+    session_id: str,
+    project_dir: str,
+    shell_auto_approve: bool,
+) -> dict | None:
     """Return a prompt descriptor, or None when the call may proceed.
 
-    Kept async and centralised so the agent loop and the page-reload restore path
-    cannot drift apart on what counts as permitted.
+    Centralised so the agent loop and the page-reload restore path cannot drift
+    apart on what counts as permitted.
     """
     from agent_server.tools.bash import is_read_only
 
@@ -117,7 +111,7 @@ async def check(name: str, args: dict, project_dir: str, shell_auto_approve: boo
         path = Path(raw).expanduser()
         if not path.is_absolute():
             path = Path(project_dir) / path
-        if await write_allowed(path, project_dir):
+        if await write_allowed(session_id, path, project_dir):
             return None
         return {
             "kind": "denied" if is_denied(path) else "path",

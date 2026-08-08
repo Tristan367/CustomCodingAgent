@@ -43,9 +43,12 @@
 
   /* Highlight by tokenizing in one pass so a keyword inside a string is not
    * re-highlighted. Input must already be escaped. */
+  // Above this, tokenising costs more than the colour is worth.
+  const MAX_HIGHLIGHT_CHARS = 40000;
+
   function highlight(escaped, lang) {
     const key = LANG_ALIASES[(lang || '').toLowerCase()];
-    if (!key) return escaped;
+    if (!key || escaped.length > MAX_HIGHLIGHT_CHARS) return escaped;
 
     const keywords = key === 'json' || key === 'yaml'
       ? 'true|false|null'

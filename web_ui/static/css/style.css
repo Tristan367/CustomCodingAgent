@@ -601,14 +601,20 @@ hr { border: 0; border-top: 1px solid var(--border); margin: 6px 0; }
   width: 34px;
 }
 .composer-actions .icon-btn { width: 34px; height: 34px; }
-.composer-send {
+/* Higher specificity than .btn-primary / .btn-stop, which are defined later in
+   this file and would otherwise reimpose their horizontal padding and squash
+   the icon. */
+.composer-actions .composer-send {
   display: inline-flex;
   align-items: center;
   justify-content: center;
   width: 34px;
   height: 34px;
   padding: 0;
+  flex: 0 0 auto;
 }
+.composer-actions button svg,
+.composer-actions label svg { flex: 0 0 auto; }
 
 /* ── Buttons ─────────────────────────────────────────────────────────────── */
 

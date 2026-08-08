@@ -31,8 +31,9 @@ agent_server/
   stt.py            whisper.cpp transcription
   providers/        one adapter per model vendor
   permissions.py    what the agent may do without asking
+  vision.py         image normalisation, browser capture, Ollama client
   tools/            read, edit, write, bash, grep, glob, webfetch,
-                    question, task, vision
+                    question, task, vision, screenshot
   routes/           HTTP surface
 web_ui/             Jinja templates, CSS, and ~4 files of vanilla JS
 ```
@@ -70,13 +71,38 @@ dead-ending.
 **Filesystem writes outside the project directory.** These *always* ask, and
 shell auto-approval deliberately does not cover them — letting an agent run
 `npm test` in your repo is not the same as letting it rewrite `~/.ssh/config`.
-You can allow once, or allow a directory permanently (it offers the enclosing git
-repo when there is one). Grants are listed and revocable on the home page.
-`/proc`, `/sys`, `/dev`, `/boot` and the sudoers files can never be granted.
+You can allow once, or allow a directory for the rest of the session (it offers
+the enclosing git repo when there is one). `/proc`, `/sys`, `/dev`, `/boot` and
+the sudoers files can never be granted.
+
+**Every grant is scoped to one session.** Nothing you allow in one session
+applies to another, and deleting a session drops its grants. Shell auto-approval
+and the writable-directory list both live in that session's ⋮ menu.
 
 Pauses are derived from unanswered tool calls in the database rather than held in
 memory, so reloading the page mid-prompt re-offers the same decision, and a
 crash cannot strand a session with a half-finished turn.
+
+### Images and vision
+
+Attach images with the paperclip; they are saved and referenced by path in your
+message. The agent then calls `vision` on those paths itself, choosing its own
+question — you do not write a vision prompt. Uploads are decoded and re-encoded
+as PNG rather than trusted by extension, because browsers routinely hand over a
+WebP named `.jpg` and the Ollama backend rejects WebP outright.
+
+`screenshot` captures a running page: a single frame, a cropped selector, a full
+scrollable page, or a timed sequence (`count` and `interval_ms`) for animations
+and loading states. `actions` can click, fill, hover, press or scroll first to
+reach a particular state. It returns file paths.
+
+`vision` accepts several paths at once and labels each by filename, which is how
+comparison works — capture before and after, then ask what changed. Note that
+the backend only reliably sees multiple images when each is sent on its own
+message, which this client does for you.
+
+Vision runs against Ollama on `VISION_OLLAMA_URL` (default `vision-host.local:11434`,
+model `qwen3-vl:32b`). Browser capture uses Playwright's async API in-process.
 
 ### Notifications
 
@@ -87,10 +113,11 @@ when you look at the session.
 
 ### Dictation
 
-If `whisper-cli` and `ffmpeg` are on `PATH`, a mic button appears. Toggle it on to
-record (with a live level meter), toggle it off to transcribe and insert at the
-cursor, or just press Enter — that stops the recording, transcribes, and sends.
-Everything stays local; no audio leaves the machine.
+If `whisper-cli` and `ffmpeg` are on `PATH`, a mic button appears. Click it to
+toggle recording, or hold **Ctrl+Space** to push-to-talk. Releasing transcribes
+and inserts at the cursor; pressing Enter while recording stops, transcribes and
+sends in one go. A level meter sits on the bottom edge of the composer while
+recording. Everything stays local; no audio leaves the machine.
 
 Point `WHISPER_MODEL` at a different `ggml-*.bin` to trade accuracy for speed.
 
@@ -146,10 +173,19 @@ will confidently invent absolute paths from its training data.
 ```
 
 `test_conversation.py` covers the serialization rules above and the compaction
-split. `test_permissions.py` covers both gates, including the case that matters
-most: shell auto-approval must not imply filesystem access. `test_live_agent.py`
-runs four real conversations — a greeting, a multi-round tool loop, a shell
-approval, and a rejection — which are the scenarios that used to be broken.
+split. `test_permissions.py` covers both gates, including the two cases that
+matter most: shell auto-approval must not imply filesystem access, and grants
+must not leak between sessions. `test_live_agent.py` runs four real
+conversations — a greeting, a multi-round tool loop, a shell approval, and a
+rejection — which are the scenarios that used to be broken.
+
+The browser side is worth stress-testing with Playwright's CDP performance
+metrics when you touch streaming or the microphone. Two bugs got through review
+because they only showed up under load: markdown re-rendered per token
+(O(n^2) once code blocks appear), and a dictation race that leaked an
+animation-frame loop which then ran forever. Headless Chromium has no
+microphone, so run the mic path with
+`--use-fake-device-for-media-stream` or it stays untested.
 
 ## Adding things
 

@@ -116,26 +116,38 @@ async def rig_available() -> bool:
         return False
 
 
-async def analyze(images: list[bytes], prompt: str, labels: list[str] | None = None) -> str:
+BRIEF_INSTRUCTION = (
+    "Answer only what is asked, in as few words as the question allows. "
+    "No headings, no bullet lists, no restating the question, and no "
+    "commentary on anything the question did not mention."
+)
+
+
+async def analyze(
+    images: list[bytes],
+    prompt: str,
+    labels: list[str] | None = None,
+    detail: str = "brief",
+) -> str:
     """Ask the vision model about one or more images.
 
     Each image goes on its own message; sending them together makes the model
     silently ignore all but one.
+
+    `detail="brief"` asks for a direct answer, which is what makes a call take
+    about ten seconds instead of forty: generation is the entire cost, and left
+    to itself the model writes a long report whatever it was asked.
+    `detail="full"` removes both the instruction and the ceiling, for when a
+    thorough description is genuinely wanted.
     """
     if not images:
         raise VisionError("no images to analyse")
 
     labels = labels or [f"Image {i + 1}" for i in range(len(images))]
-    # Left to itself the model writes a long structured report regardless of
-    # what was asked, and generation is the whole cost of a vision call.
-    messages: list[dict] = [{
-        "role": "system",
-        "content": (
-            "Answer only what is asked, in as few words as the question allows. "
-            "No headings, no bullet lists, no restating the question, and no "
-            "commentary on anything the question did not mention."
-        ),
-    }]
+    brief = detail != "full"
+    messages: list[dict] = []
+    if brief:
+        messages.append({"role": "system", "content": BRIEF_INSTRUCTION})
 
     if len(images) == 1:
         messages.append({
@@ -163,14 +175,14 @@ async def analyze(images: list[bytes], prompt: str, labels: list[str] | None = N
         "model": VISION_MODEL,
         "messages": messages,
         "stream": False,
-        "think": False,
         "keep_alive": VISION_KEEP_ALIVE,
         # Left unset, Ollama falls back to a small default context and silently
         # truncates, which is easy to miss when comparing several images.
         "options": {
             "temperature": 0.1,
             "num_ctx": VISION_NUM_CTX,
-            "num_predict": VISION_MAX_TOKENS,
+            # -1 is "no limit": a full answer should never be cut off.
+            "num_predict": VISION_MAX_TOKENS if brief else -1,
         },
     }
 
@@ -185,9 +197,25 @@ async def analyze(images: list[bytes], prompt: str, labels: list[str] | None = N
     if resp.status_code != 200:
         raise VisionError(f"vision model returned HTTP {resp.status_code}: {resp.text[:300]}")
 
-    content = (resp.json().get("message") or {}).get("content", "").strip()
+    body = resp.json()
+    content = (body.get("message") or {}).get("content", "").strip()
+    truncated = body.get("done_reason") == "length"
     if not content:
+        # Checked before "empty": a cap tight enough to leave nothing at all
+        # should say so, not report a mysterious empty reply.
+        if truncated:
+            raise VisionError(
+                "the answer hit the output limit before producing anything. "
+                "Raise VISION_MAX_TOKENS or ask a narrower question."
+            )
         raise VisionError("vision model returned an empty response")
+    if truncated:
+        # Never hand back a sentence that stops mid-word as though it were the
+        # whole answer; the caller has to be able to tell.
+        content += (
+            "\n\n[cut off at the output limit. Ask a narrower question, or "
+            'call this again with detail="full" for an uncapped answer.]'
+        )
     return content
 
 

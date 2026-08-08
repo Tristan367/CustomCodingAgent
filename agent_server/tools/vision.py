@@ -23,6 +23,7 @@ async def vision(
     full_page: bool = False,
     width: int = 1280,
     height: int = 900,
+    detail: str = "brief",
     **_,
 ) -> ToolResult:
     """Analyse local image files and/or a freshly captured web page."""
@@ -64,7 +65,7 @@ async def vision(
         title_bits.append(url)
 
     try:
-        answer = await engine.analyze(images, prompt or DEFAULT_PROMPT, labels)
+        answer = await engine.analyze(images, prompt or DEFAULT_PROMPT, labels, detail)
     except engine.VisionError as e:
         return ToolResult.error(str(e), "vision")
 
@@ -89,6 +90,7 @@ async def screenshot(
     interval_ms: int = 500,
     actions: list[dict] | None = None,
     prompt: str | None = None,
+    detail: str = "brief",
     **_,
 ) -> ToolResult:
     """Capture a page (optionally a timed sequence) and optionally analyse it."""
@@ -121,6 +123,7 @@ async def screenshot(
                 [data for _, data in shots[:MAX_IMAGES]],
                 prompt,
                 [Path(p).name for p, _ in shots[:MAX_IMAGES]],
+                detail,
             )
             body += f"\n\n{answer}"
         except engine.VisionError as e:

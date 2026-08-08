@@ -74,8 +74,16 @@ VISION_KEEP_ALIVE = os.getenv("VISION_KEEP_ALIVE", "30m")
 VISION_NUM_CTX = int(os.getenv("VISION_NUM_CTX", "8192"))
 # Vision calls are dominated by generation, not by loading or by the image: a
 # 32B model writing an unprompted 1,300-token essay costs ~35s at 37 tok/s.
-# Capping the answer is the single biggest speed-up available.
-VISION_MAX_TOKENS = int(os.getenv("VISION_MAX_TOKENS", "400"))
+# Asking it to be brief is what saves the time -- with that instruction it stops
+# naturally at around 350 tokens. This is only a backstop against a runaway
+# answer, so it is set well clear of where a brief reply actually ends.
+#
+# It needs more headroom than that suggests: the model thinks before it answers,
+# and those tokens count towards this limit while producing no visible text.
+# Thinking is left on deliberately -- it is worth ~190 tokens for better visual
+# reasoning, which is the whole point of the call. Set this too low and the
+# budget is spent thinking and the answer comes back empty.
+VISION_MAX_TOKENS = int(os.getenv("VISION_MAX_TOKENS", "1200"))
 # Downscale anything larger before sending; phone photos are needlessly huge.
 VISION_MAX_PIXELS = int(os.getenv("VISION_MAX_PIXELS", str(1600 * 1600)))
 

@@ -4,6 +4,7 @@
 const App = {
   sessionId: null,
   streaming: false,
+  timers: new Set(),
   abortController: null,
   els: {},
 };
@@ -29,6 +30,7 @@ function initSession() {
   if (App.els.scroller && !App.els.scroller.dataset.bound) {
     App.els.scroller.dataset.bound = '1';
     App.els.scroller.addEventListener('scroll', saveScrollSoon, { passive: true });
+    initJumpButton();
   }
   renderStoredMessages();
   restorePending();
@@ -173,10 +175,64 @@ async function streamRequest(url, options) {
   } finally {
     status.remove();
     flushRender(stream);
-    if (stream.assistantEl) stream.assistantEl.classList.remove('streaming');
+    endAssistantSegment(stream);
+    clearToolProgress(stream);
+    document.querySelectorAll('.message.tool.pending')
+      .forEach((n) => { stopElapsed(n); n.classList.remove('pending'); });
+    // Defensive: any bubble that somehow kept the class would blink forever.
+    document.querySelectorAll('.message.streaming')
+      .forEach((n) => n.classList.remove('streaming'));
     setStreaming(false);
     App.abortController = null;
     refreshMeta();
+  }
+}
+
+/* While the model streams a tool call's arguments there is no content and no
+   reasoning, so a large `write` looks like a 30-second freeze. Show what is
+   being assembled and how big it has got. */
+function showToolProgress(event, stream) {
+  const calls = (event.calls || []).filter((c) => c.name);
+  if (!calls.length) return;
+  if (!stream.progressEl) {
+    stream.progressEl = el('div', 'message notice tool-progress');
+    stream.progressEl.append(el('div', 'msg-role', 'working'));
+    const body = el('div', 'msg-content');
+    body.appendChild(el('div', 'content-text'));
+    stream.progressEl.appendChild(body);
+    App.els.messages.appendChild(stream.progressEl);
+    autoscroll();
+  }
+  const text = calls
+    .map((c) => `${c.name}\u2026 ${formatBytes(c.chars)}`)
+    .join('   ');
+  stream.progressEl.querySelector('.content-text').textContent = text;
+}
+
+function clearToolProgress(stream) {
+  if (stream.progressEl) {
+    stream.progressEl.remove();
+    stream.progressEl = null;
+  }
+}
+
+function formatBytes(n) {
+  return n < 1024 ? `${n} chars` : `${(n / 1024).toFixed(1)} KB`;
+}
+
+/* Close off the current assistant bubble: stop its cursor, and drop it entirely
+   if the model produced a tool call without any prose, which would otherwise
+   leave an empty bubble with a blinking cursor in it. */
+function endAssistantSegment(stream) {
+  const node = stream.assistantEl;
+  stream.assistantEl = null;
+  stream.contentEl = null;
+  stream.text = '';
+  if (!node) return;
+  node.classList.remove('streaming');
+  const text = node.querySelector('.content-text');
+  if (text && !text.textContent.trim() && !node.querySelector('.diff-block, .msg-attachments')) {
+    node.remove();
   }
 }
 
@@ -197,6 +253,7 @@ function handleEvent(event, stream) {
       break;
 
     case 'content':
+      clearToolProgress(stream);
       if (stream.reasoningEl) {
         collapseReasoning(stream.reasoningEl);
         stream.reasoningEl = null;
@@ -210,11 +267,14 @@ function handleEvent(event, stream) {
       scheduleRender(stream);
       break;
 
+    case 'tool_progress':
+      showToolProgress(event, stream);
+      break;
+
     case 'tool_start':
       if (stream.reasoningEl) { collapseReasoning(stream.reasoningEl); stream.reasoningEl = null; }
-      stream.assistantEl = null;
-      stream.contentEl = null;
-      stream.text = '';
+      endAssistantSegment(stream);
+      clearToolProgress(stream);
       appendToolCall(event);
       break;
 
@@ -412,14 +472,43 @@ function appendToolCall(event) {
   const body = el('div', 'msg-content');
   const details = el('details', 'tool-details');
   const summary = el('summary', 'tool-summary');
-  summary.append(el('span', 'spinner-dot'), document.createTextNode(toolSummary(event.name, event.args)));
+  const label = el('span', 'tool-label', toolSummary(event.name, event.args));
+  const elapsed = el('span', 'tool-elapsed', '0.0s');
+  summary.append(el('span', 'spinner-dot'), label, elapsed);
   details.appendChild(summary);
-  details.appendChild(el('pre', 'tool-raw', md.escapeHtml(JSON.stringify(event.args, null, 2))));
+  // The raw argument JSON used to be dumped here. It is noise: the summary line
+  // already says what is being done, and edits show a real diff.
   body.appendChild(details);
   node.appendChild(body);
   App.els.messages.appendChild(node);
+  startElapsed(node, elapsed);
   autoscroll();
   return node;
+}
+
+/* Tick a running duration so a slow tool never looks like a frozen UI. */
+function startElapsed(node, target) {
+  const began = performance.now();
+  const id = setInterval(() => {
+    target.textContent = ((performance.now() - began) / 1000).toFixed(1) + 's';
+  }, 100);
+  node._elapsedTimer = id;
+  node._elapsedBegan = began;
+  App.timers.add(id);
+}
+
+function stopElapsed(node) {
+  if (!node || !node._elapsedTimer) return;
+  clearInterval(node._elapsedTimer);
+  App.timers.delete(node._elapsedTimer);
+  node._elapsedTimer = null;
+  const target = node.querySelector('.tool-elapsed');
+  if (target) {
+    const secs = (performance.now() - node._elapsedBegan) / 1000;
+    // Sub-second calls are not interesting; drop the label entirely.
+    if (secs < 1) target.remove();
+    else target.textContent = secs.toFixed(1) + 's';
+  }
 }
 
 function completeToolCall(event) {
@@ -428,11 +517,16 @@ function completeToolCall(event) {
   node.classList.remove('pending');
   if (event.is_error) node.classList.add('tool-error');
 
-  const summary = node.querySelector('.tool-summary');
-  if (summary) summary.textContent = event.title || event.name;
+  stopElapsed(node);
+  const label = node.querySelector('.tool-label');
+  if (label) label.textContent = event.title || event.name;
+  const dot = node.querySelector('.spinner-dot');
+  if (dot) dot.remove();
 
   const details = node.querySelector('.tool-details');
-  if (event.diff) node.querySelector('.msg-content').appendChild(renderDiff(event.diff));
+  if (event.diff) {
+    node.querySelector('.msg-content').appendChild(renderDiff(event.diff, event.title));
+  }
   const result = el('div', 'tool-result');
   result.appendChild(el('div', 'tool-result-label', event.is_error ? 'error' : 'output'));
   result.appendChild(el('pre', 'tool-raw', md.escapeHtml(event.output || '(no output)')));
@@ -440,19 +534,34 @@ function completeToolCall(event) {
   autoscroll();
 }
 
-/* Unified diff with per-line colouring. */
-function renderDiff(diff) {
+/* Unified diff with per-line colouring, in a collapsible box that starts open.
+   Mirrors the server-side render in chat_messages.html so a reloaded page looks
+   the same as the streamed one. */
+function renderDiff(diff, title) {
   const box = el('pre', 'diff-block');
+  let added = 0;
+  let removed = 0;
   for (const line of diff.replace(/\n+$/, '').split('\n')) {
     let cls = 'diff-ctx';
     if (line.startsWith('@@')) cls = 'diff-hunk';
-    else if (line.startsWith('+')) cls = 'diff-add';
-    else if (line.startsWith('-')) cls = 'diff-del';
+    else if (line.startsWith('+++') || line.startsWith('---')) cls = 'diff-meta';
+    else if (line.startsWith('+')) { cls = 'diff-add'; added++; }
+    else if (line.startsWith('-')) { cls = 'diff-del'; removed++; }
     const row = el('span', cls);
-    row.textContent = line + '\n';
+    // The spans are display:block; appending \n as well would double the
+    // line height. A blank line still needs a space to keep its box.
+    row.textContent = line || ' ';
     box.appendChild(row);
   }
-  return box;
+  const details = el('details', 'tool-details diff-details');
+  details.open = true;
+  const summary = el('summary', 'tool-summary');
+  summary.append(
+    el('span', 'tool-label', title || 'diff'),
+    el('span', 'diff-stat', `+${added} \u2212${removed}`),
+  );
+  details.append(summary, box);
+  return details;
 }
 
 function toolSummary(name, args) {
@@ -1328,11 +1437,36 @@ let scrollQueued = false;
 function autoscroll() {
   const box = App.els.scroller;
   if (!box) return;
+  updateJumpButton();
   // Only follow the stream if the user is already near the bottom.
   if (box.scrollHeight - box.scrollTop - box.clientHeight >= 200) return;
   // Smooth scrolling per token queues hundreds of overlapping animations, so
   // during a stream jump straight to the bottom instead.
   scrollToBottom(App.streaming);
+}
+
+/* Jump-to-bottom affordance. Autoscroll deliberately stops following the stream
+   once the user scrolls up; without this there is no way back except dragging. */
+function updateJumpButton() {
+  const box = App.els.scroller;
+  const btn = App.els.jump;
+  if (!box || !btn) return;
+  const away = box.scrollHeight - box.scrollTop - box.clientHeight;
+  btn.classList.toggle('visible', away >= 200);
+  btn.classList.toggle('pulsing', away >= 200 && App.streaming);
+}
+
+function initJumpButton() {
+  App.els.jump = document.getElementById('jump-bottom');
+  const box = App.els.scroller;
+  if (!App.els.jump || !box || App.els.jump.dataset.bound) return;
+  App.els.jump.dataset.bound = '1';
+  App.els.jump.addEventListener('click', () => {
+    scrollToBottom(false);
+    App.els.jump.classList.remove('visible', 'pulsing');
+  });
+  box.addEventListener('scroll', updateJumpButton, { passive: true });
+  updateJumpButton();
 }
 
 function scrollToBottom(instant) {
@@ -1342,6 +1476,7 @@ function scrollToBottom(instant) {
   requestAnimationFrame(() => {
     scrollQueued = false;
     box.scrollTo({ top: box.scrollHeight, behavior: instant ? 'auto' : 'smooth' });
+    updateJumpButton();
   });
 }
 

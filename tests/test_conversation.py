@@ -194,3 +194,35 @@ def test_split_never_cuts_through_a_tool_group():
 
 def test_short_conversations_are_not_compacted():
     assert split_for_compaction([row(1, "user", "a"), row(2, "assistant", "b")])[0] == []
+
+
+# ── Compaction keeps a real tail, not just a summary ─────────────────────────
+
+def _turn(i, tokens):
+    return [
+        {"id": i * 2, "role": "user", "content": "q", "tool_calls": None, "token_count": 20},
+        {"id": i * 2 + 1, "role": "assistant", "content": "a", "tool_calls": None,
+         "token_count": tokens},
+    ]
+
+
+def test_tail_window_grows_for_cheap_turns():
+    """A summary alone would throw away context that still fits comfortably."""
+    rows = [m for i in range(20) for m in _turn(i, 50)]
+    head, tail = split_for_compaction(rows)
+    assert len(tail) > 8, "cheap turns should keep far more than the floor"
+    assert head, "something must still be summarised"
+
+
+def test_tail_window_falls_back_to_floor_for_expensive_turns():
+    rows = [m for i in range(20) for m in _turn(i, 20_000)]
+    head, tail = split_for_compaction(rows)
+    assert len(tail) == 8, "four groups of two messages"
+    assert len(head) == len(rows) - len(tail)
+
+
+def test_compaction_never_loses_or_reorders_messages():
+    rows = [m for i in range(20) for m in _turn(i, 3_000)]
+    head, tail = split_for_compaction(rows)
+    ids = [m["id"] for m in head] + [m["id"] for m in tail]
+    assert ids == sorted(ids) == [m["id"] for m in rows]

@@ -5,27 +5,32 @@
  */
 
 :root {
-  --bg:            #0d0f12;
-  --bg-raised:     #14171c;
-  --bg-inset:      #101317;
-  --bg-hover:      #1b1f26;
-  --border:        #252a33;
-  --border-strong: #333a45;
+  /* Near-black with a faint green cast rather than the usual blue-grey, so the
+     greens and teals below sit on it without looking pasted on. Accents are
+     desaturated on purpose: a bright accent on a dark background is what makes
+     a dark theme tiring to sit in front of. */
+  --bg:            #0c0f0e;
+  --bg-raised:     #131816;
+  --bg-inset:      #0f1413;
+  --bg-hover:      #1a211e;
+  --border:        #222a27;
+  --border-strong: #2f3a36;
 
-  --text:          #dfe3ea;
-  --text-dim:      #8b93a1;
-  --text-faint:    #5c6472;
+  --text:          #dde3df;
+  --text-dim:      #8a958e;
+  --text-faint:    #5b665f;
 
-  --accent:        #4f9cf9;
-  --accent-dim:    #2b5f9e;
-  --success:       #3fb950;
-  --warn:          #d29922;
-  --danger:        #f85149;
+  --accent:        #5fb894;
+  --accent-dim:    #2f6a55;
+  --success:       #6fbf6a;
+  --warn:          #d99a55;
+  --danger:        #d9645f;
+  --info:          #4fb0b8;
 
-  --role-user:     #4f9cf9;
-  --role-assistant:#3fb950;
-  --role-tool:     #a371f7;
-  --role-thinking: #6e7681;
+  --role-user:     #4fb0b8;
+  --role-assistant:#6fbf6a;
+  --role-tool:     #cf9455;
+  --role-thinking: #6b7a72;
 
   --mono: ui-monospace, "SF Mono", "JetBrains Mono", "Fira Code", Menlo, Consolas, monospace;
   --sans: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
@@ -58,7 +63,7 @@ body { display: flex; flex-direction: column; overflow: hidden; }
 ::-webkit-scrollbar { width: 10px; height: 10px; }
 ::-webkit-scrollbar-track { background: transparent; }
 ::-webkit-scrollbar-thumb { background: var(--border-strong); border-radius: 5px; }
-::-webkit-scrollbar-thumb:hover { background: #454d5a; }
+::-webkit-scrollbar-thumb:hover { background: #3d4a45; }
 
 a { color: var(--accent); text-decoration: none; }
 a:hover { text-decoration: underline; }
@@ -172,7 +177,8 @@ hr { border: 0; border-top: 1px solid var(--border); margin: 6px 0; }
 /* ── Layout ──────────────────────────────────────────────────────────────── */
 
 #main-content { flex: 1; min-height: 0; display: flex; flex-direction: column; overflow: hidden; }
-#session-view { display: flex; flex-direction: column; flex: 1; min-height: 0; }
+/* `position: relative` anchors the absolutely-positioned #jump-bottom. */
+#session-view { display: flex; flex-direction: column; flex: 1; min-height: 0; position: relative; }
 
 /* ── Session meta bar ────────────────────────────────────────────────────── */
 
@@ -354,7 +360,7 @@ hr { border: 0; border-top: 1px solid var(--border); margin: 6px 0; }
   border-radius: 3px;
   padding: 0.5px 4px;
   font-size: 12px;
-  color: #e3b341;
+  color: var(--warn);
 }
 .content-text code.file-ref { color: var(--accent); }
 
@@ -392,11 +398,11 @@ hr { border: 0; border-top: 1px solid var(--border); margin: 6px 0; }
 .code-block pre { margin: 0; padding: 9px 11px; overflow-x: auto; line-height: 1.5; }
 .code-block code { background: none; border: 0; padding: 0; color: var(--text); }
 
-.hl-kw  { color: #ff7b72; }
-.hl-str { color: #a5d6ff; }
-.hl-num { color: #79c0ff; }
+.hl-kw  { color: #e2796f; }
+.hl-str { color: #7fc7a4; }
+.hl-num { color: #d99a55; }
 .hl-com { color: #6e7681; font-style: italic; }
-.hl-fn  { color: #d2a8ff; }
+.hl-fn  { color: #5fc2c9; }
 
 /* ── Thinking ────────────────────────────────────────────────────────────── */
 
@@ -487,7 +493,7 @@ hr { border: 0; border-top: 1px solid var(--border); margin: 6px 0; }
 .notice-error .content-text {
   background: rgba(248, 81, 73, 0.09);
   border-left: 2px solid var(--danger);
-  color: #ffa198;
+  color: #e79b96;
   white-space: pre-wrap;
 }
 .notice-error .msg-role { color: var(--danger); }
@@ -518,7 +524,7 @@ hr { border: 0; border-top: 1px solid var(--border); margin: 6px 0; }
   border: 1px solid var(--border);
   border-radius: 4px;
   white-space: pre-wrap;
-  color: #e3b341;
+  color: var(--warn);
   overflow-x: auto;
 }
 .permission-dir { font-size: 11px; font-family: var(--mono); color: var(--text-faint); margin-bottom: 10px; }
@@ -552,7 +558,7 @@ hr { border: 0; border-top: 1px solid var(--border); margin: 6px 0; }
   cursor: pointer;
   border: 1px solid transparent;
 }
-.btn-approve { background: var(--success); color: #06210c; font-weight: 600; }
+.btn-approve { background: var(--success); color: #0a1f09; font-weight: 600; }
 .btn-approve:hover { filter: brightness(1.12); }
 .btn-approve-all { background: transparent; border-color: var(--success); color: var(--success); }
 .btn-approve-all:hover { background: rgba(63, 185, 80, 0.12); }
@@ -626,11 +632,11 @@ hr { border: 0; border-top: 1px solid var(--border); margin: 6px 0; }
   cursor: pointer;
   border: 1px solid transparent;
 }
-.btn-primary, button[type="submit"] { background: var(--accent); color: #05121f; font-weight: 600; }
+.btn-primary, button[type="submit"] { background: var(--accent); color: #06201a; font-weight: 600; }
 .btn-primary:hover, button[type="submit"]:hover { filter: brightness(1.1); }
 .btn-secondary { background: var(--bg-inset); border-color: var(--border-strong); color: var(--text); }
 .btn-secondary:hover { background: var(--bg-hover); }
-.btn-stop { background: var(--danger); color: #24060a; font-weight: 600; }
+.btn-stop { background: var(--danger); color: #250b0a; font-weight: 600; }
 .btn-stop:hover { filter: brightness(1.1); }
 
 .icon-btn {
@@ -738,8 +744,8 @@ select { cursor: pointer; }
   margin-bottom: 14px;
   font-size: 12.5px;
 }
-.error-banner { background: rgba(248, 81, 73, 0.1); border: 1px solid var(--danger); color: #ffa198; }
-.success-banner { background: rgba(63, 185, 80, 0.1); border: 1px solid var(--success); color: #7ee787; }
+.error-banner { background: rgba(217, 100, 95, 0.10); border: 1px solid var(--danger); color: #e79b96; }
+.success-banner { background: rgba(111, 191, 106, 0.10); border: 1px solid var(--success); color: #97d693; }
 
 #session-list { display: flex; flex-direction: column; gap: 1px; }
 .session-card {
@@ -992,8 +998,8 @@ select { cursor: pointer; }
   overflow-y: auto;
 }
 .diff-block span { display: block; padding: 0 10px; white-space: pre; }
-.diff-add  { background: rgba(63, 185, 80, 0.13); color: #7ee787; }
-.diff-del  { background: rgba(248, 81, 73, 0.12); color: #ffa198; }
+.diff-add  { background: rgba(111, 191, 106, 0.12); color: #97d693; }
+.diff-del  { background: rgba(217, 100, 95, 0.12); color: #e79b96; }
 .diff-hunk { color: var(--text-faint); background: rgba(110, 118, 129, 0.10); }
 .diff-ctx  { color: var(--text-dim); }
 
@@ -1151,3 +1157,79 @@ select { cursor: pointer; }
 /* Breathing room under the prompts form so the save button isn't flush. */
 #prompts-page form { margin-bottom: 34px; }
 #prompts-page .save-btn:last-of-type { margin-bottom: 12px; }
+
+/* ── Tool progress, diffs, jump-to-bottom ───────────────────────────────── */
+
+/* A running duration next to a tool call. Without it a slow edit is
+   indistinguishable from a hung UI. */
+.tool-elapsed {
+  margin-left: auto;
+  padding-left: 10px;
+  color: var(--text-faint);
+  font-variant-numeric: tabular-nums;
+  font-size: 10.5px;
+}
+.tool-summary { display: flex; align-items: center; gap: 6px; }
+.tool-label { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+/* Shown while the model is still streaming a tool call's arguments. */
+.message.tool-progress .msg-role { color: var(--role-tool); }
+.message.tool-progress .content-text {
+  color: var(--text-dim);
+  font-family: var(--mono);
+  font-size: 11.5px;
+}
+
+.diff-details { margin-top: 4px; }
+.diff-stat {
+  margin-left: auto;
+  padding-left: 10px;
+  font-family: var(--mono);
+  font-size: 10.5px;
+  color: var(--text-faint);
+}
+.diff-meta { color: var(--text-faint); }
+
+/* Marks where compacted turns were replaced by the summary above. */
+.compaction-boundary {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin: 10px 0 16px;
+  color: var(--text-faint);
+  font-size: 10.5px;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+}
+.compaction-boundary::before,
+.compaction-boundary::after {
+  content: '';
+  flex: 1;
+  height: 1px;
+  background: var(--border);
+}
+
+#jump-bottom {
+  position: absolute;
+  right: 22px;
+  bottom: 14px;
+  z-index: 5;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 32px;
+  height: 32px;
+  padding: 0;
+  border: 1px solid var(--border-strong);
+  border-radius: 50%;
+  background: var(--bg-raised);
+  color: var(--text-dim);
+  opacity: 0;
+  pointer-events: none;
+  transform: translateY(6px);
+  transition: opacity 0.12s ease, transform 0.12s ease;
+}
+#jump-bottom.visible { opacity: 1; pointer-events: auto; transform: none; }
+#jump-bottom:hover { color: var(--text); border-color: var(--accent-dim); }
+/* Tinted while a reply is streaming out of sight. */
+#jump-bottom.pulsing { border-color: var(--accent-dim); color: var(--accent); }

@@ -133,11 +133,38 @@ def strip_attachments(content: str) -> str:
     return text.strip()
 
 
+def difflines(diff: str) -> list[tuple[str, str]]:
+    """Tag each diff line with a CSS class, matching renderDiff() in app.js so a
+    reloaded transcript looks identical to the streamed one."""
+    out = []
+    for line in (diff or "").rstrip("\n").split("\n"):
+        if line.startswith("@@"):
+            cls = "diff-hunk"
+        elif line.startswith("+++") or line.startswith("---"):
+            cls = "diff-meta"
+        elif line.startswith("+"):
+            cls = "diff-add"
+        elif line.startswith("-"):
+            cls = "diff-del"
+        else:
+            cls = "diff-ctx"
+        out.append((cls, line))
+    return out
+
+
+def diffstat_label(diff: str) -> str:
+    added = sum(1 for ln in (diff or "").splitlines() if ln.startswith("+") and not ln.startswith("+++"))
+    removed = sum(1 for ln in (diff or "").splitlines() if ln.startswith("-") and not ln.startswith("---"))
+    return f"+{added} \u2212{removed}"
+
+
 templates.env.filters["clocktime"] = clocktime
 templates.env.filters["tildepath"] = tildepath
 templates.env.filters["attachments"] = extract_attachments
 templates.env.filters["withoutattachments"] = strip_attachments
 templates.env.filters["toolcalls"] = normalize_tool_calls
+templates.env.filters["difflines"] = difflines
+templates.env.filters["diffstat"] = diffstat_label
 
 
 # ── Shared context ──────────────────────────────────────────────────────────

@@ -64,6 +64,7 @@ async def run_bash(
     title = f"bash: {command.strip().splitlines()[0][:90]}"
 
     proc = None
+    detached = False
     try:
         proc = await asyncio.create_subprocess_shell(
             command,
@@ -76,7 +77,9 @@ async def run_bash(
             start_new_session=True,
             env={**os.environ, "TERM": "dumb", "NO_COLOR": "1", "PAGER": "cat"},
         )
-        stdout, stderr = await asyncio.wait_for(proc.communicate(), timeout=timeout_sec)
+        stdout, stderr, detached = await asyncio.wait_for(
+            _collect(proc), timeout=timeout_sec
+        )
     except asyncio.TimeoutError:
         _kill(proc)
         return ToolResult.error(f"command timed out after {timeout_sec:g}s: {command}", title)
@@ -97,6 +100,14 @@ async def run_bash(
         parts.append(f"[stderr]\n{err}")
     if code != 0:
         parts.append(f"[exit code {code}]")
+    if detached:
+        # The shell exited but something it spawned still holds the output pipe,
+        # i.e. a real background process. Say so, otherwise the model sees a
+        # suspiciously empty result and retries a server it already started.
+        parts.append(
+            "[note] the shell exited and left a background process running; "
+            "it was not killed and any later output is not captured"
+        )
     body = "\n".join(parts) or "(no output)"
 
     return ToolResult(
@@ -104,6 +115,55 @@ async def run_bash(
         is_error=code != 0,
         title=f"{title} (exit {code})",
     )
+
+
+# How long to keep reading after the shell itself has exited. Only matters when
+# a background grandchild inherited the pipe; a normal command's pipes are
+# already at EOF by then, so this costs nothing in the common case.
+BACKGROUND_DRAIN_SEC = 0.25
+
+
+async def _collect(proc) -> tuple[bytes, bytes, bool]:
+    """Read stdout/stderr, but stop waiting once the shell itself has exited.
+
+    `communicate()` waits for the pipes to reach EOF, not for the process to
+    exit. `python3 -m http.server &` exits the shell immediately while the
+    server inherits the pipe and holds it open for as long as it runs, so
+    communicate() blocks for the full timeout and the process group then gets
+    killed -- taking the server with it. Waiting on the shell instead means a
+    backgrounded command returns immediately, as the user expects.
+    """
+    out: list[bytes] = []
+    err: list[bytes] = []
+
+    async def drain(stream, sink):
+        while True:
+            chunk = await stream.read(65536)
+            if not chunk:
+                return
+            sink.append(chunk)
+
+    readers = [
+        asyncio.create_task(drain(proc.stdout, out)),
+        asyncio.create_task(drain(proc.stderr, err)),
+    ]
+    try:
+        # NB: neither communicate() nor wait() can be used here. Both only
+        # resolve once every pipe has disconnected (see _try_finish in
+        # asyncio/base_subprocess.py), which is precisely what a background
+        # grandchild prevents. `returncode` is set as soon as the child exits,
+        # independently of the pipes, so poll that instead.
+        while proc.returncode is None:
+            await asyncio.sleep(0.02)
+        # Give whatever is already buffered a moment to arrive.
+        _, pending = await asyncio.wait(readers, timeout=BACKGROUND_DRAIN_SEC)
+        detached = bool(pending)
+    finally:
+        for task in readers:
+            task.cancel()
+        await asyncio.gather(*readers, return_exceptions=True)
+
+    return b"".join(out), b"".join(err), detached
 
 
 def _kill(proc):

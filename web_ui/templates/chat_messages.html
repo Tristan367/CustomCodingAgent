@@ -16,24 +16,48 @@
         <span class="msg-time">{{ c.created_at | clocktime }}</span>
     </div>
     {% endfor %}
+    {% if compactions %}
+    {# Make the boundary explicit: the summary above replaced those turns in what
+       the model sees; everything below it is still verbatim. #}
+    <div class="compaction-boundary">
+        <span>summarised above &middot; full transcript below</span>
+    </div>
+    {% endif %}
 
     {% for m in messages %}
-    {% set calls = m.tool_calls | toolcalls %}
-
     {% if m.role == 'tool' %}
     <div class="message tool {% if m.is_error %}tool-error{% endif %}" id="msg-{{ m.id }}">
         <div class="msg-role">{{ m.tool_name or 'result' }}</div>
         <div class="msg-content">
+            {% if m.diff %}
+            {# Diffs are the one tool result worth showing unprompted, so this
+               opens by default. Everything else stays folded. #}
+            <details class="tool-details diff-details" open>
+                <summary class="tool-summary">
+                    {{ m.content.splitlines()[0] if m.content else 'diff' }}
+                    <span class="diff-stat">{{ m.diff | diffstat }}</span>
+                </summary>
+                {# No newline between spans: they are display:block, so a literal newline
+   inside the <pre> would double every line's height. #}
+                <pre class="diff-block">{%- for cls, line in m.diff | difflines %}<span class="{{ cls }}">{{ line if line else ' ' }}</span>{%- endfor %}</pre>
+            </details>
+            {% else %}
             <details class="tool-details">
                 <summary class="tool-summary">{{ m.tool_name or 'tool' }} result</summary>
                 <pre class="tool-raw">{{ m.content[:8000] }}{% if m.content | length > 8000 %}
 ... [truncated in view]{% endif %}</pre>
             </details>
+            {% endif %}
         </div>
         <span class="msg-time">{{ m.created_at | clocktime }}</span>
     </div>
 
     {% else %}
+    {% set attached = m.content | attachments %}
+    {% set body = (m.content | withoutattachments if attached else m.content) | trim %}
+    {# An assistant turn that only carried tool calls has nothing left to show
+       once the raw arguments are hidden, and would render as an empty bubble. #}
+    {% if body or attached or m.reasoning_content or m.role != 'assistant' %}
     <div class="message {{ m.role }}" id="msg-{{ m.id }}">
         <div class="msg-role">{{ m.role }}</div>
         <div class="msg-content">
@@ -44,7 +68,6 @@
             </details>
             {% endif %}
 
-            {% set attached = m.content | attachments %}
             {% if attached %}
             <div class="msg-attachments">
                 {% for a in attached %}
@@ -56,17 +79,9 @@
             </div>
             {% endif %}
 
-            {% set body = m.content | withoutattachments if attached else m.content %}
             {% if body %}
             <div class="content-text" data-markdown>{{ body }}</div>
             {% endif %}
-
-            {% for call in calls %}
-            <details class="tool-details">
-                <summary class="tool-summary">{{ call.function.name }}</summary>
-                <pre class="tool-raw">{{ call.function.arguments }}</pre>
-            </details>
-            {% endfor %}
         </div>
         <span class="msg-side">
             {% if m.role == 'user' and retryable_id == m.id %}
@@ -82,6 +97,7 @@
             <span class="msg-time">{{ m.created_at | clocktime }}</span>
         </span>
     </div>
+    {% endif %}
     {% endif %}
     {% endfor %}
 

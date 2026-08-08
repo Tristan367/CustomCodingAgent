@@ -113,7 +113,25 @@
       .replace(/\[([^\]]+)\]\(([^)\s]+)[^)]*\)/g,
         (_, label, href) => /^(https?:|\/|#)/.test(href)
           ? `<a href="${href}" target="_blank" rel="noopener noreferrer">${label}</a>`
-          : label)
+          : label);
+
+    // Bare URLs become links. The lookbehind skips anything already inside a
+    // tag we just generated: after escapeHtml, a literal " or > can only have
+    // come from our own markup. Stashed so the emphasis pass below cannot eat
+    // underscores inside a URL.
+    const links = [];
+    out = out.replace(/(?<!["=>])\bhttps?:\/\/[^\s<>"'`]+/g, (url) => {
+      // Sentence punctuation and trailing emphasis markers are almost never
+      // part of the URL. Only a trailing run is stripped, so underscores and
+      // asterisks *inside* a path survive.
+      const tail = (url.match(/[.,;:!?)\]}*_~]+$/) || [''])[0];
+      const href = tail ? url.slice(0, -tail.length) : url;
+      if (!/^https?:\/\/[^/]/.test(href)) return url;
+      links.push(`<a href="${href}" target="_blank" rel="noopener noreferrer">${href}</a>`);
+      return '\u0000LINK' + (links.length - 1) + '\u0000' + tail;
+    });
+
+    out = out
       .replace(/(\*\*|__)(?=\S)([\s\S]*?\S)\1/g, '<strong>$2</strong>')
       .replace(/(^|[\s(])(\*|_)(?=\S)([^*_]*?\S)\2/g, '$1<em>$3</em>')
       .replace(/~~(?=\S)([\s\S]*?\S)~~/g, '<del>$1</del>')
@@ -121,8 +139,10 @@
       .replace(/(^|[\s(])((?:[\w.\-]+\/)+[\w.\-]+\.\w+:\d+)/g,
         '$1<code class="file-ref">$2</code>');
 
-    return out.replace(/\u0000CODE(\d+)\u0000/g,
-      (_, i) => '<code>' + escapeHtml(codes[+i]) + '</code>');
+    return out
+      .replace(/\u0000LINK(\d+)\u0000/g, (_, i) => links[+i])
+      .replace(/\u0000CODE(\d+)\u0000/g,
+        (_, i) => '<code>' + escapeHtml(codes[+i]) + '</code>');
   }
 
   function render(src) {

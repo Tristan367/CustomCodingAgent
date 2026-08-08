@@ -257,6 +257,21 @@ async def _loop(
                 yield {"type": "reasoning", "text": event["text"]}
             elif etype == "tool_calls":
                 _accumulate(partials, event["deltas"])
+                # A large `write` can spend a long time streaming its arguments
+                # with no content and no reasoning, which looks like a hang.
+                # Report what is being built so the UI can show progress.
+                yield {
+                    "type": "tool_progress",
+                    "calls": [
+                        {
+                            "index": i,
+                            "name": p["name"],
+                            "chars": len(p["arguments"]),
+                        }
+                        for i, p in sorted(partials.items())
+                        if p["name"]
+                    ],
+                }
             elif etype == "usage":
                 usage = event["usage"]
             elif etype == "finish":
@@ -403,6 +418,9 @@ async def _record(session_id: str, call: dict, result: ToolResult) -> dict:
         tool_name=tool_call_name(call),
         is_error=result.is_error,
         token_count=estimate_tokens([{"role": "tool", "content": output}]),
+        # Persisted so the inline diff is still there after a page reload.
+        # It is display-only and never sent back to the model.
+        diff=result.diff,
     )
 
 

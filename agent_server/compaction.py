@@ -13,7 +13,14 @@ from agent_server.providers import get_provider
 from agent_server.system_prompt import get_compact_prompt
 
 # Turns kept verbatim at the tail so recent context survives compaction.
-KEEP_RECENT_GROUPS = 3
+# A summary alone loses the concrete detail the model is actively working with
+# -- exact identifiers, file contents it just read, the wording of the last
+# instruction -- so compaction always leaves a real window of recent turns in
+# place. The floor is a count; beyond that the window grows to fill a token
+# budget, because three turns of one-line answers is a far smaller window than
+# three turns that each read a large file.
+KEEP_RECENT_GROUPS = 4
+KEEP_TAIL_TOKENS = 24_000
 
 
 def group_messages(rows: list[dict]) -> list[list[dict]]:
@@ -47,13 +54,31 @@ def group_messages(rows: list[dict]) -> list[list[dict]]:
     return groups
 
 
-def split_for_compaction(rows: list[dict]) -> tuple[list[dict], list[dict]]:
+def split_for_compaction(
+    rows: list[dict], keep_tail_tokens: int = KEEP_TAIL_TOKENS
+) -> tuple[list[dict], list[dict]]:
     """Return (messages_to_summarise, messages_to_keep) cut on a group boundary."""
     groups = group_messages(rows)
     if len(groups) <= KEEP_RECENT_GROUPS:
         return [], rows
-    head = groups[: -KEEP_RECENT_GROUPS]
-    tail = groups[-KEEP_RECENT_GROUPS:]
+
+    # Grow the kept window backwards from the end until it fills the budget,
+    # always stopping on a group boundary, and always leaving at least one
+    # group to summarise.
+    keep = 0
+    total = 0
+    for group in reversed(groups):
+        cost = sum(r.get("token_count") or 0 for r in group)
+        if keep >= KEEP_RECENT_GROUPS and total + cost > keep_tail_tokens:
+            break
+        if keep >= len(groups) - 1:
+            break
+        keep += 1
+        total += cost
+    keep = max(keep, KEEP_RECENT_GROUPS)
+
+    head = groups[:-keep]
+    tail = groups[-keep:]
 
     # Never keep a leading orphan: the kept window must not start with a tool result.
     while tail and tail[0] and tail[0][0]["role"] == "tool":

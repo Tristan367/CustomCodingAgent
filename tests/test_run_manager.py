@@ -183,3 +183,57 @@ def test_undone_message_is_never_flushed():
         db.add_message = real
     assert sent["content"] == "keep me"
     assert "drop me" not in sent["content"]
+
+
+# ── Stopping ────────────────────────────────────────────────────────────────
+
+def test_a_cancelled_batch_still_records_a_result_for_every_call():
+    """An unanswered tool call is treated as pending work and re-run on the
+    next message, which is how a stopped batch used to resurrect itself."""
+    import agent_server.agent as ag
+    from agent_server.tools.base import ToolContext
+
+    recorded = []
+
+    async def fake_record(session_id, call, result, duration_ms=0):
+        recorded.append((call["id"], result.output))
+        return {"id": len(recorded)}
+
+    async def never_finishes(name, args, ctx):
+        await asyncio.sleep(3600)
+
+    calls = [
+        {"id": f"c{i}", "type": "function",
+         "function": {"name": "task", "arguments": "{}"}}
+        for i in range(3)
+    ]
+
+    async def go():
+        ctx = ToolContext(project_dir="/tmp", session_id="s", abort=asyncio.Event())
+        events = []
+
+        async def consume():
+            async for event in ag._run_batch("s", ctx, calls):
+                events.append(event)
+
+        task = asyncio.create_task(consume())
+        await asyncio.sleep(0.05)
+        ctx.abort.set()
+        ag.request_abort("s")
+        for t in list(ag._tool_tasks.get("s", ())):
+            t.cancel()
+        await asyncio.wait_for(task, timeout=5)
+        return events
+
+    real_record, ag._record = ag._record, fake_record
+    real_exec, ag.execute_tool = ag.execute_tool, never_finishes
+    ag._aborts["s"] = asyncio.Event()
+    try:
+        asyncio.run(go())
+    finally:
+        ag._record, ag.execute_tool = real_record, real_exec
+        ag._aborts.pop("s", None)
+        ag._tool_tasks.pop("s", None)
+
+    assert len(recorded) == 3, f"every call needs a result, got {recorded}"
+    assert all("cancelled" in output for _, output in recorded)

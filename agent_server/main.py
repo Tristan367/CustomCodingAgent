@@ -200,21 +200,7 @@ async def _session_context(session: dict) -> dict:
         "sound_enabled": await _sound_enabled(),
         "threshold_steps": THRESHOLD_STEPS,
         "allowed_dirs": await permissions.list_allowed(session["id"]),
-        "retryable_id": _retryable_message_id(messages),
     }
-
-
-def _retryable_message_id(messages: list[dict]) -> int | None:
-    """The trailing user message, if the model never answered it.
-
-    Editing or retrying a turn the assistant already responded to would rewrite
-    history the user has read, so those actions are only offered on a turn that
-    produced no reply -- which is exactly the failed/aborted case worth redoing.
-    """
-    if not messages:
-        return None
-    last = messages[-1]
-    return last["id"] if last["role"] == "user" else None
 
 
 async def _pending_prompt(session: dict, messages: list[dict]) -> dict | None:

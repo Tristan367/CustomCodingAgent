@@ -87,11 +87,25 @@ def mark_seen(session_id: str):
     _unseen.pop(session_id, None)
 
 
+# Tool calls currently executing, so a stop can interrupt them instead of
+# waiting for them to notice a flag. A subagent in the middle of a four minute
+# model call checks nothing, so setting an event alone did not stop it.
+_tool_tasks: dict[str, set[asyncio.Task]] = {}
+
+
+def _track(session_id: str, task: asyncio.Task):
+    _tool_tasks.setdefault(session_id, set()).add(task)
+    task.add_done_callback(lambda t: _tool_tasks.get(session_id, set()).discard(t))
+
+
 def request_abort(session_id: str) -> bool:
     event = _aborts.get(session_id)
     if event is None:
         return False
     event.set()
+    # Interrupt the work itself, not just the loop between steps.
+    for task in list(_tool_tasks.get(session_id, ())):
+        task.cancel()
     return True
 
 
@@ -144,6 +158,13 @@ class _Run:
 
 _runs: dict[str, _Run] = {}
 
+# A finished run is kept briefly so a client that reconnects a moment later can
+# still collect the tail of the turn. Without this the buffers -- which hold
+# every event of every turn, tool output included -- were never released.
+RUN_RETENTION_SEC = 300
+# A runaway turn should not be able to exhaust memory through the buffer alone.
+MAX_BUFFERED_EVENTS = 5000
+
 # Messages typed while a turn is running. Nothing here has been persisted or
 # sent anywhere, which is what makes taking one back possible: until the flush
 # below, the model has no idea it was ever typed.
@@ -184,6 +205,8 @@ def _publish(run: _Run, event: dict):
     elif event["type"] == "tool_end":
         run.inflight.pop(event["tool_call_id"], None)
     run.events.append(event)
+    if len(run.events) > MAX_BUFFERED_EVENTS:
+        del run.events[: len(run.events) - MAX_BUFFERED_EVENTS]
     for queue in list(run.subscribers):
         queue.put_nowait(event)
 
@@ -200,6 +223,25 @@ async def _drive(session_id: str, handle: _Run):
     finally:
         _publish(handle, {"type": "stream_end"})
         handle.done.set()
+        asyncio.create_task(_retire(session_id, handle))
+
+
+async def _retire(session_id: str, handle: _Run):
+    """Release a finished run's buffer once nobody is likely to want it."""
+    await asyncio.sleep(RUN_RETENTION_SEC)
+    if _runs.get(session_id) is handle and not handle.subscribers:
+        _runs.pop(session_id, None)
+    handle.events.clear()
+    handle.inflight.clear()
+
+
+def forget_session(session_id: str):
+    """Drop everything held in memory for a session that no longer exists."""
+    _runs.pop(session_id, None)
+    _queued.pop(session_id, None)
+    _aborts.pop(session_id, None)
+    _tool_tasks.pop(session_id, None)
+    _compaction_snoozed.discard(session_id)
 
 
 def start_run(session_id: str) -> _Run:
@@ -560,7 +602,17 @@ async def _drain_pending(session: dict, ctx: ToolContext) -> AsyncIterator[dict]
         _approved_calls.discard(call["id"])
         yield {"type": "tool_start", "tool_call_id": call["id"], "name": name, "args": args}
         began = time.monotonic()
-        result = await execute_tool(name, args, ctx)
+        task = asyncio.create_task(execute_tool(name, args, ctx))
+        _track(session_id, task)
+        try:
+            result = await task
+        except asyncio.CancelledError:
+            result = ToolResult.error("cancelled by user", "cancelled")
+            await _record(session_id, call, result, 0)
+            if not ctx.abort.is_set():
+                raise
+            yield _tool_end_event(call, name, result, 0)
+            continue
         elapsed_ms = int((time.monotonic() - began) * 1000)
         await _record(session_id, call, result, elapsed_ms)
         yield _tool_end_event(call, name, result, elapsed_ms)
@@ -602,14 +654,22 @@ async def _run_batch(session_id: str, ctx: ToolContext, batch: list[dict]) -> As
         }
 
     tasks = [asyncio.create_task(run(call)) for call in batch]
-    try:
-        for call, task in zip(batch, tasks):
+    for task in tasks:
+        _track(session_id, task)
+
+    # Every call must end up with a result, including the cancelled ones.
+    # An unanswered tool call is picked up as pending work and re-run on the
+    # next message, which is how a stopped batch used to restart itself.
+    for call, task in zip(batch, tasks):
+        try:
             result, elapsed_ms = await task
-            await _record(session_id, call, result, elapsed_ms)
-            yield _tool_end_event(call, tool_call_name(call), result, elapsed_ms)
-    finally:
-        for task in tasks:
-            task.cancel()
+        except asyncio.CancelledError:
+            result, elapsed_ms = ToolResult.error("cancelled by user", "cancelled"), 0
+            if not ctx.abort.is_set():
+                await _record(session_id, call, result, elapsed_ms)
+                raise
+        await _record(session_id, call, result, elapsed_ms)
+        yield _tool_end_event(call, tool_call_name(call), result, elapsed_ms)
 
 
 async def _record(session_id: str, call: dict, result: ToolResult, duration_ms: int = 0) -> dict:

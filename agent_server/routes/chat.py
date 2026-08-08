@@ -302,18 +302,6 @@ async def set_compact_threshold(
 
 # ── Retry ──────────────────────────────────────────────────────────
 
-@router.post("/sessions/{session_id}/messages/{message_id}/retry")
-async def retry_message(session_id: str, message_id: int, request: Request):
-    """Discard everything after a user message and run that turn again."""
-    await _require_session(session_id)
-    rows = await db.get_messages(session_id, include_compacted=True)
-    target = next((r for r in rows if r["id"] == message_id), None)
-    if target is None or target["role"] != "user":
-        raise HTTPException(400, "Can only retry from a user message")
-    await db.delete_messages_after(session_id, message_id)
-    return _stream(session_id, request)
-
-
 @router.get("/stt/status")
 async def stt_status():
     return stt_service.availability()

@@ -90,17 +90,7 @@
             <div class="content-text" data-markdown>{{ body }}</div>
             {% endif %}
         </div>
-        <span class="msg-side">
-            {% if m.role == 'user' and retryable_id == m.id %}
-            {# Only the trailing unanswered turn: anything earlier has a reply
-               the user has already read, and rewriting it would rewrite history. #}
-            <span class="msg-actions">
-                <button type="button" title="Send this message again"
-                        onclick="retryFrom({{ m.id }})">retry</button>
-            </span>
-            {% endif %}
-            <span class="msg-time">{{ m.created_at | clocktime }}</span>
-        </span>
+        <span class="msg-time">{{ m.created_at | clocktime }}</span>
     </div>
     {% endif %}
     {% endif %}

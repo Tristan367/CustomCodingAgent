@@ -65,6 +65,8 @@ async def _run(ctx: ToolContext, description: str, prompt: str, title: str) -> T
         async for event in provider.chat_completion(
             messages=messages, tools=tools, model=ctx.model, thinking_effort="low"
         ):
+            if ctx.abort.is_set():
+                return ToolResult.error("cancelled", title, usage_total)
             etype = event["type"]
             if etype == "content":
                 content += event["text"]

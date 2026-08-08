@@ -67,6 +67,7 @@ async def delete_session(session_id: str):
         raise HTTPException(404, "Session not found")
     agent.request_abort(session_id)
     await db.delete_session(session_id)
+    agent.forget_session(session_id)
     return {"ok": True}
 
 

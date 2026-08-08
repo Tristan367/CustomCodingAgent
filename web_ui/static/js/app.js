@@ -259,11 +259,6 @@ async function streamRequest(url, options, attached = false) {
     flushRender(stream);
     endAssistantSegment(stream);
     clearToolProgress(stream);
-    if (!stream.failed) {
-      // The turn was answered, so this is no longer the trailing unanswered
-      // message and rewriting it would rewrite history.
-      document.querySelectorAll('.msg-actions').forEach((n) => n.remove());
-    }
     document.querySelectorAll('.message.tool.pending')
       .forEach((n) => { stopElapsed(n); n.classList.remove('pending'); });
     setStreaming(false);
@@ -404,7 +399,6 @@ function handleEvent(event, stream) {
       break;
 
     case 'error':
-      stream.failed = true;
       appendNotice('error', event.message);
       break;
 
@@ -472,9 +466,11 @@ function detachStream() {
 
 async function stopStreaming() {
   if (!App.sessionId) return;
-  // Tell the server to abort so it stops spending tokens, then drop the reader.
+  // Ask the server to stop, then keep reading. Dropping the reader here is
+  // what made in-flight tool rows vanish: the run carried on server-side and
+  // its results only reappeared on a manual refresh.
+  setStatusText('Stopping');
   await fetch(`/api/sessions/${App.sessionId}/cancel`, { method: 'POST' }).catch(() => {});
-  if (App.abortController) App.abortController.abort();
 }
 
 /* ── Message rendering ───────────────────────────────────────────────────── */
@@ -528,21 +524,13 @@ function appendMessage(role, text) {
   return node;
 }
 
-/* Give the just-sent user bubble its database id and hover actions. */
+/* Give the just-sent user bubble its database id, so later events can find it. */
 function attachMessageActions(messageId) {
   if (!messageId) return;
-  const bubbles = App.els.messages.querySelectorAll('.message.user');
+  const bubbles = App.els.messages.querySelectorAll('.message.user:not(.queued)');
   const node = bubbles[bubbles.length - 1];
   if (!node || node.id) return;
   node.id = `msg-${messageId}`;
-
-  const side = el('span', 'msg-side');
-  const actions = el('span', 'msg-actions');
-  actions.append(button('retry', '', () => retryFrom(messageId)));
-  // Move the existing timestamp into the side group instead of adding a second.
-  const time = node.querySelector(':scope > .msg-time') || el('span', 'msg-time', clockTime());
-  side.append(actions, time);
-  node.appendChild(side);
 }
 
 /* A message handed to a running turn. Nothing has been persisted or sent, so
@@ -1072,25 +1060,7 @@ document.addEventListener('keydown', (e) => {
 
 /* ── Retry and edit ──────────────────────────────────────────────────────── */
 
-async function retryFrom(messageId) {
-  if (App.streaming) return;
-  if (!confirm('Re-run from this message? Everything after it will be discarded.')) return;
-  dropMessagesAfter(messageId);
-  await streamRequest(`/api/sessions/${App.sessionId}/messages/${messageId}/retry`, { method: 'POST' });
-}
-
 /* Remove the stale DOM for turns the server is about to delete. */
-function dropMessagesAfter(messageId) {
-  const anchor = document.getElementById(`msg-${messageId}`);
-  if (!anchor) return;
-  let node = anchor.nextElementSibling;
-  while (node) {
-    const next = node.nextElementSibling;
-    node.remove();
-    node = next;
-  }
-}
-
 /* ── Session status + notification sounds ────────────────────────────────── */
 
 const POLL_INTERVAL_MS = 2000;

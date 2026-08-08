@@ -966,20 +966,6 @@ select { cursor: pointer; }
 }
 .msg-actions button:hover { background: var(--bg-hover); color: var(--accent); }
 
-.message-editor {
-  width: 100%;
-  min-height: 70px;
-  margin-top: 4px;
-  padding: 8px 10px;
-  background: var(--bg-inset);
-  border: 1px solid var(--accent-dim);
-  border-radius: 4px;
-  color: var(--text);
-  font-family: inherit;
-  font-size: 13.5px;
-  resize: vertical;
-}
-.message-edit-actions { display: flex; gap: 8px; margin-top: 6px; }
 
 /* ── Diffs ───────────────────────────────────────────────────────────────── */
 

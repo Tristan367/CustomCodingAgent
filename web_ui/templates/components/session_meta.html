@@ -33,6 +33,9 @@
                     aria-haspopup="true">&#8942;</button>
             <div class="dropdown-menu" hidden>
                 <button type="button" onclick="renameSession()">Rename session</button>
+                <button type="button" onclick="openSystemPrompt()">
+                    System prompt{% if session.pending_system_prompt %} (update queued){% endif %}&hellip;
+                </button>
                 {% if auto_approve %}
                 <button type="button" onclick="setAutoApprove(false, true)">Ask before shell commands</button>
                 {% else %}

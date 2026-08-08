@@ -2,7 +2,16 @@
 {% block content %}
 <div id="prompts-page">
     <h2>Prompts</h2>
-    {% if saved %}<div class="success-banner">Saved. New messages will use the updated prompts.</div>{% endif %}
+    {% if saved %}
+    <div class="success-banner">
+        Saved.
+        {%- if moved is not none %}
+{{ moved }} existing session{{ '' if moved == 1 else 's' }} will pick it up at their next compaction.
+        {%- else %}
+        New sessions will use it; existing ones keep the prompt they started with.
+        {%- endif %}
+    </div>
+    {% endif %}
     <p class="hint">
         Changes apply to the next message in any session. Text already in a conversation's
         context is unaffected until it is compacted. Clearing a profile restores its built-in default.
@@ -26,6 +35,19 @@
             <h3>Compaction prompt <span class="hint">used when summarising a long conversation</span></h3>
             <textarea name="compact_prompt" rows="10" class="prompt-textarea" spellcheck="false">{{ compact_prompt }}</textarea>
         </div>
+
+        {# A session's prompt is frozen when it starts, so editing here does not
+           disturb a conversation in progress -- and re-billing one at the
+           cache-miss rate is the reason that matters. #}
+        <label class="checkbox-label">
+            <input type="checkbox" name="apply_existing" value="1">
+            Also apply to existing sessions
+            <span class="hint">
+                Queued until each one next compacts, which is when its prefix is
+                rebuilt anyway, so the switch costs nothing. Sessions with their
+                own prompt are left alone.
+            </span>
+        </label>
 
         <button type="submit" class="btn-primary">Save prompts</button>
     </form>

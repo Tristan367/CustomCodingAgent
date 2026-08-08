@@ -31,7 +31,7 @@ from agent_server.conversation import (
     tool_call_name,
 )
 from agent_server.providers import Provider, get_provider
-from agent_server.system_prompt import build_system_prompt, get_compact_prompt
+from agent_server.system_prompt import get_compact_prompt, session_system_prompt
 from agent_server.tools.base import ToolContext, ToolResult, truncate
 from agent_server.tools.question import format_prompt
 from agent_server import permissions
@@ -382,11 +382,9 @@ async def _loop(
         if event["type"] in ("permission", "question"):
             return
 
-    # Rebuilt every round, but deterministic per session, so the cached prompt
-    # prefix survives. See build_system_prompt for why that matters.
-    system_prompt = await build_system_prompt(
-        session.get("prompt_profile") or "default", session["project_dir"], session_id
-    )
+    # Frozen when the session first ran, so the cached prefix survives anything
+    # that changes underneath. See session_system_prompt for why that matters.
+    system_prompt = await session_system_prompt(session)
 
     for _round in range(MAX_TOOL_ROUNDS):
         if abort.is_set():

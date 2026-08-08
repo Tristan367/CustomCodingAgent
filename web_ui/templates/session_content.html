@@ -104,6 +104,27 @@
     </div>
 </div>
 
+<div id="prompt-modal" class="modal" hidden>
+    <div class="modal-content wide">
+        <h3>System prompt for this session</h3>
+        <p class="hint">
+            Frozen when the session started, so editing the shared prompts page does
+            not disturb it. Saving a change here costs one cache miss as the model
+            re-reads the conversation, then the new text caches in its turn.
+        </p>
+        <div id="prompt-pending" class="hint" hidden>
+            A newer shared prompt is queued and will be adopted at the next
+            compaction. Saving here instead keeps this session on its own prompt.
+        </div>
+        <textarea id="session-prompt" rows="18" spellcheck="false"></textarea>
+        <div class="modal-actions">
+            <button type="button" class="btn-primary" onclick="saveSystemPrompt()">Save for this session</button>
+            <button type="button" class="btn-secondary" onclick="resetSystemPrompt()">Reset to the shared prompt</button>
+            <button type="button" class="btn-ghost" onclick="closeModal('prompt-modal')">Cancel</button>
+        </div>
+    </div>
+</div>
+
 <div id="threshold-modal" class="modal" hidden>
     <div class="modal-content">
         <h3>Compaction threshold</h3>

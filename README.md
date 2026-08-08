@@ -86,6 +86,26 @@ Because nothing is persisted until that moment, a pending message can be taken b
 undo removes it and returns the text to the composer, and the model never learns it
 existed.
 
+### Prompt caching
+
+DeepSeek prices a cached prefix at about 1/120th of an uncached one and matches
+on prefix, so one changed character at the front re-bills the whole
+conversation. Everything below exists for that reason:
+
+- A session's system prompt is rendered once and stored. It used to be rebuilt
+  every request, which meant the date rolling over at midnight, or a restart
+  picking up files the agent had created, silently changed it.
+- Editing a shared prompt does not touch running sessions. It is queued and
+  adopted at each session's next compaction, which is when the prefix is being
+  rewritten anyway, so the switch is free. Sessions with their own prompt are
+  never touched.
+- The environment block is a snapshot, not a live directory listing.
+- `reasoning_content` is included based on an immutable property of the row
+  (whether it has tool calls), not on anything that could vary between renders.
+
+A healthy session sits at 90%+ cached. `/api/usage` reports the rate; if it
+drops, something is varying in the prefix.
+
 ### The provider contract
 
 DeepSeek's thinking mode has three rules that produce hard 400s if you get them

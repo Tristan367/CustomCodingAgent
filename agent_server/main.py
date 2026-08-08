@@ -38,6 +38,7 @@ from agent_server.system_prompt import (
     BUILTIN_PROFILES,
     COMPACT_PROMPT_DEFAULT,
     PROFILE_NAMES,
+    build_system_prompt,
 )
 from agent_server import permissions
 from agent_server.tools.registry import TOOLS, get_tool
@@ -470,6 +471,8 @@ async def prompts_page(request: Request):
 @app.post("/_save_prompts")
 async def save_prompts(request: Request):
     form = await request.form()
+    apply_existing = str(form.get("apply_existing", "")) in ("1", "true", "on")
+
     for profile in PROFILE_NAMES:
         key = f"profile_{profile}"
         if key in form:
@@ -479,12 +482,35 @@ async def save_prompts(request: Request):
     await db.set_setting("user_prefs", str(form.get("user_prefs", "")).strip())
     compact = str(form.get("compact_prompt", "")).strip()
     await db.set_setting("compact_prompt", "" if compact == COMPACT_PROMPT_DEFAULT.strip() else compact)
+
+    moved = 0
+    if apply_existing:
+        for row in await db.list_sessions():
+            if row.get("prompt_custom"):
+                continue  # has its own prompt; not ours to overwrite
+            fresh = await build_system_prompt(
+                row.get("prompt_profile") or "default", row["project_dir"], row["id"]
+            )
+            if fresh == row.get("system_prompt"):
+                continue
+            if row.get("system_prompt"):
+                # Queue it. Swapping now would invalidate the cached prefix and
+                # re-bill the whole conversation; at the next compaction the
+                # prefix is being rewritten regardless.
+                await db.update_session(row["id"], pending_system_prompt=fresh)
+            else:
+                # Never ran, so nothing is cached and there is nothing to lose.
+                await db.update_session(row["id"], system_prompt=fresh)
+            moved += 1
+
     return templates.TemplateResponse(
-        request=request, name="prompts.html", context=await _prompts_context(saved=True)
+        request=request,
+        name="prompts.html",
+        context=await _prompts_context(saved=True, moved=moved if apply_existing else None),
     )
 
 
-async def _prompts_context(saved: bool = False) -> dict:
+async def _prompts_context(saved: bool = False, moved: int | None = None) -> dict:
     profiles = {
         name: (await db.get_setting(f"profile_{name}", "") or BUILTIN_PROFILES[name])
         for name in PROFILE_NAMES

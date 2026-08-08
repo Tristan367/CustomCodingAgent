@@ -61,6 +61,46 @@ async def update_session(session_id: str, body: SessionUpdate):
     return await db.update_session(session_id, **updates)
 
 
+@router.get("/{session_id}/system-prompt")
+async def get_system_prompt(session_id: str):
+    """The exact prompt this session is running with."""
+    session = await db.get_session(session_id)
+    if session is None:
+        raise HTTPException(404, "Session not found")
+    from agent_server.system_prompt import session_system_prompt
+
+    return {
+        "prompt": await session_system_prompt(session),
+        "pending": bool(session.get("pending_system_prompt")),
+        "custom": bool(session.get("prompt_custom")),
+    }
+
+
+@router.post("/{session_id}/system-prompt")
+async def set_system_prompt(session_id: str, payload: dict):
+    """Override the prompt for this session only.
+
+    Changing it invalidates the cached prefix once, then the new text caches in
+    its turn, so this is cheap to do between turns and expensive to do often.
+    """
+    session = await db.get_session(session_id)
+    if session is None:
+        raise HTTPException(404, "Session not found")
+    text = (payload.get("prompt") or "").strip()
+    custom = 1
+    if not text:
+        # Empty restores whatever the shared prompt renders to now, and gives up
+        # the exemption from "apply to existing".
+        from agent_server.system_prompt import build_system_prompt
+
+        text = await build_system_prompt(
+            session.get("prompt_profile") or "default", session["project_dir"], session_id
+        )
+        custom = 0
+    await db.update_session(session_id, system_prompt=text, prompt_custom=custom)
+    return {"ok": True, "prompt": text, "custom": bool(custom)}
+
+
 @router.delete("/{session_id}")
 async def delete_session(session_id: str):
     if await db.get_session(session_id) is None:

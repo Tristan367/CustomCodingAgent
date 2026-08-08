@@ -93,6 +93,26 @@ BUILTIN_PROFILES: dict[str, str] = {
 PROFILE_NAMES = list(BUILTIN_PROFILES)
 
 
+async def session_system_prompt(session: dict) -> str:
+    """The system prompt for a session, frozen the first time it is needed.
+
+    Rendering it fresh each request meant anything that changed underneath --
+    editing a shared prompt, the date rolling over at midnight, a restart
+    picking up files the agent had since created -- silently changed the prefix
+    and re-billed the whole conversation at the miss rate.
+    """
+    stored = session.get("system_prompt")
+    if stored:
+        return stored
+    prompt = await build_system_prompt(
+        session.get("prompt_profile") or "default",
+        session["project_dir"],
+        session["id"],
+    )
+    await db.update_session(session["id"], system_prompt=prompt)
+    return prompt
+
+
 async def build_system_prompt(profile: str, project_dir: str, session_id: str = "") -> str:
     """Assemble the prompt: profile body + user preferences + environment.
 

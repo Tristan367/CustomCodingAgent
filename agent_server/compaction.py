@@ -204,6 +204,14 @@ async def compact_session_events(
     )
     await db.mark_messages_compacted(session_id, [r["id"] for r in to_compact])
 
+    # Compaction rewrites the prefix anyway, so this is the cheap moment to
+    # adopt a shared prompt that changed while the conversation was running.
+    pending = session.get("pending_system_prompt")
+    if pending:
+        await db.update_session(
+            session_id, system_prompt=pending, pending_system_prompt=None
+        )
+
     yield {
         "type": "compact_done",
         "result": {

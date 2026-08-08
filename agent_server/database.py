@@ -85,6 +85,21 @@ MIGRATIONS: list[tuple[str, str, str]] = [
     ("sessions", "bash_auto_approve", "INTEGER DEFAULT 0"),
     ("sessions", "compact_threshold", "INTEGER"),
     ("sessions", "auto_compact", "INTEGER DEFAULT 0"),
+    # The rendered system prompt, frozen per session. Kept here rather than
+    # rebuilt per request so that editing a shared prompt, restarting the
+    # server, or the date rolling over cannot change a live conversation's
+    # prefix and re-bill it at the cache-miss rate.
+    ("sessions", "system_prompt", "TEXT"),
+    # Set when the prompt was edited for this session specifically, so a later
+    # "apply to existing" can leave it alone. Comparing text against what the
+    # shared prompt renders to cannot tell a customised session from one that
+    # simply predates an earlier edit.
+    ("sessions", "prompt_custom", "INTEGER DEFAULT 0"),
+    # A new shared prompt waiting to be adopted. Applied at the next compaction
+    # rather than immediately: compaction rewrites the conversation anyway, so
+    # the prefix is already a miss at that point and the swap is close to free.
+    # Applying it mid-conversation would re-bill the entire context.
+    ("sessions", "pending_system_prompt", "TEXT"),
     ("messages", "reasoning_content", "TEXT"),
     ("messages", "tool_name", "TEXT"),
     ("messages", "is_error", "INTEGER DEFAULT 0"),
@@ -157,7 +172,7 @@ async def _execute(sql: str, params: tuple = ()) -> int:
 SESSION_FIELDS = {
     "name", "project_dir", "provider", "model", "thinking_effort",
     "prompt_profile", "bash_auto_approve", "is_archived", "compact_threshold",
-    "auto_compact",
+    "auto_compact", "system_prompt", "prompt_custom", "pending_system_prompt",
 }
 
 

@@ -1118,6 +1118,37 @@ async function loadCompactPrompt(known) {
   if (auto && meta) auto.checked = meta.dataset.autoCompact === '1';
 }
 
+async function openSystemPrompt() {
+  document.querySelectorAll('.dropdown-menu').forEach((m) => { m.hidden = true; });
+  const box = document.getElementById('session-prompt');
+  box.value = 'Loading...';
+  document.getElementById('prompt-modal').hidden = false;
+  const data = await fetch(`/api/sessions/${App.sessionId}/system-prompt`)
+    .then((r) => r.json()).catch(() => null);
+  box.value = data ? data.prompt : '';
+  box.dataset.original = box.value;
+  const pending = document.getElementById('prompt-pending');
+  if (pending) pending.hidden = !(data && data.pending);
+}
+
+async function saveSystemPrompt(text) {
+  const box = document.getElementById('session-prompt');
+  const prompt = text !== undefined ? text : box.value;
+  const resp = await fetch(`/api/sessions/${App.sessionId}/system-prompt`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ prompt }),
+  }).catch(() => null);
+  closeModal('prompt-modal');
+  if (!resp || !resp.ok) { appendNotice('error', 'Could not save the prompt.'); return; }
+  appendNotice('info', 'System prompt updated for this session.');
+}
+
+/* Empty means "whatever the shared prompt renders to now". */
+function resetSystemPrompt() {
+  saveSystemPrompt('');
+}
+
 function openThresholdModal() {
   closeModal('compact-modal');
   document.querySelectorAll('.dropdown-menu').forEach((m) => { m.hidden = true; });

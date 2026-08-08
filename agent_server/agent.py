@@ -143,6 +143,27 @@ class _Run:
 
 _runs: dict[str, _Run] = {}
 
+# Messages typed while a turn is running. Injected at the next turn boundary so
+# the model sees them without the run being restarted or interrupted.
+_queued: dict[str, list[str]] = {}
+
+
+def queue_message(session_id: str, text: str) -> bool:
+    """Hand a message to a run already in progress. False if nothing is running."""
+    if active_run(session_id) is None:
+        return False
+    _queued.setdefault(session_id, []).append(text)
+    return True
+
+
+async def _flush_queued(session_id: str) -> list[dict]:
+    """Persist anything typed mid-run, so the next request includes it."""
+    pending = _queued.pop(session_id, [])
+    rows = []
+    for text in pending:
+        rows.append(await db.add_message(session_id, "user", text))
+    return rows
+
 
 def _publish(run: _Run, event: dict):
     if event["type"] == "tool_start":
@@ -311,6 +332,12 @@ async def _loop(
         if abort.is_set():
             yield {"type": "aborted"}
             return
+
+        # A turn boundary is the only safe place to add to the conversation:
+        # inserting between an assistant tool_calls message and its results
+        # would break the request.
+        for row in await _flush_queued(session_id):
+            yield {"type": "queued_message", "message_id": row["id"], "content": row["content"]}
 
         # Offer compaction at a clean turn boundary, before spending another
         # full-context request. Snoozed for the rest of the run once the user

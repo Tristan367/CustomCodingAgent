@@ -1266,3 +1266,6 @@ select { cursor: pointer; }
   padding: 6px 9px;
   background: var(--bg-raised);
 }
+
+/* A message handed to a run in progress, not yet picked up. */
+.message.user.queued .content-text { opacity: 0.62; border-left-style: dashed; }

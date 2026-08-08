@@ -1,6 +1,5 @@
 """Chat, tool resolution, compaction, transcription, and image endpoints."""
 
-import asyncio
 import uuid
 from pathlib import Path
 from typing import AsyncIterator
@@ -153,6 +152,18 @@ async def continue_run(session_id: str, request: Request):
     """
     await _require_session(session_id)
     return _stream(session_id, request)
+
+
+@router.post("/sessions/{session_id}/queue")
+async def queue(session_id: str, payload: dict):
+    """Add a message to a turn that is already running."""
+    await _require_session(session_id)
+    text = (payload.get("message") or "").strip()
+    if not text:
+        return JSONResponse({"ok": False, "reason": "Empty message"}, status_code=400)
+    if not agent.queue_message(session_id, text):
+        return JSONResponse({"ok": False, "reason": "Nothing is running"}, status_code=409)
+    return {"ok": True}
 
 
 @router.get("/sessions/{session_id}/attach")

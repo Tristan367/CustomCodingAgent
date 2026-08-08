@@ -111,7 +111,7 @@ function renderStoredMessages() {
 
 async function onSubmit(event) {
   event.preventDefault();
-  if (!App.sessionId || App.streaming) return;
+  if (!App.sessionId) return;
 
   // Enter while dictating: stop, transcribe, then send what was said.
   if (Dictation.recording) {
@@ -122,6 +122,31 @@ async function onSubmit(event) {
   const message = App.els.textarea.value.trim();
   const attachments = pendingImages.slice();
   if (!message && !attachments.length) return;
+
+  // Typing while it works: hand the message to the running turn instead of
+  // starting a second one. The agent picks it up at the next turn boundary,
+  // so it keeps going and sees the message on its next request.
+  if (App.streaming) {
+    if (attachments.length) {
+      appendNotice('error', 'Finish the current run before attaching an image.');
+      return;
+    }
+    const resp = await fetch(`/api/sessions/${App.sessionId}/queue`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ message }),
+    }).catch(() => null);
+    if (!resp || !resp.ok) {
+      appendNotice('error', 'Could not deliver that message; the run may have just finished.');
+      return;
+    }
+    const node = appendUserMessage(message, []);
+    node.classList.add('queued');
+    App.els.textarea.value = '';
+    Persist.clearDraft();
+    autosize(App.els.textarea);
+    return;
+  }
 
   appendUserMessage(message, attachments);
   App.els.textarea.value = '';
@@ -335,6 +360,15 @@ function handleEvent(event, stream) {
       scheduleRender(stream);
       break;
 
+    case 'queued_message': {
+      const queued = App.els.messages.querySelector('.message.user.queued');
+      if (queued) {
+        queued.classList.remove('queued');
+        queued.id = `msg-${event.message_id}`;
+      }
+      break;
+    }
+
     case 'attached':
       for (const call of event.inflight || []) appendToolCall(call);
       break;
@@ -418,8 +452,14 @@ function flushRender(stream) {
 
 function setStreaming(active) {
   App.streaming = active;
-  if (App.els.send) App.els.send.hidden = active;
+  // The send button stays available: submitting mid-run queues the message
+  // rather than starting a second turn.
   if (App.els.stop) App.els.stop.hidden = !active;
+  if (App.els.textarea) {
+    App.els.textarea.placeholder = active
+      ? 'Message the agent \u2014 sent at the next step'
+      : 'Message the agent';
+  }
 }
 
 /* Stop listening without stopping the run. */

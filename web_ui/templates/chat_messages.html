@@ -95,8 +95,6 @@
             {# Only the trailing unanswered turn: anything earlier has a reply
                the user has already read, and rewriting it would rewrite history. #}
             <span class="msg-actions">
-                <button type="button" title="Edit this message and send it again"
-                        onclick="editMessage({{ m.id }})">edit</button>
                 <button type="button" title="Send this message again"
                         onclick="retryFrom({{ m.id }})">retry</button>
             </span>

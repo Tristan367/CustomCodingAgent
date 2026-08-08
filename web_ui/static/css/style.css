@@ -1269,3 +1269,4 @@ select { cursor: pointer; }
 
 /* A message handed to a run in progress, not yet picked up. */
 .message.user.queued .content-text { opacity: 0.62; border-left-style: dashed; }
+.message.user.queued .msg-actions button { color: var(--warn); }

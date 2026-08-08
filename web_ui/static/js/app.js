@@ -140,8 +140,8 @@ async function onSubmit(event) {
       appendNotice('error', 'Could not deliver that message; the run may have just finished.');
       return;
     }
-    const node = appendUserMessage(message, []);
-    node.classList.add('queued');
+    const { queue_id: queueId } = await resp.json();
+    addQueuedBubble(message, queueId);
     App.els.textarea.value = '';
     Persist.clearDraft();
     autosize(App.els.textarea);
@@ -361,11 +361,11 @@ function handleEvent(event, stream) {
       break;
 
     case 'queued_message': {
-      const queued = App.els.messages.querySelector('.message.user.queued');
-      if (queued) {
-        queued.classList.remove('queued');
-        queued.id = `msg-${event.message_id}`;
-      }
+      // Several pending messages are delivered as one, so replace all of them.
+      App.els.messages.querySelectorAll('.message.user.queued')
+        .forEach((n) => n.remove());
+      const node = appendUserMessage(event.content, []);
+      node.id = `msg-${event.message_id}`;
       break;
     }
 
@@ -538,14 +538,49 @@ function attachMessageActions(messageId) {
 
   const side = el('span', 'msg-side');
   const actions = el('span', 'msg-actions');
-  actions.append(
-    button('edit', '', () => editMessage(messageId)),
-    button('retry', '', () => retryFrom(messageId)),
-  );
+  actions.append(button('retry', '', () => retryFrom(messageId)));
   // Move the existing timestamp into the side group instead of adding a second.
   const time = node.querySelector(':scope > .msg-time') || el('span', 'msg-time', clockTime());
   side.append(actions, time);
   node.appendChild(side);
+}
+
+/* A message handed to a running turn. Nothing has been persisted or sent, so
+   it can still be taken back: the model never learns it existed. */
+function addQueuedBubble(text, queueId) {
+  const node = appendUserMessage(text, []);
+  node.classList.add('queued');
+  node.dataset.queueId = queueId;
+  const side = el('span', 'msg-side');
+  const actions = el('span', 'msg-actions');
+  actions.appendChild(button('undo', '', () => undoQueued(queueId)));
+  side.append(actions, node.querySelector(':scope > .msg-time') || el('span', 'msg-time', clockTime()));
+  node.appendChild(side);
+  return node;
+}
+
+async function undoQueued(queueId) {
+  const node = App.els.messages.querySelector(
+    `.message.user.queued[data-queue-id="${cssEscape(queueId)}"]`);
+  const resp = await fetch(`/api/sessions/${App.sessionId}/queue/${queueId}`, {
+    method: 'DELETE',
+  }).catch(() => null);
+  if (!resp || !resp.ok) {
+    // It reached the model between rendering the button and clicking it.
+    if (node) node.classList.remove('queued');
+    appendNotice('error', 'Too late to take that back; it has already been sent.');
+    return;
+  }
+  const { message } = await resp.json();
+  if (node) node.remove();
+  // Prepend rather than replace: the box may already have something in it.
+  const box = App.els.textarea;
+  const existing = box.value;
+  box.value = existing.trim() ? `${message}\n\n${existing}` : message;
+  autosize(box);
+  box.focus();
+  box.setSelectionRange(message.length, message.length);
+  Persist.saveDraft();
 }
 
 /* The user's own bubble, with thumbnails for anything attached. */
@@ -1042,51 +1077,6 @@ async function retryFrom(messageId) {
   if (!confirm('Re-run from this message? Everything after it will be discarded.')) return;
   dropMessagesAfter(messageId);
   await streamRequest(`/api/sessions/${App.sessionId}/messages/${messageId}/retry`, { method: 'POST' });
-}
-
-function editMessage(messageId) {
-  if (App.streaming) return;
-  const node = document.getElementById(`msg-${messageId}`);
-  const body = node?.querySelector('.content-text');
-  if (!body || node.dataset.editing) return;
-  node.dataset.editing = '1';
-
-  const original = body.dataset.raw ?? body.textContent;
-  const editor = document.createElement('textarea');
-  editor.className = 'message-editor';
-  editor.value = original;
-  const actions = el('div', 'message-edit-actions');
-  actions.append(
-    button('Save & re-run', 'btn-primary', save),
-    button('Cancel', 'btn-secondary', cancel),
-  );
-
-  body.hidden = true;
-  body.after(editor, actions);
-  editor.focus();
-  editor.style.height = `${Math.min(editor.scrollHeight + 4, 300)}px`;
-
-  function cleanup() {
-    editor.remove();
-    actions.remove();
-    body.hidden = false;
-    delete node.dataset.editing;
-  }
-  function cancel() { cleanup(); }
-  async function save() {
-    const content = editor.value.trim();
-    if (!content) return;
-    cleanup();
-    body.textContent = content;
-    body.dataset.raw = content;
-    body.innerHTML = md.render(content);
-    dropMessagesAfter(messageId);
-    await streamRequest(`/api/sessions/${App.sessionId}/messages/${messageId}/edit`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ content }),
-    });
-  }
 }
 
 /* Remove the stale DOM for turns the server is about to delete. */

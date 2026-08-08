@@ -94,13 +94,14 @@ def test_inflight_tracks_calls_that_have_not_finished():
 
 
 def test_queueing_requires_a_live_run():
-    assert agent.queue_message("nothing-running", "hi") is False
+    assert agent.queue_message("nothing-running", "hi") is None
     handle = agent._Run()
     agent._runs["s"] = handle
-    assert agent.queue_message("s", "hi") is True
-    assert agent._queued["s"] == ["hi"]
+    queue_id = agent.queue_message("s", "hi")
+    assert queue_id
+    assert [e["text"] for e in agent._queued["s"]] == ["hi"]
     handle.done.set()
-    assert agent.queue_message("s", "later") is False
+    assert agent.queue_message("s", "later") is None
 
 
 def test_attaching_to_a_finished_run_terminates_immediately():
@@ -112,3 +113,73 @@ def test_attaching_to_a_finished_run_terminates_immediately():
 
     events = asyncio.run(go())
     assert events[-1]["type"] == "stream_end"
+
+
+# ── Taking back a queued message ────────────────────────────────────────────
+
+def test_several_queued_messages_are_delivered_as_one():
+    async def go():
+        handle = agent._Run()
+        agent._runs["s"] = handle
+        for text in ("first", "second", "third"):
+            agent.queue_message("s", text)
+        return await agent._flush_queued("s")
+
+    import agent_server.database as db
+    sent = {}
+
+    async def fake_add(session_id, role, content="", **kw):
+        sent["content"] = content
+        return {"id": 1, "content": content}
+
+    real, db.add_message = db.add_message, fake_add
+    try:
+        rows = asyncio.run(go())
+    finally:
+        db.add_message = real
+    assert len(rows) == 1, "one message, so it costs one turn"
+    assert sent["content"] == "first\n\nsecond\n\nthird"
+
+
+def test_undo_removes_only_the_named_message():
+    handle = agent._Run()
+    agent._runs["s"] = handle
+    first = agent.queue_message("s", "alpha")
+    second = agent.queue_message("s", "bravo")
+    assert agent.unqueue_message("s", first) == "alpha"
+    assert [e["text"] for e in agent._queued["s"]] == ["bravo"]
+    assert agent.unqueue_message("s", second) == "bravo"
+
+
+def test_undoing_twice_is_refused():
+    handle = agent._Run()
+    agent._runs["s"] = handle
+    queue_id = agent.queue_message("s", "alpha")
+    assert agent.unqueue_message("s", queue_id) == "alpha"
+    assert agent.unqueue_message("s", queue_id) is None
+
+
+def test_undone_message_is_never_flushed():
+    async def go():
+        handle = agent._Run()
+        agent._runs["s"] = handle
+        keep = agent.queue_message("s", "keep me")
+        drop = agent.queue_message("s", "drop me")
+        agent.unqueue_message("s", drop)
+        assert keep
+        return await agent._flush_queued("s")
+
+    import agent_server.database as db
+    sent = {}
+
+    async def fake_add(session_id, role, content="", **kw):
+        sent["content"] = content
+        return {"id": 1, "content": content}
+
+    real, db.add_message = db.add_message, fake_add
+    try:
+        asyncio.run(go())
+    finally:
+        db.add_message = real
+    assert sent["content"] == "keep me"
+    assert "drop me" not in sent["content"]

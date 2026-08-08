@@ -13,7 +13,7 @@ from agent_server import permissions
 from agent_server import stt as stt_service
 from agent_server.compaction import compact_session, should_offer_compaction
 from agent_server.config import MIN_COMPACT_THRESHOLD, MODELS_BY_ID, UPLOAD_DIR
-from agent_server.models import ChatRequest, EditMessageRequest, ResolveRequest
+from agent_server.models import ChatRequest, ResolveRequest
 from agent_server import vision as vision_engine
 
 router = APIRouter(prefix="/api", tags=["chat"])
@@ -161,9 +161,22 @@ async def queue(session_id: str, payload: dict):
     text = (payload.get("message") or "").strip()
     if not text:
         return JSONResponse({"ok": False, "reason": "Empty message"}, status_code=400)
-    if not agent.queue_message(session_id, text):
+    queue_id = agent.queue_message(session_id, text)
+    if queue_id is None:
         return JSONResponse({"ok": False, "reason": "Nothing is running"}, status_code=409)
-    return {"ok": True}
+    return {"ok": True, "queue_id": queue_id}
+
+
+@router.delete("/sessions/{session_id}/queue/{queue_id}")
+async def unqueue(session_id: str, queue_id: str):
+    """Take back a message that has not been handed to the model yet."""
+    await _require_session(session_id)
+    text = agent.unqueue_message(session_id, queue_id)
+    if text is None:
+        return JSONResponse(
+            {"ok": False, "reason": "Already sent"}, status_code=409
+        )
+    return {"ok": True, "message": text}
 
 
 @router.get("/sessions/{session_id}/attach")
@@ -287,7 +300,7 @@ async def set_compact_threshold(
     return JSONResponse({"ok": True, "threshold": value})
 
 
-# ── Retry and edit ──────────────────────────────────────────────────────────
+# ── Retry ──────────────────────────────────────────────────────────
 
 @router.post("/sessions/{session_id}/messages/{message_id}/retry")
 async def retry_message(session_id: str, message_id: int, request: Request):
@@ -300,29 +313,6 @@ async def retry_message(session_id: str, message_id: int, request: Request):
     await db.delete_messages_after(session_id, message_id)
     return _stream(session_id, request)
 
-
-@router.post("/sessions/{session_id}/messages/{message_id}/edit")
-async def edit_message(
-    session_id: str,
-    message_id: int,
-    request: Request,
-    body: EditMessageRequest,
-):
-    """Rewrite a user message and re-run from there."""
-    await _require_session(session_id)
-    rows = await db.get_messages(session_id, include_compacted=True)
-    target = next((r for r in rows if r["id"] == message_id), None)
-    if target is None or target["role"] != "user":
-        raise HTTPException(400, "Can only edit a user message")
-    content = body.content.strip()
-    if not content:
-        raise HTTPException(400, "Message cannot be empty")
-    await db.update_message(message_id, content)
-    await db.delete_messages_after(session_id, message_id)
-    return _stream(session_id, request)
-
-
-# ── Speech to text ──────────────────────────────────────────────────────────
 
 @router.get("/stt/status")
 async def stt_status():

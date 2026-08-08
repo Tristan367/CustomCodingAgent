@@ -15,6 +15,7 @@ Responsibilities, in order of how badly they used to break:
 import asyncio
 import json
 import time
+import uuid
 from typing import AsyncIterator
 
 from agent_server import database as db
@@ -143,26 +144,38 @@ class _Run:
 
 _runs: dict[str, _Run] = {}
 
-# Messages typed while a turn is running. Injected at the next turn boundary so
-# the model sees them without the run being restarted or interrupted.
-_queued: dict[str, list[str]] = {}
+# Messages typed while a turn is running. Nothing here has been persisted or
+# sent anywhere, which is what makes taking one back possible: until the flush
+# below, the model has no idea it was ever typed.
+_queued: dict[str, list[dict]] = {}
 
 
-def queue_message(session_id: str, text: str) -> bool:
-    """Hand a message to a run already in progress. False if nothing is running."""
+def queue_message(session_id: str, text: str) -> str | None:
+    """Hand a message to a run in progress. Returns its id, or None if idle."""
     if active_run(session_id) is None:
-        return False
-    _queued.setdefault(session_id, []).append(text)
-    return True
+        return None
+    entry = {"id": uuid.uuid4().hex[:8], "text": text}
+    _queued.setdefault(session_id, []).append(entry)
+    return entry["id"]
+
+
+def unqueue_message(session_id: str, queue_id: str) -> str | None:
+    """Take a queued message back. Returns its text, or None if already sent."""
+    entries = _queued.get(session_id) or []
+    for index, entry in enumerate(entries):
+        if entry["id"] == queue_id:
+            entries.pop(index)
+            return entry["text"]
+    return None
 
 
 async def _flush_queued(session_id: str) -> list[dict]:
-    """Persist anything typed mid-run, so the next request includes it."""
-    pending = _queued.pop(session_id, [])
-    rows = []
-    for text in pending:
-        rows.append(await db.add_message(session_id, "user", text))
-    return rows
+    """Persist anything typed mid-run as one message, so it costs one turn."""
+    entries = _queued.pop(session_id, [])
+    if not entries:
+        return []
+    combined = "\n\n".join(entry["text"] for entry in entries)
+    return [await db.add_message(session_id, "user", combined)]
 
 
 def _publish(run: _Run, event: dict):

@@ -42,10 +42,6 @@ class ResolveRequest(BaseModel):
     grant_path: str = ""
 
 
-class EditMessageRequest(BaseModel):
-    content: str
-
-
 class MessageResponse(BaseModel):
     id: int
     session_id: str

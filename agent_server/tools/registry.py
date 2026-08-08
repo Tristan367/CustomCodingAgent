@@ -224,15 +224,6 @@ register(Tool(
     parameters={
         "type": "object",
         "properties": {
-                "detail": {
-                    "type": "string",
-                    "enum": ["brief", "full"],
-                    "description": (
-                        "brief (default) gets a direct answer in a few seconds. "
-                        "full removes the length limit for a thorough description, "
-                        "and takes noticeably longer."
-                    ),
-                },
             "prompt": {
                 "type": "string",
                 "description": "What to find out, e.g. 'what error is shown?' or "
@@ -268,15 +259,6 @@ register(Tool(
     parameters={
         "type": "object",
         "properties": {
-                "detail": {
-                    "type": "string",
-                    "enum": ["brief", "full"],
-                    "description": (
-                        "brief (default) gets a direct answer in a few seconds. "
-                        "full removes the length limit for a thorough description, "
-                        "and takes noticeably longer."
-                    ),
-                },
             "url": {"type": "string", "description": "Page to capture (http, https, or file://)"},
             "selector": {"type": "string", "description": "CSS selector to crop to"},
             "full_page": {"type": "boolean", "description": "Whole scrollable page"},

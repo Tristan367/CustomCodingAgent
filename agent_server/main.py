@@ -19,7 +19,12 @@ from agent_server.config import (
     REASONING_EFFORTS,
     stt_available,
 )
-from agent_server.conversation import normalize_tool_calls
+from agent_server.conversation import (
+    normalize_tool_calls,
+    parse_arguments,
+    pending_tool_calls,
+    tool_call_name,
+)
 from agent_server.database import close as close_db
 from agent_server.database import init_db
 from agent_server.providers import list_providers
@@ -30,7 +35,7 @@ from agent_server.system_prompt import (
     COMPACT_PROMPT_DEFAULT,
     PROFILE_NAMES,
 )
-from agent_server.tools.registry import TOOLS
+from agent_server.tools.registry import TOOLS, get_tool, requires_permission
 from agent_server.tools.vision import rig_available
 
 BASE_DIR = Path(__file__).resolve().parent.parent
@@ -105,9 +110,10 @@ templates.env.filters["toolcalls"] = normalize_tool_calls
 
 async def _session_context(session: dict) -> dict:
     usage = await db.get_session_usage(session["id"])
+    messages = await db.get_messages(session["id"])
     return {
         "session": session,
-        "messages": await db.get_messages(session["id"]),
+        "messages": messages,
         "compactions": await db.get_compactions(session["id"]),
         "models": MODELS,
         "profiles": PROFILE_NAMES,
@@ -117,7 +123,38 @@ async def _session_context(session: dict) -> dict:
         "auto_approve": bool(session.get("bash_auto_approve"))
         or agent.runtime_auto_approve(session["id"]),
         "stt_enabled": stt_available(),
+        "pending": _pending_prompt(session, messages),
     }
+
+
+def _pending_prompt(session: dict, messages: list[dict]) -> dict | None:
+    """Describe a tool call still waiting on the user, so a page reload can
+    re-offer the approval or question instead of stranding the session."""
+    _, pending = pending_tool_calls(messages)
+    if not pending:
+        return None
+    call = pending[0]
+    name = tool_call_name(call)
+    args = parse_arguments(call)
+    tool = get_tool(name)
+    if tool is not None and tool.pause == "question":
+        return {
+            "type": "question",
+            "tool_call_id": call["id"],
+            "question": args.get("question", ""),
+            "options": args.get("options") or [],
+        }
+    auto = bool(session.get("bash_auto_approve")) or agent.runtime_auto_approve(session["id"])
+    if not auto and requires_permission(name, args):
+        return {
+            "type": "permission",
+            "tool_call_id": call["id"],
+            "name": name,
+            "args": args,
+            "command": args.get("command", ""),
+            "workdir": args.get("workdir") or session["project_dir"],
+        }
+    return None
 
 
 async def _home_context(error: str = "") -> dict:

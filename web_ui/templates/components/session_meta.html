@@ -1,0 +1,78 @@
+{% set ctx_pct = ((usage.context / 1000000) * 100) | round(1) if usage.context else 0 %}
+<div id="session-meta">
+    <div class="session-info">
+        <span class="session-title">{{ session.name }}</span>
+        <code class="session-dir" title="{{ session.project_dir }}">{{ session.project_dir }}</code>
+        <span class="chip">{{ session.model }}</span>
+        <span class="chip">{{ session.prompt_profile }}</span>
+        <span class="chip">thinking: {{ session.thinking_effort or 'high' }}</span>
+        <span class="chip {% if auto_approve %}chip-warn{% endif %}" data-auto-approve="{{ 1 if auto_approve else 0 }}">
+            {% if auto_approve %}Shell: auto-approved{% else %}Shell: ask first{% endif %}
+        </span>
+
+        <span class="spacer"></span>
+
+        <span class="chip {% if should_compact %}chip-warn{% endif %}"
+              title="Context in use / 1M window &middot; estimated spend this session">
+            {{ '{:,}'.format(usage.context) }} tok
+            {%- if usage.cost %} &middot; ${{ '%.4f' % usage.cost }}{% endif %}
+        </span>
+
+        <div class="dropdown">
+            <button type="button" class="icon-btn" onclick="toggleMenu(this)" title="Session options"
+                    aria-haspopup="true">&#8942;</button>
+            <div class="dropdown-menu" hidden>
+                <button type="button" onclick="renameSession()">Rename session</button>
+                {% if auto_approve %}
+                <button type="button" onclick="setAutoApprove(false, true)">Ask before shell commands</button>
+                {% else %}
+                <button type="button" onclick="setAutoApprove(true, false)">Auto-approve shell (this run)</button>
+                <button type="button" onclick="setAutoApprove(true, true)">Auto-approve shell (always)</button>
+                {% endif %}
+                <hr>
+                <button type="button" onclick="compactSession()">Compact conversation</button>
+                <button type="button" onclick="navigator.clipboard.writeText(this.dataset.dir)"
+                        data-dir="{{ session.project_dir }}">Copy project path</button>
+                <hr>
+                <details class="menu-settings">
+                    <summary>Model settings</summary>
+                    <form onsubmit="event.preventDefault();applySessionSettings(this)">
+                        <label>Model
+                            <select name="model">
+                                {% for m in models %}
+                                <option value="{{ m.id }}" {% if session.model == m.id %}selected{% endif %}>{{ m.name }}</option>
+                                {% endfor %}
+                            </select>
+                        </label>
+                        <label>Thinking effort
+                            <select name="thinking_effort">
+                                <option value="">high (default)</option>
+                                {% for e in efforts %}
+                                <option value="{{ e }}" {% if session.thinking_effort == e %}selected{% endif %}>{{ e }}</option>
+                                {% endfor %}
+                            </select>
+                        </label>
+                        <label>Prompt profile
+                            <select name="prompt_profile">
+                                {% for p in profiles %}
+                                <option value="{{ p }}" {% if session.prompt_profile == p %}selected{% endif %}>{{ p }}</option>
+                                {% endfor %}
+                            </select>
+                        </label>
+                        <button type="submit" class="btn-primary">Apply</button>
+                    </form>
+                </details>
+                <hr>
+                <button type="button" class="danger" data-name="{{ session.name }}"
+                        onclick="deleteSession('{{ session.id }}', this.dataset.name)">Delete session</button>
+            </div>
+        </div>
+    </div>
+    {% if should_compact %}
+    <div class="meta-banner">
+        This conversation is large ({{ '{:,}'.format(usage.context) }} tokens).
+        <button type="button" class="link-btn" onclick="compactSession()">Compact it</button>
+        to cut cost and keep the model focused.
+    </div>
+    {% endif %}
+</div>

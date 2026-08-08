@@ -1,7 +1,6 @@
 """Chat, tool resolution, compaction, transcription, and image endpoints."""
 
 import asyncio
-import json
 import uuid
 from pathlib import Path
 from typing import AsyncIterator

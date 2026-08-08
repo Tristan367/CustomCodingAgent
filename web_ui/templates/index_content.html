@@ -1,89 +1,96 @@
 <div id="home-page">
-    {% if error %}
-    <div class="error-banner">{{ error }}</div>
-    {% endif %}
-    <h2>Settings</h2>
-    <form id="settings-form"
-          hx-post="/_settings"
-          hx-target="#home-page"
-          hx-swap="outerHTML">
-        <label>DeepSeek API Key:
-            <input type="text" name="deepseek_api_key" id="api-key-input"
-                   value="{{ settings.get('deepseek_api_key', '') }}"
-                   placeholder="sk-..."
-                   autocomplete="off">
-        </label>
-        <button type="submit">Save</button>
-    </form>
+    {% if error %}<div class="error-banner">{{ error }}</div>{% endif %}
 
-    <h2 style="margin-top:30px">New Session</h2>
-    <form id="new-session-form"
-          method="POST"
-          action="/_create_session">
-        <div class="form-row">
-            <input type="text" name="name" placeholder="Session name" required>
-        </div>
-        <div class="form-row">
-            <div style="display:flex;gap:8px;flex:1">
-                <input type="text" name="project_dir" placeholder="Project directory" id="project-dir-input" required>
-                <button type="button" class="btn-browse" onclick="toggleBrowser()">Browse...</button>
+    <section class="panel">
+        <h2>API key</h2>
+        <form hx-post="/_settings" hx-target="#home-page" hx-swap="outerHTML" class="inline-form">
+            <input type="password" name="deepseek_api_key" id="api-key-input"
+                   value="{% if settings.get('deepseek_api_key') %}{{ '\u2022' * 12 }}{% endif %}"
+                   placeholder="sk-..." autocomplete="off" spellcheck="false"
+                   onfocus="if(this.value.indexOf('\u2022')>-1)this.value=''">
+            <button type="submit">Save</button>
+        </form>
+        <p class="hint">
+            {% if settings.get('deepseek_api_key') %}A key is saved.{% else %}No key saved yet.{% endif %}
+            The <code>DEEPSEEK_API_KEY</code> environment variable takes precedence if set.
+        </p>
+    </section>
+
+    <section class="panel">
+        <h2>New session</h2>
+        <form method="POST" action="/_create_session" class="stack">
+            <div class="form-row">
+                <input type="text" name="name" placeholder="Session name" required autocomplete="off">
             </div>
-        </div>
-        <div id="file-browser-container" style="display:none;"></div>
-        <div class="form-row">
-            <select name="model">
-                {% for m in models %}
-                <option value="{{ m.id }}" {% if m.id == 'deepseek-v4-pro' %}selected{% endif %}>{{ m.name }}</option>
-                {% endfor %}
-            </select>
-            <select name="prompt_profile">
-                {% for p in profiles %}
-                <option value="{{ p }}" {% if p == 'visual-verify' %}selected{% endif %}>{{ p }}</option>
-                {% endfor %}
-            </select>
-        </div>
-        <button type="submit">Create Session</button>
-    </form>
+            <div class="form-row">
+                <input type="text" name="project_dir" id="project-dir-input"
+                       placeholder="Project directory" required autocomplete="off" spellcheck="false">
+                <button type="button" class="btn-secondary" onclick="toggleBrowser()">Browse</button>
+            </div>
+            <div id="file-browser-container" hidden></div>
+            <div class="form-row">
+                <label>Model
+                    <select name="model">
+                        {% for m in models %}
+                        <option value="{{ m.id }}" {% if m.id == default_model %}selected{% endif %}>{{ m.name }}</option>
+                        {% endfor %}
+                    </select>
+                </label>
+                <label>Prompt
+                    <select name="prompt_profile">
+                        {% for p in profiles %}
+                        <option value="{{ p }}" {% if p == 'default' %}selected{% endif %}>{{ p }}</option>
+                        {% endfor %}
+                    </select>
+                </label>
+                <label>Thinking
+                    <select name="thinking_effort">
+                        <option value="">high (default)</option>
+                        <option value="none">none</option>
+                        <option value="low">low</option>
+                        <option value="medium">medium</option>
+                        <option value="max">max</option>
+                    </select>
+                </label>
+            </div>
+            <button type="submit" class="btn-primary">Create session</button>
+        </form>
+    </section>
 
-    <form method="POST" action="/_create_session" style="margin-top:8px">
-        <input type="hidden" name="name" value="Temp {{ now }}">
-        <input type="hidden" name="project_dir" value="/home/tristan">
-        <input type="hidden" name="model" value="deepseek-v4-pro">
-        <input type="hidden" name="prompt_profile" value="minimal">
-        <button type="submit" class="quick-ask-btn">Temp Session</button>
-    </form>
-
-    <h2 style="margin-top:30px">Sessions</h2>
-    <div id="session-list">
-        {% for s in sessions %}
-        <div class="session-card" onclick="openSession('{{ s.id }}')">
-            <span class="session-name">{{ s.name }}</span>
-            <span class="session-meta">{{ s.project_dir }} &middot; {{ s.model }} &middot; {{ s.prompt_profile }} &middot; {{ s.last_active_at | humandate }}</span>
-            <button class="delete-session-btn" onclick="event.stopPropagation();if(confirm('Delete &quot;{{ s.name }}&quot;?')){fetch('/api/sessions/{{ s.id }}',{method:'DELETE'}).then(()=>location.reload())}">✕</button>
+    <section class="panel">
+        <h2>Sessions <span class="count">{{ sessions | length }}</span></h2>
+        <div id="session-list">
+            {% for s in sessions %}
+            <a class="session-card" href="/sessions/{{ s.id }}">
+                <span class="session-name">{{ s.name }}</span>
+                <span class="session-meta">
+                    <code>{{ s.project_dir }}</code>
+                    <span class="dot">&middot;</span>{{ s.model }}
+                    <span class="dot">&middot;</span>{{ s.prompt_profile }}
+                    <span class="dot">&middot;</span>{{ s.last_active_at | humantime }}
+                </span>
+                <button type="button" class="icon-btn danger" title="Delete session"
+                        data-name="{{ s.name }}"
+                        onclick="event.preventDefault();event.stopPropagation();deleteSession('{{ s.id }}', this.dataset.name)">&#10005;</button>
+            </a>
+            {% else %}
+            <p class="hint">No sessions yet.</p>
+            {% endfor %}
         </div>
-        {% endfor %}
-    </div>
+    </section>
 </div>
 
 <script>
-let _browserLoaded = false;
-
 function toggleBrowser() {
-    const container = document.getElementById('file-browser-container');
-    if (container.style.display === 'none') {
-        container.style.display = 'block';
-        if (!_browserLoaded) {
-            container.innerHTML = '<div class="loading"><div class="spinner"></div> Loading...</div>';
-            htmx.ajax('GET', '/_browse', {target: '#file-browser-container', swap: 'innerHTML'});
-            _browserLoaded = true;
-        }
-    } else {
-        container.style.display = 'none';
+    const box = document.getElementById('file-browser-container');
+    box.hidden = !box.hidden;
+    if (!box.hidden && !box.dataset.loaded) {
+        box.dataset.loaded = '1';
+        htmx.ajax('GET', '/_browse', { target: '#file-browser-container', swap: 'innerHTML' });
     }
 }
-
 function selectProjectDir(path) {
     document.getElementById('project-dir-input').value = path;
-    document.getElementById('file-browser-container').style.display = 'none';
+    document.getElementById('file-browser-container').hidden = true;
 }
 </script>

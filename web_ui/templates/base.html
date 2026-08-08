@@ -3,23 +3,21 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>CodeAgent</title>
+    <title>{% block title %}CodeAgent{% endblock %}</title>
     <link rel="stylesheet" href="/static/css/style.css">
+    <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'><text y='13' font-size='14'>&#9654;</text></svg>">
     <script src="/static/js/htmx.min.js"></script>
+    <script src="/static/js/markdown.js"></script>
 </head>
 <body>
-    <div id="app">
-        <header id="top-bar">
-            <a href="/" class="logo">CodeAgent</a>
-            <nav id="tab-bar">
-                <div class="tab-scroll"></div>
-            </nav>
-            <a href="/prompts" class="topbar-link" title="System prompts">&#9881;</a>
-        </header>
-        <main id="main-content">
-            {% block content %}{% endblock %}
-        </main>
-    </div>
+    <header id="top-bar">
+        <a href="/" class="logo" title="Home">CodeAgent</a>
+        <nav id="tab-bar"><div class="tab-scroll" id="tab-scroll"></div></nav>
+        <a href="/prompts" class="topbar-link" title="Prompts &amp; tools">Prompts</a>
+    </header>
+    <main id="main-content">
+        {% block content %}{% endblock %}
+    </main>
     <script src="/static/js/app.js"></script>
 </body>
 </html>

@@ -38,6 +38,10 @@ from agent_server.tools.registry import execute_tool, get_tool, requires_permiss
 _aborts: dict[str, asyncio.Event] = {}
 # Sessions the user chose to auto-approve for the lifetime of this process.
 _runtime_auto_approve: set[str] = set()
+# Individual tool calls the user approved. Consumed by the next _drain_pending
+# so the approved tool runs inside the loop and streams its output like any
+# other tool call, instead of executing silently in the resolve endpoint.
+_approved_calls: set[str] = set()
 
 
 def request_abort(session_id: str) -> bool:
@@ -271,7 +275,7 @@ async def _drain_pending(session: dict, ctx: ToolContext) -> AsyncIterator[dict]
             }
             return
 
-        if not auto and requires_permission(name, args):
+        if not auto and call["id"] not in _approved_calls and requires_permission(name, args):
             yield {
                 "type": "permission",
                 "tool_call_id": call["id"],
@@ -282,6 +286,7 @@ async def _drain_pending(session: dict, ctx: ToolContext) -> AsyncIterator[dict]
             }
             return
 
+        _approved_calls.discard(call["id"])
         yield {"type": "tool_start", "tool_call_id": call["id"], "name": name, "args": args}
         result = await execute_tool(name, args, ctx)
         await _record(session_id, call, result)
@@ -332,14 +337,16 @@ async def resolve_pending(
         return False
 
     name = tool_call_name(call)
-    args = parse_arguments(call)
-    ctx = ToolContext(session_id=session_id, project_dir=session["project_dir"])
 
     if action == "approve":
-        result = await execute_tool(name, args, ctx)
-    elif action == "reject":
+        # Don't run it here. Marking it approved lets the agent loop execute it
+        # and stream tool_start/tool_end, so the user sees the command output.
+        _approved_calls.add(tool_call_id)
+        return True
+
+    if action == "reject":
         # Feed the refusal back as a normal tool result. The model can then adapt
-        # instead of the conversation dead-ending.
+        # instead of the conversation dead-ending on an unanswered tool call.
         note = value.strip()
         result = ToolResult(
             output="The user rejected this tool call and it was not executed."

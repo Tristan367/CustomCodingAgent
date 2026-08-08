@@ -1,4 +1,3 @@
 {% extends "base.html" %}
-{% block content %}
-{% include "session_content.html" %}
-{% endblock %}
+{% block title %}{{ session.name }} &mdash; CodeAgent{% endblock %}
+{% block content %}{% include "session_content.html" %}{% endblock %}

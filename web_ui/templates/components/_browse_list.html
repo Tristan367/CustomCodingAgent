@@ -1,50 +1,53 @@
 <div class="file-browser" id="file-browser">
-    <!-- Breadcrumbs -->
     <div class="browser-crumbs">
         {% for crumb in crumbs %}
         {% if not loop.first %}<span class="crumb-sep">/</span>{% endif %}
-        <a href="#" hx-get="/_browse?dir={{ crumb.path }}" hx-target="#file-browser" hx-swap="outerHTML">{{ crumb.name }}</a>
+        <button type="button" hx-get="/_browse?dir={{ crumb.path | urlencode }}{% if show_hidden %}&show_hidden=true{% endif %}"
+                hx-target="#file-browser" hx-swap="outerHTML">{{ crumb.name }}</button>
         {% endfor %}
     </div>
 
-    <!-- Select / New Folder -->
     <div class="browser-actions">
-        <button class="btn-select-dir"
-                onclick="selectProjectDir('{{ current }}')"
-                type="button">Select this directory</button>
-        <form class="mkdir-form"
-              hx-post="/_browse/mkdir"
-              hx-target="#file-browser"
-              hx-swap="outerHTML"
-              hx-on::after-request="this.reset()">
+        <button type="button" class="btn-primary" data-path="{{ current }}"
+                onclick="selectProjectDir(this.dataset.path)">Use this directory</button>
+        <form class="mkdir-form" hx-post="/_browse/mkdir" hx-target="#file-browser" hx-swap="outerHTML">
             <input type="hidden" name="dir" value="{{ current }}">
-            <input type="text" name="name" placeholder="New folder name..." required>
-            <button type="submit">+ Create</button>
+            <input type="text" name="name" placeholder="New folder" required autocomplete="off">
+            <button type="submit" class="btn-secondary">Create</button>
         </form>
+        <label class="checkbox-label">
+            <input type="checkbox" {% if show_hidden %}checked{% endif %}
+                   hx-get="/_browse?dir={{ current | urlencode }}&show_hidden={{ 'false' if show_hidden else 'true' }}"
+                   hx-target="#file-browser" hx-swap="outerHTML">
+            Hidden
+        </label>
     </div>
 
-    <!-- Entries -->
+    {% if error %}<div class="error-banner">{{ error }}</div>{% endif %}
+
     <div class="browser-entries">
-        {% if parent and parent != current %}
-        <div class="browser-entry parent-dir"
-             hx-get="/_browse?dir={{ parent }}"
-             hx-target="#file-browser"
-             hx-swap="outerHTML"
-             style="cursor:pointer">
-            <span class="entry-icon">📁</span> ..
-        </div>
+        {% if parent %}
+        <button type="button" class="browser-entry is-dir"
+                hx-get="/_browse?dir={{ parent | urlencode }}{% if show_hidden %}&show_hidden=true{% endif %}"
+                hx-target="#file-browser" hx-swap="outerHTML">
+            <span class="entry-icon">&#8598;</span><span class="entry-name">..</span>
+        </button>
         {% endif %}
         {% for entry in entries %}
-        <div class="browser-entry {{ 'is-dir' if entry.is_dir else 'is-file' }}"
-             {% if entry.is_dir %}
-             hx-get="/_browse?dir={{ entry.path }}"
-             hx-target="#file-browser"
-             hx-swap="outerHTML"
-             style="cursor:pointer"
-             {% endif %}>
-            <span class="entry-icon">{{ '📁' if entry.is_dir else '📄' }}</span>
-            <span class="entry-name">{{ entry.name }}</span>
+        {% if entry.is_dir %}
+        <button type="button" class="browser-entry is-dir"
+                hx-get="/_browse?dir={{ entry.path | urlencode }}{% if show_hidden %}&show_hidden=true{% endif %}"
+                hx-target="#file-browser" hx-swap="outerHTML">
+            <span class="entry-icon">&#128193;</span><span class="entry-name">{{ entry.name }}</span>
+        </button>
+        {% else %}
+        <div class="browser-entry is-file">
+            <span class="entry-icon">&#128196;</span><span class="entry-name">{{ entry.name }}</span>
         </div>
+        {% endif %}
+        {% else %}
+        <p class="hint">Empty directory.</p>
         {% endfor %}
+        {% if truncated %}<p class="hint">Showing the first 500 entries.</p>{% endif %}
     </div>
 </div>

@@ -1,35 +1,56 @@
 {% extends "base.html" %}
+{% block title %}Prompts &amp; tools{% endblock %}
 {% block content %}
 <div id="prompts-page">
-    <h2>System Prompt Manager</h2>
-    <p class="hint">Edit prompts and user preferences. Changes take effect on new messages — existing context is unaffected until the next compaction.</p>
+    <h2>Prompts</h2>
+    {% if saved %}<div class="success-banner">Saved. New messages will use the updated prompts.</div>{% endif %}
+    <p class="hint">
+        Changes apply to the next message in any session. Text already in a conversation's
+        context is unaffected until it is compacted. Clearing a profile restores its built-in default.
+    </p>
 
-    <form method="POST" action="/_save_prompts" onsubmit="return confirm('Save prompts? Changes apply to new messages. Existing conversation context is unaffected until you compact.')">
-        <button type="submit" class="save-btn save-top">Save All Prompts</button>
-
-        {% for profile_name, prompt_text in profiles.items() %}
+    <form method="POST" action="/_save_prompts" class="stack">
+        {% for name, text in profiles.items() %}
         <div class="prompt-editor">
-            <h3>{{ profile_name }}</h3>
-            <textarea name="profile_{{ profile_name }}" rows="6" class="prompt-textarea">{{ prompt_text }}</textarea>
+            <h3>{{ name }}</h3>
+            <textarea name="profile_{{ name }}" rows="14" class="prompt-textarea" spellcheck="false">{{ text }}</textarea>
         </div>
         {% endfor %}
 
         <div class="prompt-editor">
-            <h3>User preferences <span class="hint">(appended to every prompt)</span></h3>
-            <textarea name="user_prefs" rows="6" class="prompt-textarea"
-                      placeholder="Example: I prefer TypeScript. Use 2-space indent. Always add error handling.">{{ user_prefs }}</textarea>
+            <h3>User preferences <span class="hint">appended to every profile</span></h3>
+            <textarea name="user_prefs" rows="6" class="prompt-textarea" spellcheck="false"
+                      placeholder="e.g. Prefer TypeScript. Two-space indent. Always add error handling.">{{ user_prefs }}</textarea>
         </div>
 
         <div class="prompt-editor">
-            <h3>Compaction summary prompt <span class="hint">(used when compacting conversation history)</span></h3>
-            <textarea name="compact_prompt" rows="4" class="prompt-textarea">{{ compact_prompt }}</textarea>
+            <h3>Compaction prompt <span class="hint">used when summarising a long conversation</span></h3>
+            <textarea name="compact_prompt" rows="10" class="prompt-textarea" spellcheck="false">{{ compact_prompt }}</textarea>
         </div>
 
-        <button type="submit" class="save-btn">Save All Prompts</button>
+        <button type="submit" class="btn-primary">Save prompts</button>
     </form>
 
-    <h2 style="margin-top:30px">Available Tools</h2>
-    <p class="hint">These tool definitions are sent to the model. They count against your context budget.</p>
-    <pre class="tools-def">{{ tools_json }}</pre>
+    <h2>Tools</h2>
+    <p class="hint">
+        Every tool schema is sent with each request, costing roughly
+        <strong>{{ '{:,}'.format(tools_tokens) }} tokens</strong> per call before your
+        conversation is counted.
+    </p>
+    <table class="tools-table">
+        <thead><tr><th>Tool</th><th>Behaviour</th><th>~tokens</th><th>Description</th></tr></thead>
+        <tbody>
+            {% for t in tools %}
+            <tr>
+                <td><code>{{ t.name }}</code></td>
+                <td>{% if t.pause == 'permission' %}<span class="chip chip-warn">asks first</span>
+                    {%- elif t.pause == 'question' %}<span class="chip">interactive</span>
+                    {%- else %}<span class="chip">automatic</span>{% endif %}</td>
+                <td class="num">{{ t.tokens }}</td>
+                <td>{{ t.description }}</td>
+            </tr>
+            {% endfor %}
+        </tbody>
+    </table>
 </div>
 {% endblock %}

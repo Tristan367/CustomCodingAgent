@@ -1,31 +1,74 @@
 <div id="messages">
     {% for c in compactions %}
     <div class="message compaction">
-        <div class="msg-role">[Summary]</div>
-        <div class="msg-content">{{ c.summary_text[:200] }}{% if c.summary_text|length > 200 %}...{% endif %}</div>
-        <span class="msg-time">{{ c.created_at | humandate }}</span>
+        <div class="msg-role">summary</div>
+        <div class="msg-content">
+            <details class="tool-details">
+                <summary class="tool-summary">
+                    Earlier conversation compacted
+                    {%- if c.original_token_count %}
+                    ({{ '{:,}'.format(c.original_token_count) }} &rarr; {{ '{:,}'.format(c.compressed_token_count) }} tokens)
+                    {%- endif %}
+                </summary>
+                <div class="content-text" data-markdown>{{ c.summary_text }}</div>
+            </details>
+        </div>
+        <span class="msg-time">{{ c.created_at | clocktime }}</span>
     </div>
     {% endfor %}
+
     {% for m in messages %}
+    {% set calls = m.tool_calls | toolcalls %}
+
+    {% if m.role == 'tool' %}
+    <div class="message tool {% if m.is_error %}tool-error{% endif %}" id="msg-{{ m.id }}">
+        <div class="msg-role">{{ m.tool_name or 'result' }}</div>
+        <div class="msg-content">
+            <details class="tool-details">
+                <summary class="tool-summary">{{ m.tool_name or 'tool' }} result</summary>
+                <pre class="tool-raw">{{ m.content[:8000] }}{% if m.content | length > 8000 %}
+... [truncated in view]{% endif %}</pre>
+            </details>
+        </div>
+        <span class="msg-time">{{ m.created_at | clocktime }}</span>
+    </div>
+
+    {% else %}
     <div class="message {{ m.role }}" id="msg-{{ m.id }}">
         <div class="msg-role">{{ m.role }}</div>
         <div class="msg-content">
-            {% if m.tool_calls %}
-            <details class="tool-details">
-                <summary class="tool-summary">🔧 Tool calls</summary>
-                <pre class="tool-raw">{{ m.tool_calls }}</pre>
+            {% if m.reasoning_content %}
+            <details class="tool-details reasoning-details">
+                <summary class="tool-summary">Thinking</summary>
+                <pre class="reasoning-text">{{ m.reasoning_content }}</pre>
             </details>
             {% endif %}
-            {% if m.tool_call_id and m.role == 'tool' %}
-            <details class="tool-details">
-                <summary class="tool-summary">TOOL RESULT</summary>
-                <pre class="tool-raw">{{ m.content[:2000] }}{% if m.content|length > 2000 %}...{% endif %}</pre>
-            </details>
-            {% elif m.content %}
-            <div class="content-text">{{ m.content }}</div>
+
+            {% if m.content %}
+            <div class="content-text" data-markdown>{{ m.content }}</div>
             {% endif %}
+
+            {% for call in calls %}
+            <details class="tool-details">
+                <summary class="tool-summary">{{ call.function.name }}</summary>
+                <pre class="tool-raw">{{ call.function.arguments }}</pre>
+            </details>
+            {% endfor %}
         </div>
-        <span class="msg-time">{{ m.created_at | humandate }}</span>
+        <span class="msg-time">{{ m.created_at | clocktime }}</span>
     </div>
+    {% endif %}
     {% endfor %}
+
+    {% if pending %}
+    {# A run paused waiting on the user and the page was reloaded. app.js turns
+       this back into an interactive card once it has loaded. #}
+    <div class="message notice notice-pending" id="pending-restore"
+         data-pending="{{ pending | tojson | forceescape }}">
+        <div class="msg-role">paused</div>
+        <div class="msg-content">
+            <div class="content-text">This run is waiting on you.</div>
+        </div>
+    </div>
+    {% endif %}
 </div>

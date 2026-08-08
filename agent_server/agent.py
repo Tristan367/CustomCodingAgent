@@ -154,18 +154,18 @@ def _publish(run: _Run, event: dict):
         queue.put_nowait(event)
 
 
-async def _drive(session_id: str, run: _Run):
+async def _drive(session_id: str, handle: _Run):
     try:
-        async for event in _run_events(session_id):
-            _publish(run, event)
+        async for event in run(session_id):
+            _publish(handle, event)
     except asyncio.CancelledError:
-        _publish(run, {"type": "error", "message": "Run cancelled."})
+        _publish(handle, {"type": "error", "message": "Run cancelled."})
         raise
     except Exception as e:  # noqa: BLE001
-        _publish(run, {"type": "error", "message": f"{type(e).__name__}: {e}"})
+        _publish(handle, {"type": "error", "message": f"{type(e).__name__}: {e}"})
     finally:
-        _publish(run, {"type": "stream_end"})
-        run.done.set()
+        _publish(handle, {"type": "stream_end"})
+        handle.done.set()
 
 
 def start_run(session_id: str) -> _Run:
@@ -173,10 +173,10 @@ def start_run(session_id: str) -> _Run:
     existing = _runs.get(session_id)
     if existing is not None and not existing.done.is_set():
         return existing
-    run = _Run()
-    _runs[session_id] = run
-    run.task = asyncio.create_task(_drive(session_id, run))
-    return run
+    handle = _Run()
+    _runs[session_id] = handle
+    handle.task = asyncio.create_task(_drive(session_id, handle))
+    return handle
 
 
 def active_run(session_id: str) -> _Run | None:
@@ -219,7 +219,7 @@ async def subscribe(session_id: str, replay: bool = True) -> AsyncIterator[dict]
         run.subscribers.discard(queue)
 
 
-async def _run_events(session_id: str) -> AsyncIterator[dict]:
+async def run(session_id: str) -> AsyncIterator[dict]:
     """Drive the session forward and yield UI events.
 
     Assumes any new user input has already been persisted.

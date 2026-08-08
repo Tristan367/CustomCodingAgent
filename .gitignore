@@ -6,3 +6,5 @@ __pycache__/
 *.pyo
 .idea/
 .vscode/
+.pytest_cache/
+.ruff_cache/

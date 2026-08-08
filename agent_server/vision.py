@@ -25,7 +25,11 @@ import httpx
 from agent_server.config import (
     VISION_MAX_PIXELS,
     VISION_MODEL,
+    VISION_AUTOSTART,
     VISION_KEEP_ALIVE,
+    VISION_REMOTE_BIN,
+    VISION_SSH_HOST,
+    VISION_START_TIMEOUT,
     VISION_NUM_CTX,
     VISION_OLLAMA_URL,
     VISION_TIMEOUT,
@@ -115,6 +119,68 @@ async def rig_available() -> bool:
         return False
 
 
+_starting = asyncio.Lock()
+
+
+async def ensure_rig() -> tuple[bool, str]:
+    """Make sure Ollama is up, starting it over SSH if it is not.
+
+    The machine being on and the server running are two different things, and
+    only the second one matters here. Returns (ready, note); `note` is non-empty
+    when something had to be done, so the caller can say so.
+    """
+    if await rig_available():
+        return True, ""
+    if not (VISION_AUTOSTART and VISION_SSH_HOST):
+        return False, ""
+
+    # One attempt at a time: several images in one turn would otherwise each
+    # try to start it.
+    async with _starting:
+        if await rig_available():
+            return True, ""
+        command = (
+            f"setsid env OLLAMA_HOST=0.0.0.0:11434 nohup {VISION_REMOTE_BIN} serve "
+            "> ~/ollama.log 2>&1 < /dev/null &"
+        )
+        try:
+            proc = await asyncio.create_subprocess_exec(
+                "ssh", "-o", "BatchMode=yes", "-o", "ConnectTimeout=6",
+                VISION_SSH_HOST, command,
+                stdout=asyncio.subprocess.DEVNULL,
+                stderr=asyncio.subprocess.PIPE,
+            )
+            _, err = await asyncio.wait_for(proc.communicate(), timeout=20)
+        except (asyncio.TimeoutError, OSError) as e:
+            return False, f"could not reach {VISION_SSH_HOST} to start it ({e})"
+        if proc.returncode != 0:
+            detail = err.decode("utf-8", "replace").strip().splitlines()
+            return False, (
+                f"could not start it on {VISION_SSH_HOST}: "
+                f"{detail[-1] if detail else f'ssh exit {proc.returncode}'}"
+            )
+
+        deadline = time.monotonic() + VISION_START_TIMEOUT
+        while time.monotonic() < deadline:
+            if await rig_available():
+                return True, f"started the vision rig on {VISION_SSH_HOST}"
+            await asyncio.sleep(1)
+        return False, f"started it on {VISION_SSH_HOST} but it did not come up in time"
+
+
+async def unload_model():
+    """Drop the model from the rig's memory when this app shuts down."""
+    try:
+        client = await _client()
+        await client.post(
+            f"{VISION_OLLAMA_URL}/api/chat",
+            json={"model": VISION_MODEL, "messages": [], "keep_alive": 0},
+            timeout=8,
+        )
+    except Exception:  # noqa: BLE001
+        pass  # the rig may already be gone; nothing to clean up
+
+
 async def analyze(images: list[bytes], prompt: str, labels: list[str] | None = None) -> str:
     """Ask the vision model about one or more images.
 
@@ -128,6 +194,13 @@ async def analyze(images: list[bytes], prompt: str, labels: list[str] | None = N
     """
     if not images:
         raise VisionError("no images to analyse")
+
+    ready, note = await ensure_rig()
+    if not ready:
+        raise VisionError(
+            f"the vision rig at {VISION_OLLAMA_URL} is not reachable"
+            + (f" -- {note}" if note else ". Is vision-host switched on?")
+        )
 
     labels = labels or [f"Image {i + 1}" for i in range(len(images))]
     messages: list[dict] = []

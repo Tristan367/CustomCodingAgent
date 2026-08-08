@@ -48,10 +48,33 @@ TEMPLATE_DIR = BASE_DIR / "web_ui" / "templates"
 STATIC_DIR = BASE_DIR / "web_ui" / "static"
 
 
+async def _warm_vision():
+    """Bring the vision rig up in the background if its machine is switched on.
+
+    Deliberately quiet: if vision-host is off there is nothing to report and nothing to
+    retry, and the first vision call will try again anyway.
+    """
+    from agent_server import vision
+
+    try:
+        ready, note = await vision.ensure_rig()
+        if ready and note:
+            print(f"[vision] {note}")
+    except Exception:  # noqa: BLE001
+        pass
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     await init_db()
+    # Background: startup must not wait on a machine that may be off.
+    warm = asyncio.create_task(_warm_vision())
     yield
+    warm.cancel()
+    from agent_server import vision
+
+    await vision.unload_model()
+    await vision.close_client()
     await close_db()
 
 

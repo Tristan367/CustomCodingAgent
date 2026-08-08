@@ -1,0 +1,72 @@
+#!/usr/bin/env bash
+# Start CodeAgent and open it in the browser.
+#
+# Installed as a symlink on PATH, so this resolves the link to find the repo
+# rather than assuming where it was called from.
+set -euo pipefail
+
+SELF="${BASH_SOURCE[0]}"
+while [ -L "$SELF" ]; do
+  LINK="$(readlink "$SELF")"
+  case "$LINK" in
+    /*) SELF="$LINK" ;;
+    *)  SELF="$(dirname "$SELF")/$LINK" ;;
+  esac
+done
+ROOT="$(cd "$(dirname "$SELF")/.." && pwd)"
+cd "$ROOT"
+
+PORT="${PORT:-8080}"
+HOST="${HOST:-127.0.0.1}"
+URL="http://${HOST}:${PORT}"
+
+open_browser() {
+  # Wait for the port before opening, or the tab lands on a connection error.
+  for _ in $(seq 1 60); do
+    if curl -sf -o /dev/null --max-time 1 "$URL/"; then
+      command -v xdg-open >/dev/null 2>&1 && xdg-open "$URL" >/dev/null 2>&1 &
+      return
+    fi
+    sleep 0.25
+  done
+  echo "codeagent: server did not come up at $URL" >&2
+}
+
+case "${1:-}" in
+  stop)
+    lsof -ti:"$PORT" 2>/dev/null | xargs -r kill 2>/dev/null || true
+    echo "codeagent: stopped"
+    exit 0
+    ;;
+  open)
+    open_browser
+    exit 0
+    ;;
+  -h|--help)
+    cat <<'EOF'
+codeagent            start the server and open it in your browser
+codeagent stop       stop a running server
+codeagent open       just open the browser at the running server
+codeagent --no-open  start without opening a browser
+
+The vision rig is started on demand; see VISION_* in .env.example.
+EOF
+    exit 0
+    ;;
+esac
+
+[ -d .venv ] || { echo "codeagent: no .venv. Run: uv venv && uv pip install -r requirements.txt" >&2; exit 1; }
+
+# Already running? Just show it, rather than killing someone's in-flight turn.
+if curl -sf -o /dev/null --max-time 1 "$URL/"; then
+  echo "codeagent: already running at $URL"
+  [ "${1:-}" = "--no-open" ] || open_browser
+  exit 0
+fi
+
+[ "${1:-}" = "--no-open" ] || open_browser &
+
+echo "codeagent: starting at $URL  (Ctrl-C to stop)"
+# exec, so Ctrl-C reaches uvicorn directly and its shutdown hook runs: that is
+# what unloads the vision model from the rig.
+exec .venv/bin/python -m uvicorn agent_server.main:app --host "$HOST" --port "$PORT"

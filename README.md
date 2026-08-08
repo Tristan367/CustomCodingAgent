@@ -9,8 +9,13 @@ and per-session settings that don't leak into each other.
 ```bash
 uv venv && uv pip install -r requirements.txt
 cp .env.example .env        # optional; the key can also be saved in the UI
-./run.sh                    # http://127.0.0.1:8080
+ln -s "$PWD/bin/codeagent" ~/.local/bin/codeagent
+codeagent                   # starts the server and opens the browser
 ```
+
+`codeagent stop` stops it, `codeagent open` opens a browser at a server that is
+already running, and `codeagent --no-open` skips the browser. Stopping with
+Ctrl-C matters: the shutdown hook is what unloads the vision model from the rig.
 
 Add your DeepSeek API key on the home page (or set `DEEPSEEK_API_KEY`, which wins),
 pick a project directory, and create a session.
@@ -128,6 +133,12 @@ reach a particular state. It returns file paths.
 comparison works — capture before and after, then ask what changed. Note that
 the backend only reliably sees multiple images when each is sent on its own
 message, which this client does for you.
+
+If the vision machine is switched on, Ollama is started on it automatically --
+at boot, and again on the first vision call if it went away since. That needs
+key-based SSH and runs the binary as your user, with no sudo. Switch the machine
+off and vision reports being unreachable instead of hanging; nothing else is
+affected. Set `VISION_AUTOSTART=0` to manage it yourself.
 
 Vision runs against Ollama on `VISION_OLLAMA_URL` (default `vision-host.local:11434`,
 model `qwen3-vl:32b`). Browser capture uses Playwright's async API in-process.

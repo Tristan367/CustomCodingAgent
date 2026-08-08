@@ -11,9 +11,13 @@ DEFAULT_SEQUENCE_PROMPT = (
     "These frames were captured in order. Describe what changes between them, "
     "and note anything that looks broken or stuck."
 )
+# Only used when the caller asked nothing at all. "Describe in detail" invites
+# a 4,000 character report that takes a minute to generate; naming what is
+# wanted gets the same useful content in a fraction of the time. A prompt the
+# caller supplies is passed through untouched.
 DEFAULT_PROMPT = (
-    "Describe this image in detail. Include any text, layout, components, "
-    "colours, and anything that looks wrong or out of place."
+    "What is on screen? Cover the main sections, the visible text, and anything "
+    "that looks broken, misaligned, or out of place."
 )
 
 

@@ -82,6 +82,14 @@ VISION_TIMEOUT = int(os.getenv("VISION_TIMEOUT", "300"))
 # vision model costs about ten seconds, which dwarfs the two seconds the actual
 # inference takes, so hold it in memory between calls.
 VISION_KEEP_ALIVE = os.getenv("VISION_KEEP_ALIVE", "30m")
+# Bring the rig up on demand over SSH, so the only thing to switch on by hand is
+# the machine itself. Empty disables it and vision just reports being offline.
+# Requires key-based SSH; the binary is started as your user, no sudo involved.
+VISION_SSH_HOST = os.getenv("VISION_SSH_HOST", "you@vision-host.local")
+VISION_REMOTE_BIN = os.getenv("VISION_REMOTE_BIN", "~/.local/bin/ollama")
+VISION_AUTOSTART = os.getenv("VISION_AUTOSTART", "1") == "1"
+# How long to wait for it to come up before giving up on a request.
+VISION_START_TIMEOUT = int(os.getenv("VISION_START_TIMEOUT", "45"))
 # Must be identical on every request: Ollama reloads the model whenever the
 # options change, which would reintroduce the cold start it is meant to avoid.
 VISION_NUM_CTX = int(os.getenv("VISION_NUM_CTX", "8192"))

@@ -62,6 +62,19 @@ MAX_TOOL_ROUNDS = int(os.getenv("MAX_TOOL_ROUNDS", "40"))
 MAX_TOOL_RESULT_CHARS = int(os.getenv("MAX_TOOL_RESULT_CHARS", "50000"))
 
 # ── Vision ──────────────────────────────────────────────────────────────────
+# Subagents
+SUBAGENT_MAX_ROUNDS = int(os.getenv("SUBAGENT_MAX_ROUNDS", "20"))
+SUBAGENT_TIMEOUT = int(os.getenv("SUBAGENT_TIMEOUT", "600"))
+SUBAGENT_EFFORT = os.getenv("SUBAGENT_EFFORT", "low")
+
+# webfetch
+WEBFETCH_TIMEOUT = int(os.getenv("WEBFETCH_TIMEOUT", "30"))
+WEBFETCH_MAX_BYTES = int(os.getenv("WEBFETCH_MAX_BYTES", "5000000"))
+# Block requests to the local machine and private networks. The agent's own API
+# lives on localhost, so an unfiltered fetch can drive this app through its own
+# tool. Set to 0 only if you need the agent to reach an internal service.
+WEBFETCH_ALLOW_PRIVATE = os.getenv("WEBFETCH_ALLOW_PRIVATE", "0") == "1"
+
 VISION_OLLAMA_URL = os.getenv("VISION_OLLAMA_URL", "http://vision-host.local:11434")
 VISION_MODEL = os.getenv("VISION_MODEL", "qwen3-vl:32b")
 VISION_TIMEOUT = int(os.getenv("VISION_TIMEOUT", "300"))

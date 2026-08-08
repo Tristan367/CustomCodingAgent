@@ -20,6 +20,14 @@ BINARY_SUFFIXES = {
 _read_files: dict[str, set[str]] = {}
 
 
+def clear_read_cache(session_id: str = ""):
+    """Release the read-tracking for a session, or all of them."""
+    if session_id:
+        _read_files.pop(session_id, None)
+    else:
+        _read_files.clear()
+
+
 def mark_read(session_id: str, path: Path):
     _read_files.setdefault(session_id, set()).add(str(path))
 

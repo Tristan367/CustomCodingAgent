@@ -523,9 +523,33 @@ hr { border: 0; border-top: 1px solid var(--border); margin: 6px 0; }
 .permission-dir { font-size: 11px; font-family: var(--mono); color: var(--text-faint); margin-bottom: 10px; }
 
 .permission-actions, .question-actions { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; }
+
+/* Options are a list, never a row: short ones used to sit side by side while
+   long ones wrapped, so the same set of choices looked different every time. */
+.question-options { display: flex; flex-direction: column; gap: 2px; margin-bottom: 10px; }
+.question-option {
+  display: flex;
+  align-items: flex-start;
+  gap: 9px;
+  padding: 7px 10px;
+  border: 1px solid transparent;
+  border-radius: 4px;
+  text-align: left;
+  cursor: pointer;
+}
+.question-option:hover { background: var(--bg-hover); border-color: var(--border); }
+.question-option input { margin: 3px 0 0; accent-color: var(--accent); flex: 0 0 auto; cursor: pointer; }
+.question-option:has(input:checked) { border-color: var(--accent-dim); background: var(--bg-hover); }
+.question-option-text { font-size: 13px; min-width: 0; }
+/* Markdown inside an option must not introduce block spacing. */
+.question-option-text > *:first-child { margin-top: 0; }
+.question-option-text > *:last-child { margin-bottom: 0; }
+.question-option-text p { margin: 0; }
+
+.question-entry { display: flex; gap: 8px; align-items: flex-start; }
 .question-input {
   flex: 1;
-  min-width: 220px;
+  min-width: 0;
   padding: 6px 10px;
   background: var(--bg-inset);
   border: 1px solid var(--border-strong);
@@ -533,7 +557,12 @@ hr { border: 0; border-top: 1px solid var(--border); margin: 6px 0; }
   color: var(--text);
   font-family: inherit;
   font-size: 13px;
+  resize: none;
+  overflow-y: hidden;
+  line-height: 1.5;
 }
+.question-answer > *:first-child { margin-top: 0; }
+.question-answer > *:last-child { margin-bottom: 0; }
 .question-answer {
   margin-top: 8px;
   padding: 6px 10px;
@@ -576,6 +605,8 @@ hr { border: 0; border-top: 1px solid var(--border); margin: 6px 0; }
 
 #chat-textarea {
   width: 100%;
+  /* Floor is applied in autosize() from the real height of the button column,
+     so the box always matches it instead of leaving a gap underneath. */
   min-height: 76px;
   max-height: 340px;
   padding: 9px 12px;
@@ -603,6 +634,8 @@ hr { border: 0; border-top: 1px solid var(--border); margin: 6px 0; }
 /* Higher specificity than .btn-primary / .btn-stop, which are defined later in
    this file and would otherwise reimpose their horizontal padding and squash
    the icon. */
+#send-btn:disabled { opacity: 0.4; cursor: default; }
+#send-btn:disabled:hover { background: var(--accent); }
 .composer-actions .composer-send {
   display: inline-flex;
   align-items: center;

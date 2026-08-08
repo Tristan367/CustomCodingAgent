@@ -46,6 +46,7 @@ function initSession() {
   attachIfRunning();
   Dictation.init();
   markSessionSeen();
+  updateComposerButtons();
   if (!Persist.restore()) scrollToBottom(true);
 }
 
@@ -473,14 +474,12 @@ function flushRender(stream) {
 
 function setStreaming(active) {
   App.streaming = active;
-  // The send button stays available: submitting mid-run queues the message
-  // rather than starting a second turn.
-  if (App.els.stop) App.els.stop.hidden = !active;
   if (App.els.textarea) {
     App.els.textarea.placeholder = active
       ? 'Message the agent \u2014 sent at the next step'
       : 'Message the agent';
   }
+  updateComposerButtons();
 }
 
 /* Stop listening without stopping the run. */
@@ -922,35 +921,77 @@ function shortPath(path) {
   return parts.length > 2 ? `.../${parts.slice(-2).join('/')}` : path;
 }
 
+/* One option per row, whatever their length, so a set of options always reads
+   as a list rather than reflowing into a line. Markdown is rendered in both the
+   question and the options. */
 function appendQuestionCard(event) {
+  const multiple = !!event.multiple;
   const node = el('div', 'message question-card');
+  node.dataset.toolCallId = event.tool_call_id;
   node.appendChild(el('div', 'question-head', md.render(event.question)));
 
-  const actions = el('div', 'question-actions');
-  const input = document.createElement('input');
-  input.type = 'text';
+  const form = el('div', 'question-options');
+  const input = document.createElement('textarea');
   input.className = 'question-input';
-  input.placeholder = 'Your answer...';
+  input.rows = 1;
+  input.placeholder = multiple
+    ? 'Or type your own answer...'
+    : 'Type an answer, or answer in the message box below...';
 
-  function submit(value) {
-    const answer = (value || input.value).trim();
+  function finish(answer) {
     if (!answer) return;
-    actions.remove();
+    node.querySelector('.question-body')?.remove();
     node.classList.add('resolved');
-    node.appendChild(el('div', 'question-answer', md.escapeHtml(answer)));
+    node.appendChild(el('div', 'question-answer', md.render(answer)));
     resolveToolCall(event.tool_call_id, 'answer', answer);
   }
 
-  (event.options || []).forEach((option) => {
-    actions.appendChild(button(option, 'btn-option', () => submit(option)));
+  const options = event.options || [];
+  const inputs = [];
+  options.forEach((option, index) => {
+    const id = `q-${event.tool_call_id}-${index}`;
+    const row = el('label', 'question-option');
+    row.htmlFor = id;
+    const control = document.createElement('input');
+    control.type = multiple ? 'checkbox' : 'radio';
+    control.name = `q-${event.tool_call_id}`;
+    control.id = id;
+    control.value = option;
+    inputs.push(control);
+    const text = el('span', 'question-option-text', md.render(option));
+    row.append(control, text);
+    // Single choice commits immediately; multiple waits for Submit.
+    if (!multiple) control.addEventListener('change', () => finish(option));
+    form.appendChild(row);
   });
+
+  function submitTyped() {
+    finish(input.value.trim());
+  }
+
+  function submitChosen() {
+    const chosen = inputs.filter((c) => c.checked).map((c) => c.value);
+    const typed = input.value.trim();
+    if (typed) chosen.push(typed);
+    finish(chosen.join('; '));
+  }
 
   input.addEventListener('keydown', (e) => {
-    if (e.key === 'Enter') { e.preventDefault(); submit(); }
+    if (e.key === 'Enter' && !e.shiftKey) {
+      e.preventDefault();
+      multiple ? submitChosen() : submitTyped();
+    }
   });
-  actions.append(input, button('Send', 'btn-approve', () => submit()));
+  input.addEventListener('input', () => autosize(input));
 
-  node.appendChild(actions);
+  const body = el('div', 'question-body');
+  if (options.length) body.appendChild(form);
+  const row = el('div', 'question-entry');
+  row.append(input, button(multiple ? 'Submit' : 'Send',
+    'btn-approve', multiple ? submitChosen : submitTyped));
+  body.appendChild(row);
+  node.appendChild(body);
+
   App.els.messages.appendChild(node);
   autoscroll();
   input.focus();
@@ -1398,6 +1439,7 @@ const Dictation = {
       this.recorder.onerror = () => { this.teardown(); };
       this.recorder.start(250);
       this.recording = true;
+      updateComposerButtons();
       this.els.button.classList.add('recording');
       this.startMeter();
     } catch (err) {
@@ -1415,6 +1457,7 @@ const Dictation = {
       return '';
     }
     this.recording = false;
+    updateComposerButtons();
     this.els.button.classList.remove('recording');
     this.els.button.classList.add('transcribing');
     this.stopMeter();
@@ -1457,6 +1500,7 @@ const Dictation = {
   /* Return to a known-clean state from any path. */
   teardown() {
     this.recording = false;
+    updateComposerButtons();
     this.starting = false;
     this.pushToTalk = false;
     this.stopMeter();
@@ -1617,17 +1661,6 @@ async function deleteSession(sessionId, name) {
   else location.reload();
 }
 
-async function compactSession() {
-  if (!confirm('Summarise the older part of this conversation to free up context?')) return;
-  const resp = await fetch(`/api/sessions/${App.sessionId}/compact`, {
-    method: 'POST', body: new FormData(),
-  });
-  const data = await resp.json();
-  if (!data.ok) { alert(data.reason || 'Compaction failed'); return; }
-  htmx.ajax('GET', `/_messages/${App.sessionId}`, { target: '#chat-container', swap: 'innerHTML' });
-  refreshMeta();
-}
-
 function refreshMeta() {
   if (!App.sessionId) return;
   htmx.ajax('GET', `/_session_meta/${App.sessionId}`, { target: '#session-meta', swap: 'outerHTML' });
@@ -1698,7 +1731,36 @@ function persistTabOrder() {
 function autosize(textarea) {
   if (!textarea) return;
   textarea.style.height = 'auto';
-  textarea.style.height = `${Math.min(textarea.scrollHeight, 260)}px`;
+  let height = Math.min(textarea.scrollHeight, 260);
+  if (textarea.id === 'chat-textarea') {
+    // Never shorter than the button column beside it, or the composer grows a
+    // dead gap under the box whenever that column gains a row.
+    const actions = document.querySelector('.composer-actions');
+    if (actions) height = Math.max(height, actions.offsetHeight);
+  }
+  textarea.style.height = `${height}px`;
+}
+
+/* One button in that slot at a time.
+ *
+ * Send is live whenever there is something to send -- text, an attachment, or
+ * speech being dictated -- and that includes during a run, where it queues.
+ * With nothing to send during a run the same slot becomes Stop, so the column
+ * never changes height and the composer never jumps after a message goes. */
+function updateComposerButtons() {
+  const box = App.els.textarea;
+  const canSend = !!(
+    (box && box.value.trim())
+    || pendingImages.length
+    || (typeof Dictation !== 'undefined' && Dictation.recording)
+  );
+  const showStop = App.streaming && !canSend;
+  if (App.els.send) {
+    App.els.send.hidden = showStop;
+    App.els.send.disabled = !canSend;
+  }
+  if (App.els.stop) App.els.stop.hidden = !showStop;
+  autosize(box);
 }
 
 let scrollQueued = false;
@@ -1802,7 +1864,9 @@ document.addEventListener('visibilitychange', () => {
 
 document.addEventListener('input', (e) => {
   if (e.target.id === 'chat-textarea') {
-    autosize(e.target);
+    // Typing during a run turns Stop back into Send, so a queued message can
+    // go without stopping the work first.
+    updateComposerButtons();
     saveDraftSoon();
   }
 });
@@ -1829,6 +1893,7 @@ function removeAttachment(index) {
 }
 
 function renderAttachments() {
+  updateComposerButtons();
   const tray = document.getElementById('attachments');
   if (!tray) return;
   tray.innerHTML = '';

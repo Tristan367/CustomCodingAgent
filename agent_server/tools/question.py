@@ -18,8 +18,10 @@ async def ask_question(
     return ToolResult.error("question tool requires user interaction", "question")
 
 
-def format_prompt(question: str, options: list[str] | None) -> str:
+def format_prompt(question: str, options: list[str] | None, multiple: bool = False) -> str:
     text = question
     if options:
         text += "\n" + "\n".join(f"  {i + 1}. {o}" for i, o in enumerate(options))
+        if multiple:
+            text += "\n(any number of these may be chosen)"
     return text

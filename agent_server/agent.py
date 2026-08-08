@@ -237,6 +237,11 @@ async def _retire(session_id: str, handle: _Run):
 
 def forget_session(session_id: str):
     """Drop everything held in memory for a session that no longer exists."""
+    from agent_server.system_prompt import clear_env_cache
+    from agent_server.tools.file_ops import clear_read_cache
+
+    clear_env_cache(session_id)
+    clear_read_cache(session_id)
     _runs.pop(session_id, None)
     _queued.pop(session_id, None)
     _aborts.pop(session_id, None)
@@ -593,7 +598,10 @@ async def _drain_pending(session: dict, ctx: ToolContext) -> AsyncIterator[dict]
                 "tool_call_id": call["id"],
                 "question": args.get("question", ""),
                 "options": args.get("options") or [],
-                "prompt": format_prompt(args.get("question", ""), args.get("options")),
+                "multiple": bool(args.get("multiple")),
+                "prompt": format_prompt(
+                    args.get("question", ""), args.get("options"), bool(args.get("multiple"))
+                ),
             }
             return
 
@@ -709,6 +717,29 @@ async def _record(session_id: str, call: dict, result: ToolResult, duration_ms: 
         # simply not counted anywhere.
         usage=result.usage,
     )
+
+
+async def pending_question(session_id: str) -> dict | None:
+    """The question tool call waiting on the user, if there is one."""
+    rows = await db.get_messages(session_id)
+    _, pending = pending_tool_calls(rows)
+    for call in pending:
+        if tool_call_name(call) == "question":
+            return call
+    return None
+
+
+async def answer_pending_question(session_id: str, text: str) -> bool:
+    """Treat an ordinary chat message as the answer to an open question.
+
+    Without this the question stays unanswered, so the next run finds it still
+    pending and asks it again: the user sees their message, then a duplicate of
+    the question below it, while the original card sits there unresolved.
+    """
+    call = await pending_question(session_id)
+    if call is None:
+        return False
+    return await resolve_pending(session_id, call["id"], "answer", text)
 
 
 async def resolve_pending(

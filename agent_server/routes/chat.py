@@ -72,9 +72,13 @@ async def chat(session_id: str, request: Request, body: ChatRequest):
     text = body.message.strip()
     if not text:
         raise HTTPException(400, "Message is required")
-    # Persist before streaming. This is the step whose absence caused the model
-    # to be prompted with no user turn at all.
-    await db.add_message(session_id, "user", text)
+    # A message sent while a question is open is the answer to it. Recording it
+    # as a fresh user turn instead would leave the question pending, and the
+    # run would ask it again.
+    if not await agent.answer_pending_question(session_id, text):
+        # Persist before streaming. This is the step whose absence caused the
+        # model to be prompted with no user turn at all.
+        await db.add_message(session_id, "user", text)
     return _stream(session_id, request)
 
 
@@ -99,7 +103,8 @@ async def chat_with_image(
     if not attachments:
         if not text:
             raise HTTPException(400, "Message or image is required")
-        await db.add_message(session_id, "user", text)
+        if not await agent.answer_pending_question(session_id, text):
+            await db.add_message(session_id, "user", text)
         return _stream(session_id, request)
 
     saved: list[str] = []
@@ -124,7 +129,10 @@ async def chat_with_image(
     if text:
         content += f"\n\n{text}"
 
-    await db.add_message(session_id, "user", content)
+    # Images can answer a question too: the paths go in as the answer, and the
+    # agent calls vision on them as it would for any other message.
+    if not await agent.answer_pending_question(session_id, content):
+        await db.add_message(session_id, "user", content)
     return _stream(session_id, request)
 
 

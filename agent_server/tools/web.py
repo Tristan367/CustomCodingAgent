@@ -5,17 +5,59 @@ import re
 
 import httpx
 
-from agent_server.config import MAX_TOOL_RESULT_CHARS
+from agent_server.config import (
+    MAX_TOOL_RESULT_CHARS,
+    WEBFETCH_ALLOW_PRIVATE,
+    WEBFETCH_MAX_BYTES,
+    WEBFETCH_TIMEOUT,
+)
 from agent_server.tools.base import ToolContext, ToolResult, truncate
 
-TIMEOUT = 30
-MAX_BYTES = 5_000_000
+TIMEOUT = WEBFETCH_TIMEOUT
+MAX_BYTES = WEBFETCH_MAX_BYTES
+
+
+def _is_private(host: str) -> bool:
+    """True for anything on this machine or the local network.
+
+    The agent's own API is on localhost, so without this the model can reach
+    round and drive this application through its own webfetch tool. Cloud
+    metadata endpoints live on link-local addresses for the same reason.
+    """
+    import ipaddress
+    import socket
+
+    if not host:
+        return True
+    try:
+        infos = socket.getaddrinfo(host, None)
+    except socket.gaierror:
+        return False  # unresolvable; the request will fail on its own
+    for info in infos:
+        try:
+            ip = ipaddress.ip_address(info[4][0])
+        except ValueError:
+            continue
+        if (ip.is_private or ip.is_loopback or ip.is_link_local
+                or ip.is_reserved or ip.is_multicast):
+            return True
+    return False
 
 
 async def webfetch(ctx: ToolContext, *, url: str, **_) -> ToolResult:
     title = f"fetch {url[:80]}"
     if not url.startswith(("http://", "https://")):
         return ToolResult.error(f"invalid URL (must be http/https): {url}", title)
+
+    if not WEBFETCH_ALLOW_PRIVATE:
+        from urllib.parse import urlparse
+
+        if _is_private(urlparse(url).hostname or ""):
+            return ToolResult.error(
+                "refusing to fetch a local or private-network address. "
+                "Set WEBFETCH_ALLOW_PRIVATE=1 if that is genuinely wanted.",
+                title,
+            )
 
     try:
         async with httpx.AsyncClient(

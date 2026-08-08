@@ -7,14 +7,19 @@ the subagent raised.
 
 import asyncio
 
-from agent_server.config import MAX_TOOL_RESULT_CHARS
+from agent_server.config import (
+    MAX_TOOL_RESULT_CHARS,
+    SUBAGENT_EFFORT,
+    SUBAGENT_MAX_ROUNDS,
+    SUBAGENT_TIMEOUT,
+)
 from agent_server.conversation import normalize_tool_calls, parse_arguments, tool_call_name
 from agent_server.tools.base import ToolContext, ToolResult, truncate
 
 # Deliberately read-only: a subagent researches, the main agent makes changes.
 SUBAGENT_TOOLS = ("read", "grep", "glob", "webfetch")
-MAX_ROUNDS = 20
-TIMEOUT = 600
+MAX_ROUNDS = SUBAGENT_MAX_ROUNDS
+TIMEOUT = SUBAGENT_TIMEOUT
 
 SUBAGENT_PROMPT = """You are a research subagent. You investigate and report back; \
 you cannot modify anything.
@@ -63,7 +68,7 @@ async def _run(ctx: ToolContext, description: str, prompt: str, title: str) -> T
         finish = "stop"
 
         async for event in provider.chat_completion(
-            messages=messages, tools=tools, model=ctx.model, thinking_effort="low"
+            messages=messages, tools=tools, model=ctx.model, thinking_effort=SUBAGENT_EFFORT
         ):
             if ctx.abort.is_set():
                 return ToolResult.error("cancelled", title, usage_total)

@@ -178,11 +178,21 @@ register(Tool(
     parameters={
         "type": "object",
         "properties": {
-            "question": {"type": "string", "description": "The question to ask"},
+            "question": {
+                "type": "string",
+                "description": "The question to ask. Markdown is rendered.",
+            },
             "options": {
                 "type": "array",
                 "items": {"type": "string"},
-                "description": "Optional suggested answers",
+                "description": "Optional suggested answers. Markdown is rendered.",
+            },
+            "multiple": {
+                "type": "boolean",
+                "description": (
+                    "Allow several options to be chosen at once. The answer comes "
+                    "back as the chosen options separated by semicolons."
+                ),
             },
         },
         "required": ["question"],

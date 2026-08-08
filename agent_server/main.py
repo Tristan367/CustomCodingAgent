@@ -1,5 +1,6 @@
 """FastAPI application: page routes, HTMX partials, and settings."""
 
+import asyncio
 import json
 import re
 from contextlib import asynccontextmanager
@@ -219,6 +220,7 @@ async def _pending_prompt(session: dict, messages: list[dict]) -> dict | None:
             "tool_call_id": call["id"],
             "question": args.get("question", ""),
             "options": args.get("options") or [],
+            "multiple": bool(args.get("multiple")),
         }
     shell_auto = bool(session.get("bash_auto_approve")) or agent.runtime_auto_approve(session["id"])
     prompt = await permissions.check(
@@ -304,6 +306,9 @@ async def session_meta_partial(request: Request, session_id: str):
 
 # ── Tabs ────────────────────────────────────────────────────────────────────
 
+_tab_lock = asyncio.Lock()
+
+
 async def _open_tabs() -> list[str]:
     try:
         value = json.loads(await db.get_setting("open_tabs", "[]"))
@@ -317,10 +322,13 @@ async def _save_tabs(ids: list[str]):
 
 
 async def _track_tab(session_id: str):
-    tabs = await _open_tabs()
-    if session_id not in tabs:
-        tabs.append(session_id)
-        await _save_tabs(tabs)
+    # Read-modify-write: two tabs opened in quick succession would otherwise
+    # each read the old list and the second would drop the first.
+    async with _tab_lock:
+        tabs = await _open_tabs()
+        if session_id not in tabs:
+            tabs.append(session_id)
+            await _save_tabs(tabs)
 
 
 @app.get("/_tab_bar")

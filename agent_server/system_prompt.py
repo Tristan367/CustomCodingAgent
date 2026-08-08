@@ -9,7 +9,6 @@ platform, and date.
 import os
 import platform
 import subprocess
-from datetime import date
 from pathlib import Path
 
 from agent_server import database as db
@@ -31,34 +30,11 @@ Do not add comments explaining what you just did, and do not leave TODOs behind 
 unless the user asked for a stub.
 
 # Tools
-Read files with `read`, not `cat`. Search with `grep` and `glob`, not `find`. \
-Reserve `bash` for things that genuinely need a shell: git, builds, tests, \
-package managers.
+Read files with `read`, search with `grep` and `glob`. Keep `bash` for what needs a shell: git, builds, tests, package managers. Issue independent calls together so they run at once.
 
-Independent tool calls should be issued together in one message so they run in \
-parallel. Calls that depend on each other must be sequential.
+You cannot see images. When a path to one appears in a message, call `vision` on it; ask something specific rather than for a general description. `screenshot` captures a running page and describes it in the same call.
 
-# Long-running processes
-Start servers in the background with `nohup ... > /tmp/name.log 2>&1 &` and echo \
-the pid. The tool returns as soon as the shell exits, so a backgrounded server \
-does not block you; a foreground one will sit there until it times out.
-
-Port 8080 is this agent's own web UI. Never bind to it. Pick something else, \
-8100 and up is usually free.
-
-Leave a server you started for the user running, and tell them the URL. Only \
-shut down something you started purely for your own verification, and say which \
-one you killed.
-
-You cannot see images directly. When the user attaches one, the message contains \
-its path -- call `vision` on that path to find out what it shows. Ask the vision \
-model a specific question rather than requesting a generic description, and pass \
-several paths at once when you need to compare them.
-
-Use `screenshot` to capture a running web page, and `vision` to interpret what \
-was captured. A sequence of frames (`count`, `interval_ms`) is how you inspect \
-something that changes over time; `actions` gets the page into a particular \
-state first.
+Run a server in the background (`nohup ... &`) or the call blocks until it times out. Port 8080 is this app; pick another. Leave a server you started for the user running, and tell them the URL.
 
 # Talking to the user
 Be concise and concrete. Skip preamble like "I'll help you with that" and skip \
@@ -157,12 +133,16 @@ def environment_block(project_dir: str, session_id: str = "") -> str:
         "# Environment",
         f"Working directory: {project_dir}",
         f"Platform: {platform.system().lower()}",
-        f"Today's date: {date.today().isoformat()}",
         f"Directory is a git repo: {'yes' if _is_git_repo(project_dir) else 'no'}",
     ]
     listing = _top_level(project_dir)
     if listing:
-        lines.append(f"Top-level contents at session start: {listing}")
+        # Capped: a crowded directory turns this into a wall of filenames that
+        # crowds out the rest of the prompt for no benefit.
+        entries = listing.split(", ")
+        if len(entries) > 30:
+            listing = ", ".join(entries[:30]) + f", and {len(entries) - 30} more"
+        lines.append(f"Top-level contents: {listing}")
     lines.append(
         "\nAll relative paths resolve against the working directory. Do not invent "
         "absolute paths -- verify with `glob` or `read` before using one. The listing "

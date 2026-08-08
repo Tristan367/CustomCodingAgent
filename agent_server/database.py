@@ -428,8 +428,28 @@ async def get_session_usage(session_id: str) -> dict:
         " AND role = 'assistant' AND is_compacted = 0 ORDER BY id DESC LIMIT 1",
         (session_id,),
     )
-    context = 0
+    # A measured prompt size is only meaningful if nothing has been removed
+    # since it was measured. Right after a compaction the newest surviving
+    # assistant row still carries the prompt size from before the summary
+    # replaced everything, so the ring would keep showing the old figure until
+    # the next request happened to correct it.
+    stale = False
     if last:
+        newest_compaction = await _fetchone(
+            "SELECT created_at FROM compactions WHERE session_id = ?"
+            " ORDER BY id DESC LIMIT 1",
+            (session_id,),
+        )
+        last_row = await _fetchone(
+            "SELECT created_at FROM messages WHERE session_id = ? AND usage IS NOT NULL"
+            " AND role = 'assistant' AND is_compacted = 0 ORDER BY id DESC LIMIT 1",
+            (session_id,),
+        )
+        if newest_compaction and last_row:
+            stale = newest_compaction["created_at"] > last_row["created_at"]
+
+    context = 0
+    if last and not stale:
         u, _ = _price(last["usage"], {})
         context = u.get("prompt_tokens", 0) or 0
     if not context:
@@ -438,7 +458,12 @@ async def get_session_usage(session_id: str) -> dict:
             " WHERE session_id = ? AND is_compacted = 0",
             (session_id,),
         )
-        context = (row or {}).get("total", 0)
+        summaries = await _fetchone(
+            "SELECT COALESCE(SUM(compressed_token_count), 0) AS total FROM compactions"
+            " WHERE session_id = ?",
+            (session_id,),
+        )
+        context = (row or {}).get("total", 0) + (summaries or {}).get("total", 0)
 
     totals["context"] = context
     totals["threshold"] = (session or {}).get("compact_threshold") or COMPACT_THRESHOLD_TOKENS

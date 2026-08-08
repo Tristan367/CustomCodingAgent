@@ -69,10 +69,15 @@ async def get_system_prompt(session_id: str):
         raise HTTPException(404, "Session not found")
     from agent_server.system_prompt import session_system_prompt
 
+    started = bool(await db.get_messages(session_id))
+    pending = session.get("pending_system_prompt")
     return {
-        "prompt": await session_system_prompt(session),
-        "pending": bool(session.get("pending_system_prompt")),
+        # Show the queued text if there is one: that is what the user last
+        # asked for, and what they will want to edit further.
+        "prompt": pending or await session_system_prompt(session),
+        "pending": bool(pending),
         "custom": bool(session.get("prompt_custom")),
+        "started": started,
     }
 
 
@@ -97,8 +102,22 @@ async def set_system_prompt(session_id: str, payload: dict):
             session.get("prompt_profile") or "default", session["project_dir"], session_id
         )
         custom = 0
-    await db.update_session(session_id, system_prompt=text, prompt_custom=custom)
-    return {"ok": True, "prompt": text, "custom": bool(custom)}
+
+    # Changing the prompt of a conversation that has already started rewrites
+    # the front of the prefix and re-bills every token of it. Before the first
+    # message there is nothing cached, so it applies straight away; after that
+    # it waits for compaction, which rewrites the prefix anyway.
+    started = bool(await db.get_messages(session_id))
+    if started:
+        await db.update_session(
+            session_id, pending_system_prompt=text, prompt_custom=custom
+        )
+        return {"ok": True, "prompt": text, "custom": bool(custom), "deferred": True}
+
+    await db.update_session(
+        session_id, system_prompt=text, prompt_custom=custom, pending_system_prompt=None
+    )
+    return {"ok": True, "prompt": text, "custom": bool(custom), "deferred": False}
 
 
 @router.delete("/{session_id}")

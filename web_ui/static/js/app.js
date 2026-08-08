@@ -1128,7 +1128,13 @@ async function openSystemPrompt() {
   box.value = data ? data.prompt : '';
   box.dataset.original = box.value;
   const pending = document.getElementById('prompt-pending');
-  if (pending) pending.hidden = !(data && data.pending);
+  if (pending) {
+    pending.hidden = !(data && (data.pending || data.started));
+    pending.textContent = data && data.pending
+      ? 'A change is queued and will be adopted at the next compaction.'
+      : 'This conversation has started, so a change here is queued until the next '
+        + 'compaction. Before the first message it would apply immediately.';
+  }
 }
 
 async function saveSystemPrompt(text) {
@@ -1141,7 +1147,11 @@ async function saveSystemPrompt(text) {
   }).catch(() => null);
   closeModal('prompt-modal');
   if (!resp || !resp.ok) { appendNotice('error', 'Could not save the prompt.'); return; }
-  appendNotice('info', 'System prompt updated for this session.');
+  const data = await resp.json().catch(() => ({}));
+  appendNotice('info', data.deferred
+    ? 'System prompt saved. It takes effect at the next compaction \u2014 switching '
+      + 'now would re-read the whole conversation and bill it again.'
+    : 'System prompt updated. The conversation has not started, so it is already in use.');
 }
 
 /* Empty means "whatever the shared prompt renders to now". */

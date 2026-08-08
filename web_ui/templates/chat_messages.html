@@ -34,7 +34,7 @@
                opens by default. Everything else stays folded. #}
             <details class="tool-details diff-details" open>
                 <summary class="tool-summary">
-                    {{ m.content.splitlines()[0] if m.content else 'diff' }}
+                    {{ m.tool_title or (m.content.splitlines()[0] if m.content else 'diff') }}
                     <span class="diff-stat">{{ m.diff | diffstat }}</span>
                 </summary>
                 {# No newline between spans: they are display:block, so a literal newline
@@ -43,7 +43,7 @@
             </details>
             {% else %}
             <details class="tool-details">
-                <summary class="tool-summary">{{ m.tool_name or 'tool' }} result</summary>
+                <summary class="tool-summary">{{ m.tool_title or ((m.tool_name or 'tool') ~ ' result') }}</summary>
                 <pre class="tool-raw">{{ m.content[:8000] }}{% if m.content | length > 8000 %}
 ... [truncated in view]{% endif %}</pre>
             </details>

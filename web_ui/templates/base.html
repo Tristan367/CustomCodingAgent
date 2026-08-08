@@ -15,6 +15,9 @@
         <nav id="tab-bar"><div class="tab-scroll" id="tab-scroll"></div></nav>
         <a href="/prompts" class="topbar-link" title="Prompts &amp; tools">Prompts</a>
     </header>
+    {# Shown when the status poll cannot reach the server, so a stopped backend
+       is obvious rather than looking like a frozen page. #}
+    <div id="offline-banner" role="status" hidden></div>
     <main id="main-content">
         {% block content %}{% endblock %}
     </main>

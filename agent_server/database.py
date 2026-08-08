@@ -90,6 +90,7 @@ MIGRATIONS: list[tuple[str, str, str]] = [
     ("messages", "usage", "TEXT"),
     # Diffs used to be streamed over SSE only, so they vanished on reload.
     ("messages", "diff", "TEXT"),
+    ("messages", "tool_title", "TEXT"),
 ]
 
 
@@ -222,12 +223,13 @@ async def add_message(
     token_count: int | None = None,
     usage: dict | None = None,
     diff: str = "",
+    tool_title: str = "",
 ) -> dict:
     """Insert a message. `tool_calls` is stored as canonical OpenAI wire JSON."""
     msg_id = await _execute(
         "INSERT INTO messages (session_id, role, content, reasoning_content, tool_calls,"
-        " tool_call_id, tool_name, is_error, token_count, usage, diff, created_at)"
-        " VALUES (?,?,?,?,?,?,?,?,?,?,?,?)",
+        " tool_call_id, tool_name, is_error, token_count, usage, diff, tool_title,"
+        " created_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)",
         (
             session_id,
             role,
@@ -240,6 +242,7 @@ async def add_message(
             token_count,
             json.dumps(usage) if usage else None,
             diff or None,
+            tool_title or None,
             _now(),
         ),
     )

@@ -421,6 +421,7 @@ async def _record(session_id: str, call: dict, result: ToolResult) -> dict:
         # Persisted so the inline diff is still there after a page reload.
         # It is display-only and never sent back to the model.
         diff=result.diff,
+        tool_title=result.title,
     )
 
 

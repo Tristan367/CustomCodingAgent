@@ -1,18 +1,22 @@
 <div id="session-view" data-session-id="{{ session.id }}">
     {% include "components/session_meta.html" %}
 
-    <div id="chat-container">
-        {% include "chat_messages.html" %}
-    </div>
+    {# Anchors #jump-bottom to the scroll region so it sits above the composer
+       rather than on top of it. #}
+    <div class="chat-region">
+        <div id="chat-container">
+            {% include "chat_messages.html" %}
+        </div>
 
-    <button type="button" id="jump-bottom" title="Jump to the newest message"
+        <button type="button" id="jump-bottom" title="Jump to the newest message"
             aria-label="Jump to the newest message">
         <svg width="15" height="15" viewBox="0 0 24 24" fill="none"
              stroke="currentColor" stroke-width="2.4" stroke-linecap="round"
              stroke-linejoin="round" aria-hidden="true">
             <path d="M12 5v14M19 12l-7 7-7-7"/>
         </svg>
-    </button>
+        </button>
+    </div>
 
     <div id="chat-input-area">
         <form id="chat-form" autocomplete="off">

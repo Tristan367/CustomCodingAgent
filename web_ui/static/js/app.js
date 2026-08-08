@@ -32,6 +32,7 @@ function initSession() {
     App.els.scroller.addEventListener('scroll', saveScrollSoon, { passive: true });
     initJumpButton();
   }
+  stopAllElapsed();
   renderStoredMessages();
   restorePending();
   Dictation.init();
@@ -44,10 +45,15 @@ document.addEventListener('DOMContentLoaded', () => {
   initSession();
   refreshTabBar();
   Notifier.poll();
-  setInterval(() => Notifier.poll(), 2000);
+  setInterval(() => Notifier.tick(), 1000);
 });
 
-window.addEventListener('focus', markSessionSeen);
+window.addEventListener('focus', () => {
+  markSessionSeen();
+  // Retry at once: if the user came back, they want current state.
+  Notifier.nextAttemptAt = 0;
+  Notifier.poll();
+});
 window.addEventListener('beforeunload', () => { Persist.saveDraft(); Persist.saveScroll(); });
 
 document.addEventListener('htmx:beforeSwap', (e) => {
@@ -177,11 +183,13 @@ async function streamRequest(url, options) {
     flushRender(stream);
     endAssistantSegment(stream);
     clearToolProgress(stream);
+    if (!stream.failed) {
+      // The turn was answered, so this is no longer the trailing unanswered
+      // message and rewriting it would rewrite history.
+      document.querySelectorAll('.msg-actions').forEach((n) => n.remove());
+    }
     document.querySelectorAll('.message.tool.pending')
       .forEach((n) => { stopElapsed(n); n.classList.remove('pending'); });
-    // Defensive: any bubble that somehow kept the class would blink forever.
-    document.querySelectorAll('.message.streaming')
-      .forEach((n) => n.classList.remove('streaming'));
     setStreaming(false);
     App.abortController = null;
     refreshMeta();
@@ -229,9 +237,9 @@ function endAssistantSegment(stream) {
   stream.contentEl = null;
   stream.text = '';
   if (!node) return;
-  node.classList.remove('streaming');
   const text = node.querySelector('.content-text');
-  if (text && !text.textContent.trim() && !node.querySelector('.diff-block, .msg-attachments')) {
+  if (text && !text.textContent.trim()
+      && !node.querySelector('.diff-block, .msg-attachments, .reasoning-details')) {
     node.remove();
   }
 }
@@ -254,14 +262,23 @@ function handleEvent(event, stream) {
 
     case 'content':
       clearToolProgress(stream);
-      if (stream.reasoningEl) {
+      if (!stream.assistantEl) {
+        if (stream.reasoningEl) {
+          // Reuse the bubble holding the thinking block. The server stores
+          // reasoning and content on one row, so keeping them in one bubble
+          // means the page does not rearrange itself when reloaded.
+          stream.assistantEl = stream.reasoningEl.closest('.message');
+          collapseReasoning(stream.reasoningEl);
+          stream.reasoningEl = null;
+          stream.contentEl = el('div', 'content-text');
+          stream.assistantEl.querySelector('.msg-content').appendChild(stream.contentEl);
+        } else {
+          stream.assistantEl = appendMessage('assistant', '');
+          stream.contentEl = stream.assistantEl.querySelector('.content-text');
+        }
+      } else if (stream.reasoningEl) {
         collapseReasoning(stream.reasoningEl);
         stream.reasoningEl = null;
-      }
-      if (!stream.assistantEl) {
-        stream.assistantEl = appendMessage('assistant', '');
-        stream.assistantEl.classList.add('streaming');
-        stream.contentEl = stream.assistantEl.querySelector('.content-text');
       }
       stream.text += event.text;
       scheduleRender(stream);
@@ -298,6 +315,7 @@ function handleEvent(event, stream) {
       break;
 
     case 'error':
+      stream.failed = true;
       appendNotice('error', event.message);
       break;
 
@@ -400,6 +418,7 @@ function appendMessage(role, text) {
   content.innerHTML = md.render(text);
   body.appendChild(content);
   node.appendChild(body);
+  node.appendChild(el('span', 'msg-time', clockTime()));
   App.els.messages.appendChild(node);
   autoscroll();
   return node;
@@ -419,7 +438,9 @@ function attachMessageActions(messageId) {
     button('edit', '', () => editMessage(messageId)),
     button('retry', '', () => retryFrom(messageId)),
   );
-  side.append(actions, el('span', 'msg-time', new Date().toTimeString().slice(0, 8)));
+  // Move the existing timestamp into the side group instead of adding a second.
+  const time = node.querySelector(':scope > .msg-time') || el('span', 'msg-time', clockTime());
+  side.append(actions, time);
   node.appendChild(side);
 }
 
@@ -441,28 +462,26 @@ function appendUserMessage(text, attachments) {
   return node;
 }
 
+/* Same markup the server renders in chat_messages.html, so refreshing the page
+   does not change how a thinking block looks. */
 function appendReasoning() {
-  const node = el('div', 'message reasoning');
+  const node = el('div', 'message assistant');
   node.appendChild(el('div', 'msg-role', 'thinking'));
   const body = el('div', 'msg-content');
-  const toggle = el('button', 'reasoning-toggle', 'Hide thinking');
-  toggle.type = 'button';
+  const details = el('details', 'tool-details reasoning-details');
+  details.open = true;
   const text = el('pre', 'reasoning-text');
-  toggle.addEventListener('click', () => {
-    const hidden = text.hidden;
-    text.hidden = !hidden;
-    toggle.textContent = hidden ? 'Hide thinking' : 'Show thinking';
-  });
-  body.append(toggle, text);
+  details.append(el('summary', 'tool-summary', 'Thinking'), text);
+  body.appendChild(details);
   node.appendChild(body);
+  node.appendChild(el('span', 'msg-time', clockTime()));
   App.els.messages.appendChild(node);
   return text;
 }
 
 function collapseReasoning(textEl) {
-  textEl.hidden = true;
-  const toggle = textEl.parentElement.querySelector('.reasoning-toggle');
-  if (toggle) toggle.textContent = 'Show thinking';
+  const details = textEl.closest('details');
+  if (details) details.open = false;
 }
 
 function appendToolCall(event) {
@@ -480,27 +499,50 @@ function appendToolCall(event) {
   // already says what is being done, and edits show a real diff.
   body.appendChild(details);
   node.appendChild(body);
+  node.appendChild(el('span', 'msg-time', clockTime()));
   App.els.messages.appendChild(node);
   startElapsed(node, elapsed);
   autoscroll();
   return node;
 }
 
-/* Tick a running duration so a slow tool never looks like a frozen UI. */
+/* Tick a running duration so a slow tool never looks like a frozen UI.
+ *
+ * These timers must be able to end themselves. If the transcript is swapped out
+ * while a tool is still running -- switching tabs mid-run, an htmx swap -- then
+ * stopElapsed is never called for those nodes, and without the isConnected
+ * check each one keeps waking up ten times a second, forever, writing to a
+ * detached element. They accumulate for the life of the page. */
+const ELAPSED_GUARD_MS = 60 * 60 * 1000;
+
 function startElapsed(node, target) {
   const began = performance.now();
   const id = setInterval(() => {
-    target.textContent = ((performance.now() - began) / 1000).toFixed(1) + 's';
+    const age = performance.now() - began;
+    if (!node.isConnected || age > ELAPSED_GUARD_MS) {
+      clearElapsed(id);
+      return;
+    }
+    target.textContent = (age / 1000).toFixed(1) + 's';
   }, 100);
   node._elapsedTimer = id;
   node._elapsedBegan = began;
   App.timers.add(id);
 }
 
+function clearElapsed(id) {
+  clearInterval(id);
+  App.timers.delete(id);
+}
+
+/* Belt and braces: drop every timer when the view is torn down. */
+function stopAllElapsed() {
+  [...App.timers].forEach(clearElapsed);
+}
+
 function stopElapsed(node) {
   if (!node || !node._elapsedTimer) return;
-  clearInterval(node._elapsedTimer);
-  App.timers.delete(node._elapsedTimer);
+  clearElapsed(node._elapsedTimer);
   node._elapsedTimer = null;
   const target = node.querySelector('.tool-elapsed');
   if (target) {
@@ -525,7 +567,11 @@ function completeToolCall(event) {
 
   const details = node.querySelector('.tool-details');
   if (event.diff) {
-    node.querySelector('.msg-content').appendChild(renderDiff(event.diff, event.title));
+    // The diff box carries its own title, so keeping the plain details too
+    // would show the same line twice.
+    details.replaceWith(renderDiff(event.diff, event.title));
+    autoscroll();
+    return;
   }
   const result = el('div', 'tool-result');
   result.appendChild(el('div', 'tool-result-label', event.is_error ? 'error' : 'output'));
@@ -638,11 +684,18 @@ function appendPermissionCard(event) {
   }
 
   function finish(action, value, scope) {
-    actions.remove();
-    node.classList.add('resolved');
-    head.textContent = action === 'approve'
-      ? (scope === 'directory' ? `Allowed — ${event.scope} is now writable` : 'Approved')
-      : 'Rejected';
+    if (action === 'approve') {
+      // The tool call bubble that follows already shows the command, so an
+      // "Approved" card is pure noise taking up several lines.
+      node.remove();
+    } else {
+      // A rejection leaves no other trace, so keep one compact line.
+      actions.remove();
+      detail.remove();
+      sub.remove();
+      node.className = 'message notice permission-resolved';
+      head.textContent = `Rejected: ${truncate(event.command || event.path || 'tool call', 90)}`;
+    }
     if (scope === 'session') markAutoApprove(true);
     resolveToolCall(event.tool_call_id, action, value, scope, event.scope);
   }
@@ -903,6 +956,10 @@ function dropMessagesAfter(messageId) {
 
 /* ── Session status + notification sounds ────────────────────────────────── */
 
+const POLL_INTERVAL_MS = 2000;
+/* Escalating so a long outage is not thousands of failed requests. */
+const RETRY_BACKOFF_MS = [2000, 5000, 10000, 30000];
+
 const Notifier = {
   enabled: true,
   ctx: null,
@@ -935,12 +992,51 @@ const Notifier = {
     } catch (_) { /* audio unavailable */ }
   },
 
+  failures: 0,
+  nextAttemptAt: 0,
+
+  /* One timer drives everything: it counts down the retry and decides when the
+     next poll is due. Creating a timer per failure is how you end up with a
+     page full of intervals nobody owns. */
+  tick() {
+    const now = performance.now();
+    if (this.failures) this.showOffline(now);
+    if (now >= this.nextAttemptAt) this.poll();
+  },
+
+  showOffline(now) {
+    const banner = document.getElementById('offline-banner');
+    if (!banner) return;
+    const secs = Math.max(0, Math.ceil((this.nextAttemptAt - now) / 1000));
+    banner.hidden = false;
+    banner.textContent = secs
+      ? `Can't reach the server \u2014 retrying in ${secs}s (attempt ${this.failures})`
+      : `Reconnecting\u2026 (attempt ${this.failures + 1})`;
+  },
+
+  hideOffline() {
+    const banner = document.getElementById('offline-banner');
+    if (banner) { banner.hidden = true; banner.textContent = ''; }
+  },
+
   async poll() {
+    // Claim the next slot up front so a slow request cannot overlap itself.
+    this.nextAttemptAt = performance.now() + POLL_INTERVAL_MS;
     let data;
     try {
       data = await (await fetch('/api/status')).json();
     } catch (_) {
+      this.failures += 1;
+      const wait = RETRY_BACKOFF_MS[Math.min(this.failures - 1, RETRY_BACKOFF_MS.length - 1)];
+      this.nextAttemptAt = performance.now() + wait;
+      this.showOffline(performance.now());
       return;
+    }
+    if (this.failures) {
+      this.failures = 0;
+      this.hideOffline();
+      // Pick up anything that happened while we were disconnected.
+      refreshTabBar();
     }
     const sessions = data.sessions || {};
 
@@ -1480,6 +1576,12 @@ function scrollToBottom(instant) {
   });
 }
 
+/* Matches the clocktime Jinja filter: 12-hour, no seconds. */
+function clockTime(date) {
+  return (date || new Date())
+    .toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit', hour12: true });
+}
+
 function truncate(text, n) {
   text = String(text || '');
   return text.length > n ? `${text.slice(0, n)}...` : text;
@@ -1520,7 +1622,7 @@ document.addEventListener('keyup', (e) => {
 // Releasing the key outside the window would otherwise leave the mic hot.
 window.addEventListener('blur', () => Dictation.release());
 // Last-resort teardown: never leave a mic stream or animation loop running.
-window.addEventListener('pagehide', () => Dictation.teardown());
+window.addEventListener('pagehide', () => { Dictation.teardown(); stopAllElapsed(); });
 document.addEventListener('visibilitychange', () => {
   if (document.hidden && Dictation.pushToTalk) Dictation.release();
 });

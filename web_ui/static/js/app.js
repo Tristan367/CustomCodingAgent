@@ -124,6 +124,16 @@ async function onSubmit(event) {
   const attachments = pendingImages.slice();
   if (!message && !attachments.length) return;
 
+  // A message sent while a question is open is the answer to it. The server
+  // records it that way; reflect that here so the card does not sit there
+  // looking unanswered until the page is reloaded.
+  const openQuestion = App.els.messages.querySelector('.question-card:not(.resolved)');
+  if (openQuestion && !App.streaming) {
+    openQuestion.querySelector('.question-body')?.remove();
+    openQuestion.classList.add('resolved');
+    openQuestion.appendChild(el('div', 'question-answer', md.render(message)));
+  }
+
   // Typing while it works: hand the message to the running turn instead of
   // starting a second one. The agent picks it up at the next turn boundary,
   // so it keeps going and sees the message on its next request.

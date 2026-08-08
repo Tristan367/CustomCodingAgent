@@ -546,6 +546,14 @@ hr { border: 0; border-top: 1px solid var(--border); margin: 6px 0; }
 .question-option-text > *:last-child { margin-bottom: 0; }
 .question-option-text p { margin: 0; }
 
+/* An answered question, as re-rendered from the database. */
+.question-options.asked .question-option { cursor: default; padding: 4px 10px; }
+.question-options.asked .question-option:hover { background: none; border-color: transparent; }
+.question-option-mark { width: 12px; flex: 0 0 auto; color: var(--text-faint); font-size: 12px; }
+.question-option.chosen-yes .question-option-mark { color: var(--accent); }
+.question-option.chosen-yes .question-option-text { color: var(--text); }
+.question-option.chosen-no .question-option-text { color: var(--text-faint); }
+
 .question-entry { display: flex; gap: 8px; align-items: flex-start; }
 .question-input {
   flex: 1;

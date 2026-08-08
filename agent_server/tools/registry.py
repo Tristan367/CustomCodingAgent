@@ -172,8 +172,11 @@ register(Tool(
 register(Tool(
     name="question",
     description=(
-        "Ask the user a question and wait for their answer. Use when a decision is "
-        "genuinely ambiguous and guessing wrong would waste significant work."
+        "Ask the user a question and wait for their answer. Use when a decision "
+        "is genuinely ambiguous and guessing wrong would waste significant work. "
+        "Set multiple=true to let them choose several options at once; leave it "
+        "off and the first click answers immediately. Markdown is rendered in "
+        "the question and in every option."
     ),
     parameters={
         "type": "object",

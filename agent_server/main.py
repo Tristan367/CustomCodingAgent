@@ -201,7 +201,29 @@ async def _session_context(session: dict) -> dict:
         "sound_enabled": await _sound_enabled(),
         "threshold_steps": THRESHOLD_STEPS,
         "allowed_dirs": await permissions.list_allowed(session["id"]),
+        "questions": _question_map(messages),
     }
+
+
+def _question_map(messages: list[dict]) -> dict[str, dict]:
+    """tool_call_id -> the question that was asked.
+
+    A question's text lives in the assistant turn's tool_calls, and the answer
+    in the tool result. Without pairing them back up the transcript shows a
+    list of answers to invisible questions.
+    """
+    out: dict[str, dict] = {}
+    for row in messages:
+        for call in normalize_tool_calls(row.get("tool_calls")):
+            if call["function"]["name"] != "question":
+                continue
+            args = parse_arguments(call)
+            out[call["id"]] = {
+                "question": args.get("question", ""),
+                "options": args.get("options") or [],
+                "multiple": bool(args.get("multiple")),
+            }
+    return out
 
 
 async def _pending_prompt(session: dict, messages: list[dict]) -> dict | None:

@@ -25,7 +25,31 @@
     {% endif %}
 
     {% for m in messages %}
-    {% if m.role == 'tool' %}
+    {% if m.role == 'tool' and m.tool_name == 'question' and questions.get(m.tool_call_id) %}
+    {# Question and answer belong together: the text lives on the assistant turn
+       that asked it, the answer on this tool result. #}
+    {% set q = questions.get(m.tool_call_id) %}
+    <div class="message question-card resolved" id="msg-{{ m.id }}">
+        <div class="msg-content">
+            <div class="question-head" data-markdown>{{ q.question }}</div>
+            {% if q.options %}
+            <div class="question-options asked">
+                {% for option in q.options %}
+                <div class="question-option chosen-{{ 'yes' if option in m.content else 'no' }}">
+                    <span class="question-option-mark" aria-hidden="true">
+                        {{- '&#10003;' | safe if option in m.content else '&middot;' | safe -}}
+                    </span>
+                    <span class="question-option-text" data-markdown>{{ option }}</span>
+                </div>
+                {% endfor %}
+            </div>
+            {% endif %}
+            <div class="question-answer" data-markdown>{{ m.content }}</div>
+        </div>
+        <span class="msg-time" title="answered at {{ m.created_at | clocktime }}">{{ m.created_at | clocktime }}</span>
+    </div>
+
+    {% elif m.role == 'tool' %}
     <div class="message tool {% if m.is_error %}tool-error{% endif %}" id="msg-{{ m.id }}"
          data-tool-call-id="{{ m.tool_call_id or '' }}">
         <div class="msg-role">{{ m.tool_name or 'result' }}</div>

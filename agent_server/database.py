@@ -91,6 +91,8 @@ MIGRATIONS: list[tuple[str, str, str]] = [
     # Diffs used to be streamed over SSE only, so they vanished on reload.
     ("messages", "diff", "TEXT"),
     ("messages", "tool_title", "TEXT"),
+    ("messages", "duration_ms", "INTEGER"),
+    ("messages", "file_path", "TEXT"),
 ]
 
 
@@ -224,12 +226,14 @@ async def add_message(
     usage: dict | None = None,
     diff: str = "",
     tool_title: str = "",
+    duration_ms: int = 0,
+    file_path: str = "",
 ) -> dict:
     """Insert a message. `tool_calls` is stored as canonical OpenAI wire JSON."""
     msg_id = await _execute(
         "INSERT INTO messages (session_id, role, content, reasoning_content, tool_calls,"
         " tool_call_id, tool_name, is_error, token_count, usage, diff, tool_title,"
-        " created_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)",
+        " duration_ms, file_path, created_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
         (
             session_id,
             role,
@@ -243,6 +247,8 @@ async def add_message(
             json.dumps(usage) if usage else None,
             diff or None,
             tool_title or None,
+            duration_ms or None,
+            file_path or None,
             _now(),
         ),
     )
@@ -280,6 +286,44 @@ async def delete_messages_after(session_id: str, message_id: int) -> int:
 
 async def update_message(message_id: int, content: str):
     await _execute("UPDATE messages SET content = ? WHERE id = ?", (content, message_id))
+
+
+async def get_turn_changes(session_id: str) -> dict:
+    """Aggregate the file changes made since the last user message.
+
+    Used for the summary shown when a turn finishes, so the user can see
+    everything that was touched without scrolling back through the transcript.
+    """
+    rows = await _fetchall(
+        "SELECT id FROM messages WHERE session_id = ? AND role = 'user' ORDER BY id DESC LIMIT 1",
+        (session_id,),
+    )
+    since = rows[0]["id"] if rows else 0
+    edits = await _fetchall(
+        "SELECT file_path, diff, tool_name FROM messages"
+        " WHERE session_id = ? AND id > ? AND diff IS NOT NULL AND file_path IS NOT NULL"
+        " ORDER BY id ASC",
+        (session_id, since),
+    )
+    by_file: dict[str, dict] = {}
+    for row in edits:
+        entry = by_file.setdefault(
+            row["file_path"], {"path": row["file_path"], "added": 0, "removed": 0, "diffs": []}
+        )
+        diff = row["diff"] or ""
+        entry["added"] += sum(
+            1 for ln in diff.splitlines() if ln.startswith("+") and not ln.startswith("+++")
+        )
+        entry["removed"] += sum(
+            1 for ln in diff.splitlines() if ln.startswith("-") and not ln.startswith("---")
+        )
+        entry["diffs"].append(diff)
+    files = list(by_file.values())
+    return {
+        "files": files,
+        "added": sum(f["added"] for f in files),
+        "removed": sum(f["removed"] for f in files),
+    }
 
 
 async def mark_messages_compacted(session_id: str, message_ids: list[int]):

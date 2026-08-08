@@ -33,9 +33,10 @@
             {# Diffs are the one tool result worth showing unprompted, so this
                opens by default. Everything else stays folded. #}
             <details class="tool-details diff-details" open>
+                {% set added, removed = m.diff | diffstat %}
                 <summary class="tool-summary">
-                    {{ m.tool_title or (m.content.splitlines()[0] if m.content else 'diff') }}
-                    <span class="diff-stat">{{ m.diff | diffstat }}</span>
+                    <span class="tool-label">{{ m.tool_title or (m.content.splitlines()[0] if m.content else 'diff') }}</span>
+                    <span class="diff-stat"><span class="diff-stat-add">+{{ added }}</span><span class="diff-stat-del">&minus;{{ removed }}</span></span>
                 </summary>
                 {# No newline between spans: they are display:block, so a literal newline
    inside the <pre> would double every line's height. #}
@@ -43,13 +44,18 @@
             </details>
             {% else %}
             <details class="tool-details">
-                <summary class="tool-summary">{{ m.tool_title or ((m.tool_name or 'tool') ~ ' result') }}</summary>
+                <summary class="tool-summary">
+                    <span class="tool-label">{{ m.tool_title or ((m.tool_name or 'tool') ~ ' result') }}</span>
+                    {%- if m.duration_ms | duration %}
+                    <span class="tool-elapsed">{{ m.duration_ms | duration }}</span>
+                    {%- endif %}
+                </summary>
                 <pre class="tool-raw">{{ m.content[:8000] }}{% if m.content | length > 8000 %}
 ... [truncated in view]{% endif %}</pre>
             </details>
             {% endif %}
         </div>
-        <span class="msg-time">{{ m.created_at | clocktime }}</span>
+        <span class="msg-time" title="finished at {{ m.created_at | clocktime }}">{{ m.created_at | clocktime }}</span>
     </div>
 
     {% else %}

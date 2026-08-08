@@ -152,10 +152,17 @@ def difflines(diff: str) -> list[tuple[str, str]]:
     return out
 
 
-def diffstat_label(diff: str) -> str:
+def diffstat_counts(diff: str) -> tuple[int, int]:
     added = sum(1 for ln in (diff or "").splitlines() if ln.startswith("+") and not ln.startswith("+++"))
     removed = sum(1 for ln in (diff or "").splitlines() if ln.startswith("-") and not ln.startswith("---"))
-    return f"+{added} \u2212{removed}"
+    return added, removed
+
+
+def duration_label(ms: int | None) -> str:
+    """Only worth showing once a call is slow enough to have been noticed."""
+    if not ms or ms < 1000:
+        return ""
+    return f"{ms / 1000:.1f}s"
 
 
 templates.env.filters["clocktime"] = clocktime
@@ -164,7 +171,8 @@ templates.env.filters["attachments"] = extract_attachments
 templates.env.filters["withoutattachments"] = strip_attachments
 templates.env.filters["toolcalls"] = normalize_tool_calls
 templates.env.filters["difflines"] = difflines
-templates.env.filters["diffstat"] = diffstat_label
+templates.env.filters["diffstat"] = diffstat_counts
+templates.env.filters["duration"] = duration_label
 
 
 # ── Shared context ──────────────────────────────────────────────────────────

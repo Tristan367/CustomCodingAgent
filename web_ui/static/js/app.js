@@ -324,6 +324,7 @@ function handleEvent(event, stream) {
       break;
 
     case 'done':
+      renderChangeSummary(event.changes);
       break;
   }
 }
@@ -495,8 +496,12 @@ function appendToolCall(event) {
   const elapsed = el('span', 'tool-elapsed', '0.0s');
   summary.append(el('span', 'spinner-dot'), label, elapsed);
   details.appendChild(summary);
-  // The raw argument JSON used to be dumped here. It is noise: the summary line
-  // already says what is being done, and edits show a real diff.
+  // The raw argument JSON used to be dumped here: noise. A subagent is the
+  // exception, because its prompt is the only way to see what it was asked
+  // while it works.
+  if (event.name === 'task' && event.args && event.args.prompt) {
+    details.appendChild(el('pre', 'tool-raw subagent-prompt', event.args.prompt));
+  }
   body.appendChild(details);
   node.appendChild(body);
   node.appendChild(el('span', 'msg-time', clockTime()));
@@ -540,17 +545,20 @@ function stopAllElapsed() {
   [...App.timers].forEach(clearElapsed);
 }
 
-function stopElapsed(node) {
-  if (!node || !node._elapsedTimer) return;
-  clearElapsed(node._elapsedTimer);
-  node._elapsedTimer = null;
-  const target = node.querySelector('.tool-elapsed');
-  if (target) {
-    const secs = (performance.now() - node._elapsedBegan) / 1000;
-    // Sub-second calls are not interesting; drop the label entirely.
-    if (secs < 1) target.remove();
-    else target.textContent = secs.toFixed(1) + 's';
+function stopElapsed(node, durationMs) {
+  if (!node) return;
+  if (node._elapsedTimer) {
+    clearElapsed(node._elapsedTimer);
+    node._elapsedTimer = null;
   }
+  const target = node.querySelector('.tool-elapsed');
+  if (!target) return;
+  const secs = durationMs != null
+    ? durationMs / 1000
+    : (performance.now() - node._elapsedBegan) / 1000;
+  // Sub-second calls are not interesting; drop the label entirely.
+  if (secs < 1) target.remove();
+  else target.textContent = secs.toFixed(1) + 's';
 }
 
 function completeToolCall(event) {
@@ -559,7 +567,12 @@ function completeToolCall(event) {
   node.classList.remove('pending');
   if (event.is_error) node.classList.add('tool-error');
 
-  stopElapsed(node);
+  stopElapsed(node, event.duration_ms);
+  const finished = node.querySelector(':scope > .msg-time');
+  if (finished) {
+    finished.textContent = clockTime();
+    finished.title = `finished at ${clockTime()}`;
+  }
   const label = node.querySelector('.tool-label');
   if (label) label.textContent = event.title || event.name;
   const dot = node.querySelector('.spinner-dot');
@@ -580,10 +593,38 @@ function completeToolCall(event) {
   autoscroll();
 }
 
+/* Everything the turn touched, in one place, so the user does not have to
+   scroll back through the transcript to see what changed. */
+function renderChangeSummary(changes) {
+  if (!changes || !changes.files || !changes.files.length) return;
+  document.querySelectorAll('.change-summary').forEach((n) => n.remove());
+  const node = el('div', 'message change-summary');
+  node.appendChild(el('div', 'msg-role', 'changes'));
+  const body = el('div', 'msg-content');
+  const outer = el('details', 'tool-details');
+  outer.open = true;
+  const summary = el('summary', 'tool-summary');
+  const count = `${changes.files.length} file${changes.files.length === 1 ? '' : 's'} changed`;
+  const stat = el('span', 'diff-stat');
+  stat.append(el('span', 'diff-stat-add', `+${changes.added}`),
+              el('span', 'diff-stat-del', `\u2212${changes.removed}`));
+  summary.append(el('span', 'tool-label', count), stat);
+  outer.appendChild(summary);
+  for (const file of changes.files) {
+    const combined = file.diffs.join('\n');
+    outer.appendChild(renderDiff(combined, shortPath(file.path), false));
+  }
+  body.appendChild(outer);
+  node.appendChild(body);
+  node.appendChild(el('span', 'msg-time', clockTime()));
+  App.els.messages.appendChild(node);
+  autoscroll();
+}
+
 /* Unified diff with per-line colouring, in a collapsible box that starts open.
    Mirrors the server-side render in chat_messages.html so a reloaded page looks
    the same as the streamed one. */
-function renderDiff(diff, title) {
+function renderDiff(diff, title, open = true) {
   const box = el('pre', 'diff-block');
   let added = 0;
   let removed = 0;
@@ -600,12 +641,12 @@ function renderDiff(diff, title) {
     box.appendChild(row);
   }
   const details = el('details', 'tool-details diff-details');
-  details.open = true;
+  details.open = open;
   const summary = el('summary', 'tool-summary');
-  summary.append(
-    el('span', 'tool-label', title || 'diff'),
-    el('span', 'diff-stat', `+${added} \u2212${removed}`),
-  );
+  const stat = el('span', 'diff-stat');
+  stat.append(el('span', 'diff-stat-add', `+${added}`),
+              el('span', 'diff-stat-del', `\u2212${removed}`));
+  summary.append(el('span', 'tool-label', title || 'diff'), stat);
   details.append(summary, box);
   return details;
 }

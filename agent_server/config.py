@@ -65,6 +65,13 @@ MAX_TOOL_RESULT_CHARS = int(os.getenv("MAX_TOOL_RESULT_CHARS", "50000"))
 VISION_OLLAMA_URL = os.getenv("VISION_OLLAMA_URL", "http://vision-host.local:11434")
 VISION_MODEL = os.getenv("VISION_MODEL", "qwen3-vl:32b")
 VISION_TIMEOUT = int(os.getenv("VISION_TIMEOUT", "300"))
+# Ollama unloads an idle model after five minutes by default. Reloading a 32B
+# vision model costs about ten seconds, which dwarfs the two seconds the actual
+# inference takes, so hold it in memory between calls.
+VISION_KEEP_ALIVE = os.getenv("VISION_KEEP_ALIVE", "30m")
+# Must be identical on every request: Ollama reloads the model whenever the
+# options change, which would reintroduce the cold start it is meant to avoid.
+VISION_NUM_CTX = int(os.getenv("VISION_NUM_CTX", "8192"))
 # Downscale anything larger before sending; phone photos are needlessly huge.
 VISION_MAX_PIXELS = int(os.getenv("VISION_MAX_PIXELS", str(1600 * 1600)))
 

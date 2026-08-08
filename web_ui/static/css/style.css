@@ -1243,3 +1243,26 @@ select { cursor: pointer; }
   font-family: var(--mono);
   text-align: center;
 }
+
+/* Coloured diff counts, matching the diff body. */
+.diff-stat { display: inline-flex; gap: 7px; }
+.diff-stat-add { color: #a3bd74; }
+.diff-stat-del { color: #cf928d; }
+
+/* A subagent's prompt, visible while it works. */
+.subagent-prompt {
+  margin-top: 4px;
+  white-space: pre-wrap;
+  color: var(--text-dim);
+  border-left: 2px solid var(--border-strong);
+  padding-left: 9px;
+}
+
+/* End-of-turn change summary. */
+.change-summary .msg-role { color: var(--accent); }
+.change-summary > .msg-content > .tool-details {
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 6px 9px;
+  background: var(--bg-raised);
+}

@@ -14,6 +14,7 @@ Responsibilities, in order of how badly they used to break:
 
 import asyncio
 import json
+import time
 from typing import AsyncIterator
 
 from agent_server import database as db
@@ -39,6 +40,11 @@ from agent_server.tools.registry import execute_tool, get_tool, tool_schemas
 _aborts: dict[str, asyncio.Event] = {}
 # Sessions the user chose to auto-approve for the lifetime of this process.
 _runtime_auto_approve: set[str] = set()
+# Read-only tools with no side effects, so running several at once cannot
+# produce a conflicting write or an approval prompt. Anything that mutates
+# state (write, edit, bash) stays strictly sequential.
+PARALLEL_SAFE_TOOLS = frozenset({"read", "grep", "glob", "webfetch", "task", "vision", "screenshot"})
+
 # Individual tool calls the user approved. Consumed by the next _drain_pending
 # so the approved tool runs inside the loop and streams its output like any
 # other tool call, instead of executing silently in the resolve endpoint.
@@ -325,7 +331,12 @@ async def _loop(
             return
 
         if not calls:
-            yield {"type": "done", "reason": finish, "message_id": message["id"]}
+            yield {
+                "type": "done",
+                "reason": finish,
+                "message_id": message["id"],
+                "changes": await db.get_turn_changes(session_id),
+            }
             return
 
         paused = False
@@ -357,7 +368,25 @@ async def _drain_pending(session: dict, ctx: ToolContext) -> AsyncIterator[dict]
 
     shell_auto = await _auto_approves(session)
 
-    for call in pending:
+    index = 0
+    while index < len(pending):
+        # Independent read-only calls run together. Running them one after
+        # another made a turn cost the sum of their runtimes, which is brutal
+        # for subagents: three researchers took three times as long as one.
+        batch: list[dict] = []
+        while index < len(pending) and tool_call_name(pending[index]) in PARALLEL_SAFE_TOOLS:
+            batch.append(pending[index])
+            index += 1
+        if len(batch) > 1:
+            async for event in _run_batch(session_id, ctx, batch):
+                yield event
+            continue
+        if batch:
+            call = batch[0]
+        else:
+            call = pending[index]
+            index += 1
+
         if ctx.abort.is_set():
             # Leave a result so the turn stays structurally valid.
             await _record(session_id, call, ToolResult.error("cancelled by user", "cancelled"))
@@ -393,23 +422,66 @@ async def _drain_pending(session: dict, ctx: ToolContext) -> AsyncIterator[dict]
 
         _approved_calls.discard(call["id"])
         yield {"type": "tool_start", "tool_call_id": call["id"], "name": name, "args": args}
+        began = time.monotonic()
         result = await execute_tool(name, args, ctx)
-        await _record(session_id, call, result)
+        elapsed_ms = int((time.monotonic() - began) * 1000)
+        await _record(session_id, call, result, elapsed_ms)
+        yield _tool_end_event(call, name, result, elapsed_ms)
+
+
+def _tool_end_event(call: dict, name: str, result: ToolResult, elapsed_ms: int) -> dict:
+    return {
+        "type": "tool_end",
+        "tool_call_id": call["id"],
+        "name": name,
+        "title": result.title,
+        "output": truncate(result.output, 20_000, "preview"),
+        "is_error": result.is_error,
+        "diff": result.diff,
+        "duration_ms": elapsed_ms,
+    }
+
+
+async def _run_batch(session_id: str, ctx: ToolContext, batch: list[dict]) -> AsyncIterator[dict]:
+    """Run a group of independent read-only calls concurrently.
+
+    Results are recorded and reported in call order even though they finish in
+    whatever order they finish, so the transcript reads the same live as it does
+    after a reload. The wall time is the slowest call, not the sum.
+    """
+    async def run(call: dict) -> tuple[ToolResult, int]:
+        began = time.monotonic()
+        if ctx.abort.is_set():
+            return ToolResult.error("cancelled by user", "cancelled"), 0
+        result = await execute_tool(tool_call_name(call), parse_arguments(call), ctx)
+        return result, int((time.monotonic() - began) * 1000)
+
+    for call in batch:
         yield {
-            "type": "tool_end",
+            "type": "tool_start",
             "tool_call_id": call["id"],
-            "name": name,
-            "title": result.title,
-            "output": truncate(result.output, 20_000, "preview"),
-            "is_error": result.is_error,
-            "diff": result.diff,
+            "name": tool_call_name(call),
+            "args": parse_arguments(call),
         }
 
+    tasks = [asyncio.create_task(run(call)) for call in batch]
+    try:
+        for call, task in zip(batch, tasks):
+            result, elapsed_ms = await task
+            await _record(session_id, call, result, elapsed_ms)
+            yield _tool_end_event(call, tool_call_name(call), result, elapsed_ms)
+    finally:
+        for task in tasks:
+            task.cancel()
 
-async def _record(session_id: str, call: dict, result: ToolResult) -> dict:
+
+async def _record(session_id: str, call: dict, result: ToolResult, duration_ms: int = 0) -> dict:
     from agent_server.providers.base import estimate_tokens
 
     output = truncate(result.output, MAX_TOOL_RESULT_CHARS)
+    # Taken from the call rather than the diff: unified_diff drops its header.
+    args = parse_arguments(call)
+    path = args.get("filePath") or args.get("path") or ""
     return await db.add_message(
         session_id,
         "tool",
@@ -422,6 +494,8 @@ async def _record(session_id: str, call: dict, result: ToolResult) -> dict:
         # It is display-only and never sent back to the model.
         diff=result.diff,
         tool_title=result.title,
+        duration_ms=duration_ms,
+        file_path=path if result.diff else "",
     )
 
 

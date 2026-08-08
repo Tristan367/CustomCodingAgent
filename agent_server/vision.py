@@ -25,6 +25,8 @@ import httpx
 from agent_server.config import (
     VISION_MAX_PIXELS,
     VISION_MODEL,
+    VISION_KEEP_ALIVE,
+    VISION_NUM_CTX,
     VISION_OLLAMA_URL,
     VISION_TIMEOUT,
 )
@@ -152,12 +154,15 @@ async def analyze(images: list[bytes], prompt: str, labels: list[str] | None = N
         "messages": messages,
         "stream": False,
         "think": False,
-        "options": {"temperature": 0.1},
+        "keep_alive": VISION_KEEP_ALIVE,
+        # Left unset, Ollama falls back to a small default context and silently
+        # truncates, which is easy to miss when comparing several images.
+        "options": {"temperature": 0.1, "num_ctx": VISION_NUM_CTX},
     }
 
     try:
-        async with httpx.AsyncClient(timeout=VISION_TIMEOUT) as client:
-            resp = await client.post(f"{VISION_OLLAMA_URL}/api/chat", json=payload)
+        client = await _client()
+        resp = await client.post(f"{VISION_OLLAMA_URL}/api/chat", json=payload)
     except httpx.TimeoutException as e:
         raise VisionError(f"vision model timed out after {VISION_TIMEOUT}s") from e
     except Exception as e:  # noqa: BLE001
@@ -170,6 +175,24 @@ async def analyze(images: list[bytes], prompt: str, labels: list[str] | None = N
     if not content:
         raise VisionError("vision model returned an empty response")
     return content
+
+
+_http: httpx.AsyncClient | None = None
+
+
+async def _client() -> httpx.AsyncClient:
+    """One connection pool for the process, rather than a fresh one per call."""
+    global _http
+    if _http is None or _http.is_closed:
+        _http = httpx.AsyncClient(timeout=VISION_TIMEOUT)
+    return _http
+
+
+async def close_client():
+    global _http
+    if _http is not None and not _http.is_closed:
+        await _http.aclose()
+    _http = None
 
 
 # ── Browser capture ─────────────────────────────────────────────────────────

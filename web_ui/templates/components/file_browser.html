@@ -1,0 +1,7 @@
+<div class="file-browser" id="file-browser"
+     hx-get="/api/browse?dir={{ current }}"
+     hx-trigger="load"
+     hx-target="#file-browser"
+     hx-swap="outerHTML">
+    <div class="loading"><div class="spinner"></div> Loading...</div>
+</div>

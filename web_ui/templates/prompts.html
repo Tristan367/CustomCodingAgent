@@ -1,0 +1,35 @@
+{% extends "base.html" %}
+{% block content %}
+<div id="prompts-page">
+    <h2>System Prompt Manager</h2>
+    <p class="hint">Edit prompts and user preferences. Changes take effect on new messages — existing context is unaffected until the next compaction.</p>
+
+    <form method="POST" action="/_save_prompts" onsubmit="return confirm('Save prompts? Changes apply to new messages. Existing conversation context is unaffected until you compact.')">
+        <button type="submit" class="save-btn save-top">Save All Prompts</button>
+
+        {% for profile_name, prompt_text in profiles.items() %}
+        <div class="prompt-editor">
+            <h3>{{ profile_name }}</h3>
+            <textarea name="profile_{{ profile_name }}" rows="6" class="prompt-textarea">{{ prompt_text }}</textarea>
+        </div>
+        {% endfor %}
+
+        <div class="prompt-editor">
+            <h3>User preferences <span class="hint">(appended to every prompt)</span></h3>
+            <textarea name="user_prefs" rows="6" class="prompt-textarea"
+                      placeholder="Example: I prefer TypeScript. Use 2-space indent. Always add error handling.">{{ user_prefs }}</textarea>
+        </div>
+
+        <div class="prompt-editor">
+            <h3>Compaction summary prompt <span class="hint">(used when compacting conversation history)</span></h3>
+            <textarea name="compact_prompt" rows="4" class="prompt-textarea">{{ compact_prompt }}</textarea>
+        </div>
+
+        <button type="submit" class="save-btn">Save All Prompts</button>
+    </form>
+
+    <h2 style="margin-top:30px">Available Tools</h2>
+    <p class="hint">These tool definitions are sent to the model. They count against your context budget.</p>
+    <pre class="tools-def">{{ tools_json }}</pre>
+</div>
+{% endblock %}

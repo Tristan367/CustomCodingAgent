@@ -1,0 +1,97 @@
+<div id="session-view" data-session-id="{{ session.id }}">
+    <div id="session-header">
+        <div class="session-info">
+            <span>{{ session.project_dir }}
+                <button class="copy-path-btn" onclick="navigator.clipboard.writeText('{{ session.project_dir }}');this.textContent='Copied!';setTimeout(()=>this.textContent='copy',1500)" title="Copy path to clipboard">copy</button>
+            </span>
+            <span>{{ session.provider }} / {{ session.model }}</span>
+            <span>profile: {{ session.prompt_profile }}</span>
+            <span>created: {{ session.created_at | humandate }}</span>
+            <span>active: {{ session.last_active_at | humandate }}</span>
+            {% if session.thinking_effort %}
+            <span>thinking: {{ session.thinking_effort }}</span>
+            {% endif %}
+            <button class="settings-toggle" onclick="toggleSettings()">Session Config</button>
+        </div>
+    </div>
+
+    <div id="chat-container">
+        {% include "chat_messages.html" %}
+    </div>
+
+    <div id="chat-input-area">
+        <form id="chat-form" enctype="multipart/form-data">
+            <textarea name="message" rows="1" placeholder="Type a message... (Enter to send, Shift+Enter for newline)"
+                      id="chat-textarea"></textarea>
+            <div class="chat-actions">
+                <button type="submit" id="send-btn">Send</button>
+                <button type="button" id="stop-btn" style="display:none" onclick="stopStreaming()">Stop</button>
+                <button type="button" class="compact-btn"
+                        hx-post="/api/sessions/{{ session.id }}/compact"
+                        hx-target="#chat-container"
+                        hx-swap="beforeend">Compact</button>
+                <label class="upload-label" title="Attach image">
+                    <input type="file" name="image" accept="image/*" id="image-input" onchange="handleImageAttach(this)">+
+                </label>
+            </div>
+        </form>
+    </div>
+
+    <div id="session-settings" style="display:none;">
+        <form hx-patch="/api/sessions/{{ session.id }}"
+              hx-target="#session-header"
+              hx-swap="outerHTML"
+              hx-on::after-request="location.reload()">
+            <div class="settings-grid">
+                <label>Name: <input name="name" value="{{ session.name }}"></label>
+                <label>Model:
+                    <select name="model">
+                        {% for m in models %}
+                        <option value="{{ m.id }}" {% if session.model == m.id %}selected{% endif %}>{{ m.name }}</option>
+                        {% endfor %}
+                    </select>
+                </label>
+                <label>Thinking effort:
+                    <select name="thinking_effort">
+                        <option value="">Default (high)</option>
+                        <option value="low" {% if session.thinking_effort == 'low' %}selected{% endif %}>Low</option>
+                        <option value="high" {% if session.thinking_effort == 'high' %}selected{% endif %}>High</option>
+                        <option value="max" {% if session.thinking_effort == 'max' %}selected{% endif %}>Max</option>
+                    </select>
+                </label>
+                <label>Prompt profile:
+                    <select name="prompt_profile">
+                        {% for p in profiles %}
+                        <option value="{{ p }}" {% if session.prompt_profile == p %}selected{% endif %}>{{ p }}</option>
+                        {% endfor %}
+                    </select>
+                </label>
+                <label class="checkbox-label">
+                    <input type="checkbox" name="bash_auto_approve" value="1"
+                           {% if session.bash_auto_approve %}checked{% endif %}>
+                    Auto-approve bash commands
+                </label>
+            </div>
+            <button type="submit">Save Settings</button>
+        </form>
+    </div>
+</div>
+
+<script>
+function toggleSettings() {
+    const el = document.getElementById('session-settings');
+    el.style.display = el.style.display === 'none' ? 'block' : 'none';
+}
+</script>
+
+<div id="image-modal" class="modal" style="display:none">
+    <div class="modal-content">
+        <h3>Attach Image</h3>
+        <img id="image-preview" src="" style="max-width:300px;max-height:200px;border-radius:4px;margin-bottom:8px">
+        <textarea id="vision-modal-prompt" rows="3" placeholder="What should the vision model look for?"></textarea>
+        <div class="modal-actions">
+            <button onclick="submitImageAttach()">Attach</button>
+            <button class="cancel-btn" onclick="cancelImageAttach()">Cancel</button>
+        </div>
+    </div>
+</div>

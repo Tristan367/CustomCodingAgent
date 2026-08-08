@@ -1,0 +1,89 @@
+<div id="home-page">
+    {% if error %}
+    <div class="error-banner">{{ error }}</div>
+    {% endif %}
+    <h2>Settings</h2>
+    <form id="settings-form"
+          hx-post="/_settings"
+          hx-target="#home-page"
+          hx-swap="outerHTML">
+        <label>DeepSeek API Key:
+            <input type="text" name="deepseek_api_key" id="api-key-input"
+                   value="{{ settings.get('deepseek_api_key', '') }}"
+                   placeholder="sk-..."
+                   autocomplete="off">
+        </label>
+        <button type="submit">Save</button>
+    </form>
+
+    <h2 style="margin-top:30px">New Session</h2>
+    <form id="new-session-form"
+          method="POST"
+          action="/_create_session">
+        <div class="form-row">
+            <input type="text" name="name" placeholder="Session name" required>
+        </div>
+        <div class="form-row">
+            <div style="display:flex;gap:8px;flex:1">
+                <input type="text" name="project_dir" placeholder="Project directory" id="project-dir-input" required>
+                <button type="button" class="btn-browse" onclick="toggleBrowser()">Browse...</button>
+            </div>
+        </div>
+        <div id="file-browser-container" style="display:none;"></div>
+        <div class="form-row">
+            <select name="model">
+                {% for m in models %}
+                <option value="{{ m.id }}" {% if m.id == 'deepseek-v4-pro' %}selected{% endif %}>{{ m.name }}</option>
+                {% endfor %}
+            </select>
+            <select name="prompt_profile">
+                {% for p in profiles %}
+                <option value="{{ p }}" {% if p == 'visual-verify' %}selected{% endif %}>{{ p }}</option>
+                {% endfor %}
+            </select>
+        </div>
+        <button type="submit">Create Session</button>
+    </form>
+
+    <form method="POST" action="/_create_session" style="margin-top:8px">
+        <input type="hidden" name="name" value="Temp {{ now }}">
+        <input type="hidden" name="project_dir" value="/home/tristan">
+        <input type="hidden" name="model" value="deepseek-v4-pro">
+        <input type="hidden" name="prompt_profile" value="minimal">
+        <button type="submit" class="quick-ask-btn">Temp Session</button>
+    </form>
+
+    <h2 style="margin-top:30px">Sessions</h2>
+    <div id="session-list">
+        {% for s in sessions %}
+        <div class="session-card" onclick="openSession('{{ s.id }}')">
+            <span class="session-name">{{ s.name }}</span>
+            <span class="session-meta">{{ s.project_dir }} &middot; {{ s.model }} &middot; {{ s.prompt_profile }} &middot; {{ s.last_active_at | humandate }}</span>
+            <button class="delete-session-btn" onclick="event.stopPropagation();if(confirm('Delete &quot;{{ s.name }}&quot;?')){fetch('/api/sessions/{{ s.id }}',{method:'DELETE'}).then(()=>location.reload())}">✕</button>
+        </div>
+        {% endfor %}
+    </div>
+</div>
+
+<script>
+let _browserLoaded = false;
+
+function toggleBrowser() {
+    const container = document.getElementById('file-browser-container');
+    if (container.style.display === 'none') {
+        container.style.display = 'block';
+        if (!_browserLoaded) {
+            container.innerHTML = '<div class="loading"><div class="spinner"></div> Loading...</div>';
+            htmx.ajax('GET', '/_browse', {target: '#file-browser-container', swap: 'innerHTML'});
+            _browserLoaded = true;
+        }
+    } else {
+        container.style.display = 'none';
+    }
+}
+
+function selectProjectDir(path) {
+    document.getElementById('project-dir-input').value = path;
+    document.getElementById('file-browser-container').style.display = 'none';
+}
+</script>

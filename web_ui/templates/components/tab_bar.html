@@ -1,0 +1,17 @@
+<nav id="tab-bar">
+    <div class="tab-scroll" id="tab-scroll">
+        {% for s in sessions %}
+        <span class="tab-wrap" draggable="true" data-sid="{{ s.id }}">
+            <a href="/sessions/{{ s.id }}"
+               class="tab {% if current_session_id == s.id %}active{% endif %}"
+               hx-get="/_session/{{ s.id }}"
+               hx-target="#main-content"
+               hx-push-url="/sessions/{{ s.id }}">
+                {{ s.name }}
+            </a>
+            <button class="tab-close" onclick="closeTab(event, '{{ s.id }}')" title="Close tab">✕</button>
+        </span>
+        {% endfor %}
+    </div>
+    <a href="/" class="tab-scroll-btn new-session-btn" title="New session">+</a>
+</nav>

@@ -1,0 +1,50 @@
+<div class="file-browser" id="file-browser">
+    <!-- Breadcrumbs -->
+    <div class="browser-crumbs">
+        {% for crumb in crumbs %}
+        {% if not loop.first %}<span class="crumb-sep">/</span>{% endif %}
+        <a href="#" hx-get="/_browse?dir={{ crumb.path }}" hx-target="#file-browser" hx-swap="outerHTML">{{ crumb.name }}</a>
+        {% endfor %}
+    </div>
+
+    <!-- Select / New Folder -->
+    <div class="browser-actions">
+        <button class="btn-select-dir"
+                onclick="selectProjectDir('{{ current }}')"
+                type="button">Select this directory</button>
+        <form class="mkdir-form"
+              hx-post="/_browse/mkdir"
+              hx-target="#file-browser"
+              hx-swap="outerHTML"
+              hx-on::after-request="this.reset()">
+            <input type="hidden" name="dir" value="{{ current }}">
+            <input type="text" name="name" placeholder="New folder name..." required>
+            <button type="submit">+ Create</button>
+        </form>
+    </div>
+
+    <!-- Entries -->
+    <div class="browser-entries">
+        {% if parent and parent != current %}
+        <div class="browser-entry parent-dir"
+             hx-get="/_browse?dir={{ parent }}"
+             hx-target="#file-browser"
+             hx-swap="outerHTML"
+             style="cursor:pointer">
+            <span class="entry-icon">📁</span> ..
+        </div>
+        {% endif %}
+        {% for entry in entries %}
+        <div class="browser-entry {{ 'is-dir' if entry.is_dir else 'is-file' }}"
+             {% if entry.is_dir %}
+             hx-get="/_browse?dir={{ entry.path }}"
+             hx-target="#file-browser"
+             hx-swap="outerHTML"
+             style="cursor:pointer"
+             {% endif %}>
+            <span class="entry-icon">{{ '📁' if entry.is_dir else '📄' }}</span>
+            <span class="entry-name">{{ entry.name }}</span>
+        </div>
+        {% endfor %}
+    </div>
+</div>

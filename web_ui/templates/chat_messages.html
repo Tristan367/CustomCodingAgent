@@ -1,0 +1,31 @@
+<div id="messages">
+    {% for c in compactions %}
+    <div class="message compaction">
+        <div class="msg-role">[Summary]</div>
+        <div class="msg-content">{{ c.summary_text[:200] }}{% if c.summary_text|length > 200 %}...{% endif %}</div>
+        <span class="msg-time">{{ c.created_at | humandate }}</span>
+    </div>
+    {% endfor %}
+    {% for m in messages %}
+    <div class="message {{ m.role }}" id="msg-{{ m.id }}">
+        <div class="msg-role">{{ m.role }}</div>
+        <div class="msg-content">
+            {% if m.tool_calls %}
+            <details class="tool-details">
+                <summary class="tool-summary">🔧 Tool calls</summary>
+                <pre class="tool-raw">{{ m.tool_calls }}</pre>
+            </details>
+            {% endif %}
+            {% if m.tool_call_id and m.role == 'tool' %}
+            <details class="tool-details">
+                <summary class="tool-summary">TOOL RESULT</summary>
+                <pre class="tool-raw">{{ m.content[:2000] }}{% if m.content|length > 2000 %}...{% endif %}</pre>
+            </details>
+            {% elif m.content %}
+            <div class="content-text">{{ m.content }}</div>
+            {% endif %}
+        </div>
+        <span class="msg-time">{{ m.created_at | humandate }}</span>
+    </div>
+    {% endfor %}
+</div>

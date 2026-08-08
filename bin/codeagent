@@ -32,9 +32,12 @@ open_browser() {
   echo "codeagent: server did not come up at $URL" >&2
 }
 
-# Always succeeds: lsof exits non-zero when nothing matches, which under
-# `set -e` would abort the script instead of reporting "not running".
-running_pid() { lsof -ti:"$PORT" 2>/dev/null | head -1 || true; }
+# -sTCP:LISTEN is essential: without it lsof also lists every client connected
+# to the port, so with the page open in a browser this returned the browser's
+# pid. stop then killed the browser and reported that the server would not die.
+# Always succeeds, because lsof exits non-zero when nothing matches and `set -e`
+# would otherwise abort before anything could be reported.
+running_pid() { lsof -ti:"$PORT" -sTCP:LISTEN 2>/dev/null | head -1 || true; }
 
 stop_server() {
   local pid

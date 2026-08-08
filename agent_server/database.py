@@ -207,7 +207,30 @@ async def touch_session(session_id: str):
 
 
 async def delete_session(session_id: str):
-    await _execute("DELETE FROM sessions WHERE id = ?", (session_id,))
+    """Remove a session and everything hanging off it.
+
+    There is no cascade: SQLite only enforces foreign keys when asked, and the
+    schema does not declare them, so deleting just the session row left its
+    messages behind forever.
+    """
+    db = await connect()
+    for table in ("messages", "compactions", "session_write_dirs"):
+        await db.execute(f"DELETE FROM {table} WHERE session_id = ?", (session_id,))
+    await db.execute("DELETE FROM sessions WHERE id = ?", (session_id,))
+    await db.commit()
+
+
+async def purge_orphans() -> int:
+    """Drop rows left behind by earlier deletes that did not cascade."""
+    db = await connect()
+    total = 0
+    for table in ("messages", "compactions", "session_write_dirs"):
+        cur = await db.execute(
+            f"DELETE FROM {table} WHERE session_id NOT IN (SELECT id FROM sessions)"
+        )
+        total += cur.rowcount or 0
+    await db.commit()
+    return total
 
 
 # ── Messages ────────────────────────────────────────────────────────────────

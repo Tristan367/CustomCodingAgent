@@ -40,9 +40,37 @@ web_ui/             Jinja templates, CSS, and ~4 files of vanilla JS
 
 A turn runs like this: your message is persisted, the full transcript is serialised
 to the wire format, the provider streams back reasoning/content/tool calls, tools
-execute in order, and the loop repeats until the model answers. Every step is
-written to SQLite as it happens, so the stored transcript always matches what was
-actually sent to the API.
+execute, and the loop repeats until the model answers. Every step is written to
+SQLite as it happens, so the stored transcript always matches what was actually
+sent to the API.
+
+Independent read-only calls (`read`, `grep`, `glob`, `webfetch`, `task`, `vision`,
+`screenshot`) run concurrently, so three subagents cost the slowest one rather than
+the sum. Anything that mutates state runs sequentially, because parallel writes to
+one file are not safe.
+
+### Runs outlive the request
+
+A run is a task owned by the server; clients subscribe to it over SSE. Closing the
+tab, reloading, or switching sessions only unsubscribes — the turn keeps going and
+its results are still recorded. Reopening a running session attaches to it and shows
+the calls still outstanding. Only an explicit stop ends a run, and stopping cancels
+the work immediately rather than waiting for it to notice a flag.
+
+Every tool call in a cancelled batch is still given a result. An unanswered tool
+call is treated as pending work and re-run on the next message, which is how a
+stopped batch would otherwise restart itself.
+
+### Messages sent while it is working
+
+The composer stays live during a run. A message sent mid-turn is held in memory and
+injected at the next turn boundary — never between an assistant `tool_calls` message
+and its results, which would make the request invalid. Several queued messages are
+delivered as one.
+
+Because nothing is persisted until that moment, a pending message can be taken back:
+undo removes it and returns the text to the composer, and the model never learns it
+existed.
 
 ### The provider contract
 
@@ -173,19 +201,30 @@ will confidently invent absolute paths from its training data.
 ```
 
 `test_conversation.py` covers the serialization rules above and the compaction
-split. `test_permissions.py` covers both gates, including the two cases that
-matter most: shell auto-approval must not imply filesystem access, and grants
-must not leak between sessions. `test_live_agent.py` runs four real
-conversations — a greeting, a multi-round tool loop, a shell approval, and a
-rejection — which are the scenarios that used to be broken.
+split, including that compaction always leaves a real window of recent turns and
+never just a summary. `test_permissions.py` covers both gates, including the two
+cases that matter most: shell auto-approval must not imply filesystem access, and
+grants must not leak between sessions. `test_run_manager.py` covers the run
+lifecycle: a late subscriber still sees the whole turn, no event is duplicated or
+lost across the subscribe boundary, a cancelled batch records a result for every
+call, and an undone message is never delivered. `test_bash_tool.py` pins the
+background-process behaviour. `test_live_agent.py` runs four real conversations —
+a greeting, a multi-round tool loop, a shell approval, and a rejection — which are
+the scenarios that used to be broken.
 
 The browser side is worth stress-testing with Playwright's CDP performance
-metrics when you touch streaming or the microphone. Two bugs got through review
-because they only showed up under load: markdown re-rendered per token
-(O(n^2) once code blocks appear), and a dictation race that leaked an
-animation-frame loop which then ran forever. Headless Chromium has no
+metrics when you touch streaming, timers, or the microphone. Three leaks got
+through review because they only showed up under load or over time: markdown
+re-rendered per token (O(n^2) once code blocks appear), a dictation race that
+leaked an animation-frame loop, and a per-tool-call interval that kept firing
+after its node was detached. The pattern is the same each time — something that
+must stop has no owner once the DOM changes underneath it — so check that timers
+end themselves when `isConnected` goes false. Headless Chromium has no
 microphone, so run the mic path with
 `--use-fake-device-for-media-stream` or it stays untested.
+
+Two-session behaviour needs a browser: start a run in one session, switch to
+another, come back, and confirm the run is still going and still visible.
 
 ## Adding things
 

@@ -1,193 +1,333 @@
-from typing import Any
-from agent_server.tools.file_ops import read_file, edit_file, write_file
-from agent_server.tools.bash import run_bash
-from agent_server.tools.search import grep_search, glob_search
-from agent_server.tools.web import webfetch
+"""Tool registry: schemas, dispatch, and permission policy."""
+
+import asyncio
+import inspect
+from dataclasses import dataclass, field
+from typing import Any, Awaitable, Callable, Iterable, Literal
+
+from agent_server.tools.base import ToolContext, ToolResult
+from agent_server.tools.bash import is_read_only, run_bash
+from agent_server.tools.file_ops import edit_file, read_file, write_file
 from agent_server.tools.question import ask_question
-from agent_server.tools.vision import vision
+from agent_server.tools.search import glob_search, grep_search
 from agent_server.tools.task import run_task
+from agent_server.tools.todowrite import todowrite
+from agent_server.tools.vision import vision
+from agent_server.tools.web import webfetch
 
-VISION_TOOL_DEF = {
-    "type": "function",
-    "function": {
-        "name": "vision",
-        "description": "Screenshot a web URL and analyze it visually using a vision model. Use this to verify UI changes, check layouts, inspect rendering. The vision model will describe what it sees.",
-        "parameters": {
-            "type": "object",
-            "properties": {
-                "url": {"type": "string", "description": "URL to screenshot (http:// or file://)"},
-                "prompt": {"type": "string", "description": "What to ask the vision model about the page"},
-                "selector": {"type": "string", "description": "Optional CSS selector to focus on"},
-                "width": {"type": "integer", "description": "Viewport width (default 1280)"},
-                "height": {"type": "integer", "description": "Viewport height (default 900)"},
-            },
-            "required": ["url"],
-        },
-    },
-}
+Handler = Callable[..., Awaitable[ToolResult]]
+PauseKind = Literal["permission", "question"]
 
-BASE_TOOLS = [
-    {
-        "type": "function",
-        "function": {
-            "name": "read",
-            "description": "Read a file from the local filesystem. Returns contents with line numbers.",
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "filePath": {"type": "string", "description": "Absolute path to the file"},
-                    "offset": {"type": "integer", "description": "Line number to start from (1-indexed)"},
-                    "limit": {"type": "integer", "description": "Max lines to read (default 2000)"},
-                },
-                "required": ["filePath"],
+
+@dataclass(frozen=True)
+class Tool:
+    name: str
+    description: str
+    parameters: dict
+    handler: Handler
+    # "permission": run only after the user approves.
+    # "question":   the user supplies the result; the handler is never called.
+    pause: PauseKind | None = None
+    # Called with (args) -> bool. Lets a tool waive its own permission prompt.
+    auto_allow: Callable[[dict], bool] | None = None
+    vision_only: bool = field(default=False)
+
+    def schema(self) -> dict:
+        return {
+            "type": "function",
+            "function": {
+                "name": self.name,
+                "description": self.description,
+                "parameters": self.parameters,
+            },
+        }
+
+
+TOOLS: dict[str, Tool] = {}
+
+
+def register(tool: Tool):
+    TOOLS[tool.name] = tool
+
+
+register(Tool(
+    name="read",
+    description=(
+        "Read a file from the filesystem. Returns contents prefixed with line numbers. "
+        "Prefer absolute paths. Use offset/limit for large files. You must read a file "
+        "before you edit it."
+    ),
+    parameters={
+        "type": "object",
+        "properties": {
+            "filePath": {"type": "string", "description": "Path to the file (absolute preferred)"},
+            "offset": {"type": "integer", "description": "1-indexed line to start from"},
+            "limit": {"type": "integer", "description": "Maximum lines to return (default 2000)"},
+        },
+        "required": ["filePath"],
+    },
+    handler=read_file,
+))
+
+register(Tool(
+    name="edit",
+    description=(
+        "Replace an exact string in an existing file. oldString must match the file "
+        "byte-for-byte including indentation, and must be unique unless replaceAll is true. "
+        "Read the file first."
+    ),
+    parameters={
+        "type": "object",
+        "properties": {
+            "filePath": {"type": "string", "description": "Path to the file"},
+            "oldString": {"type": "string", "description": "Exact text to replace"},
+            "newString": {"type": "string", "description": "Replacement text"},
+            "replaceAll": {"type": "boolean", "description": "Replace every occurrence"},
+        },
+        "required": ["filePath", "oldString", "newString"],
+    },
+    handler=edit_file,
+))
+
+register(Tool(
+    name="write",
+    description=(
+        "Create a new file, or overwrite an existing one in full. For changes to an "
+        "existing file prefer `edit`. If the file exists you must read it first."
+    ),
+    parameters={
+        "type": "object",
+        "properties": {
+            "filePath": {"type": "string", "description": "Path to the file"},
+            "content": {"type": "string", "description": "Full file contents"},
+        },
+        "required": ["filePath", "content"],
+    },
+    handler=write_file,
+))
+
+register(Tool(
+    name="bash",
+    description=(
+        "Run a shell command in the project directory. Use for git, builds, tests, and "
+        "package managers. Do not use it to read or search files -- use read/grep/glob, "
+        "which are faster and better formatted."
+    ),
+    parameters={
+        "type": "object",
+        "properties": {
+            "command": {"type": "string", "description": "Shell command to run"},
+            "timeout": {"type": "integer", "description": "Timeout in milliseconds (default 120000)"},
+            "workdir": {"type": "string", "description": "Directory to run in (defaults to project dir)"},
+        },
+        "required": ["command"],
+    },
+    handler=run_bash,
+    pause="permission",
+    auto_allow=lambda args: is_read_only(args.get("command", "")),
+))
+
+register(Tool(
+    name="grep",
+    description=(
+        "Search file contents with a regular expression (ripgrep). Returns matching lines "
+        "with file paths and line numbers."
+    ),
+    parameters={
+        "type": "object",
+        "properties": {
+            "pattern": {"type": "string", "description": "Regular expression"},
+            "path": {"type": "string", "description": "Directory to search (defaults to project dir)"},
+            "include": {"type": "string", "description": "Glob filter, e.g. '*.py'"},
+        },
+        "required": ["pattern"],
+    },
+    handler=grep_search,
+))
+
+register(Tool(
+    name="glob",
+    description="Find files by name pattern, newest first. Example: 'src/**/*.ts'.",
+    parameters={
+        "type": "object",
+        "properties": {
+            "pattern": {"type": "string", "description": "Glob pattern"},
+            "path": {"type": "string", "description": "Directory to search (defaults to project dir)"},
+        },
+        "required": ["pattern"],
+    },
+    handler=glob_search,
+))
+
+register(Tool(
+    name="webfetch",
+    description="Fetch a URL and return its content as readable text.",
+    parameters={
+        "type": "object",
+        "properties": {"url": {"type": "string", "description": "Absolute http(s) URL"}},
+        "required": ["url"],
+    },
+    handler=webfetch,
+))
+
+register(Tool(
+    name="question",
+    description=(
+        "Ask the user a question and wait for their answer. Use when a decision is "
+        "genuinely ambiguous and guessing wrong would waste significant work."
+    ),
+    parameters={
+        "type": "object",
+        "properties": {
+            "question": {"type": "string", "description": "The question to ask"},
+            "options": {
+                "type": "array",
+                "items": {"type": "string"},
+                "description": "Optional suggested answers",
             },
         },
+        "required": ["question"],
     },
-    {
-        "type": "function",
-        "function": {
-            "name": "edit",
-            "description": "Performs exact string replacements in an existing file.",
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "filePath": {"type": "string", "description": "Absolute path to the file"},
-                    "oldString": {"type": "string", "description": "The text to replace"},
-                    "newString": {"type": "string", "description": "The replacement text"},
-                    "replaceAll": {"type": "boolean", "description": "Replace all occurrences (default false)"},
+    handler=ask_question,
+    pause="question",
+))
+
+register(Tool(
+    name="todowrite",
+    description=(
+        "Record or update the task list for multi-step work. Send the complete list every "
+        "time. Exactly one item may be in_progress. Skip this for single-step requests."
+    ),
+    parameters={
+        "type": "object",
+        "properties": {
+            "todos": {
+                "type": "array",
+                "items": {
+                    "type": "object",
+                    "properties": {
+                        "content": {"type": "string", "description": "What needs doing"},
+                        "status": {
+                            "type": "string",
+                            "enum": ["pending", "in_progress", "completed", "cancelled"],
+                        },
+                        "priority": {"type": "string", "enum": ["high", "medium", "low"]},
+                    },
+                    "required": ["content", "status"],
                 },
-                "required": ["filePath", "oldString", "newString"],
+            }
+        },
+        "required": ["todos"],
+    },
+    handler=todowrite,
+))
+
+register(Tool(
+    name="task",
+    description=(
+        "Delegate open-ended research to a read-only subagent that works autonomously and "
+        "reports back once. Good for 'where is X handled?' style questions across many "
+        "files. Give it a self-contained prompt; it sees none of this conversation."
+    ),
+    parameters={
+        "type": "object",
+        "properties": {
+            "description": {"type": "string", "description": "3-5 word label"},
+            "prompt": {
+                "type": "string",
+                "description": "Complete instructions, including exactly what to report back",
             },
         },
+        "required": ["description", "prompt"],
     },
-    {
-        "type": "function",
-        "function": {
-            "name": "write",
-            "description": "Create a new file or overwrite an existing one.",
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "filePath": {"type": "string", "description": "Absolute path for the file"},
-                    "content": {"type": "string", "description": "Content to write"},
-                },
-                "required": ["filePath", "content"],
-            },
+    handler=run_task,
+))
+
+register(Tool(
+    name="vision",
+    description=(
+        "Screenshot a web page and have a vision model describe it. Use to verify UI "
+        "changes render correctly. Accepts http(s) or file:// URLs."
+    ),
+    parameters={
+        "type": "object",
+        "properties": {
+            "url": {"type": "string", "description": "URL to screenshot"},
+            "prompt": {"type": "string", "description": "What to look for"},
+            "selector": {"type": "string", "description": "CSS selector to focus on"},
+            "width": {"type": "integer", "description": "Viewport width (default 1280)"},
+            "height": {"type": "integer", "description": "Viewport height (default 900)"},
         },
+        "required": ["url"],
     },
-    {
-        "type": "function",
-        "function": {
-            "name": "bash",
-            "description": "Execute a shell command in the project directory.",
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "command": {"type": "string", "description": "The shell command to execute"},
-                    "timeout": {"type": "integer", "description": "Timeout in milliseconds"},
-                    "workdir": {"type": "string", "description": "Working directory for the command"},
-                },
-                "required": ["command"],
-            },
-        },
-    },
-    {
-        "type": "function",
-        "function": {
-            "name": "grep",
-            "description": "Search file contents using regex. Returns file paths and line numbers with matching lines.",
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "pattern": {"type": "string", "description": "The regex pattern to search for"},
-                    "path": {"type": "string", "description": "Directory to search in (defaults to cwd)"},
-                    "include": {"type": "string", "description": "File pattern filter (e.g. '*.py')"},
-                },
-                "required": ["pattern"],
-            },
-        },
-    },
-    {
-        "type": "function",
-        "function": {
-            "name": "glob",
-            "description": "Find files matching a glob pattern.",
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "pattern": {"type": "string", "description": "Glob pattern (e.g. 'src/**/*.py')"},
-                    "path": {"type": "string", "description": "Directory to search in (defaults to cwd)"},
-                },
-                "required": ["pattern"],
-            },
-        },
-    },
-    {
-        "type": "function",
-        "function": {
-            "name": "webfetch",
-            "description": "Fetch content from a URL and return as markdown/text.",
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "url": {"type": "string", "description": "The URL to fetch"},
-                },
-                "required": ["url"],
-            },
-        },
-    },
-    {
-        "type": "function",
-        "function": {
-            "name": "question",
-            "description": "Ask the user a question during execution.",
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "question": {"type": "string", "description": "The question text"},
-                    "options": {"type": "array", "items": {"type": "string"}, "description": "Optional choices"},
-                },
-                "required": ["question"],
-            },
-        },
-    },
-    {
-        "type": "function",
-        "function": {
-            "name": "task",
-            "description": "Launch a subagent to handle a complex task autonomously. The subagent runs in a fresh session with access to tools. Use this to delegate research, code exploration, or multi-step work to a focused agent. You can launch multiple task calls in parallel for independent work.",
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "description": {"type": "string", "description": "Short (3-5 word) description of the task"},
-                    "prompt": {"type": "string", "description": "Detailed task for the subagent. Include exactly what to do and what to return."},
-                },
-                "required": ["description", "prompt"],
-            },
-        },
-    },
+    handler=vision,
+    vision_only=True,
+))
+
+
+def tool_schemas(names: Iterable[str] | None = None, include_vision: bool = True) -> list[dict]:
+    selected = list(names) if names is not None else list(TOOLS)
+    return [
+        TOOLS[n].schema()
+        for n in selected
+        if n in TOOLS and (include_vision or not TOOLS[n].vision_only)
+    ]
+
+
+def get_tool(name: str) -> Tool | None:
+    return TOOLS.get(name)
+
+
+def requires_permission(name: str, args: dict) -> bool:
+    tool = TOOLS.get(name)
+    if tool is None or tool.pause != "permission":
+        return False
+    if tool.auto_allow is not None:
+        try:
+            if tool.auto_allow(args):
+                return False
+        except Exception:  # noqa: BLE001
+            return True
+    return True
+
+
+async def execute_tool(
+    name: str,
+    args: dict[str, Any],
+    ctx: ToolContext,
+    allowed: Iterable[str] | None = None,
+) -> ToolResult:
+    tool = TOOLS.get(name)
+    if tool is None:
+        known = ", ".join(sorted(TOOLS))
+        return ToolResult.error(f"unknown tool '{name}'. Available tools: {known}", name)
+    if allowed is not None and name not in allowed:
+        return ToolResult.error(f"tool '{name}' is not available in this context", name)
+
+    # Drop unexpected keys so a hallucinated argument cannot raise TypeError.
+    signature = inspect.signature(tool.handler)
+    accepts_kwargs = any(
+        p.kind is inspect.Parameter.VAR_KEYWORD for p in signature.parameters.values()
+    )
+    if not accepts_kwargs:
+        args = {k: v for k, v in args.items() if k in signature.parameters}
+
+    try:
+        result = await tool.handler(ctx, **args)
+    except TypeError as e:
+        return ToolResult.error(f"invalid arguments for '{name}': {e}", name)
+    except asyncio.CancelledError:
+        raise
+    except Exception as e:  # noqa: BLE001
+        return ToolResult.error(f"{name} failed: {type(e).__name__}: {e}", name)
+
+    if not isinstance(result, ToolResult):
+        result = ToolResult(output=str(result), title=name)
+    if not result.title:
+        result = ToolResult(output=result.output, is_error=result.is_error, title=name)
+    return result
+
+__all__ = [
+    "Tool", "TOOLS", "ToolContext", "ToolResult",
+    "tool_schemas", "get_tool", "execute_tool", "requires_permission",
 ]
-
-TOOL_HANDLERS: dict[str, Any] = {
-    "read": read_file,
-    "edit": edit_file,
-    "write": write_file,
-    "bash": run_bash,
-    "grep": grep_search,
-    "glob": glob_search,
-    "webfetch": webfetch,
-    "question": ask_question,
-    "vision": vision,
-    "task": run_task,
-}
-
-
-def get_tool_definitions(include_vision: bool = True) -> list[dict]:
-    tools = list(BASE_TOOLS)
-    if include_vision:
-        tools.append(VISION_TOOL_DEF)
-    return tools
-
-
-def get_tool_handler(name: str):
-    return TOOL_HANDLERS.get(name)

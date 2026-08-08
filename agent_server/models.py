@@ -1,56 +1,43 @@
 from __future__ import annotations
-from typing import Optional, Any
-from pydantic import BaseModel
-from datetime import datetime
+
+from typing import Any, Literal, Optional
+
+from pydantic import BaseModel, Field
+
+from agent_server.config import DEFAULT_MODEL, DEFAULT_PROVIDER
 
 
 class SessionCreate(BaseModel):
     name: str
     project_dir: str
-    provider: str = "deepseek"
-    model: str = "deepseek-v4-pro"
+    provider: str = DEFAULT_PROVIDER
+    model: str = DEFAULT_MODEL
     prompt_profile: str = "default"
+    thinking_effort: Optional[str] = None
 
 
 class SessionUpdate(BaseModel):
     name: Optional[str] = None
     provider: Optional[str] = None
     model: Optional[str] = None
-    temperature: Optional[float] = None
     thinking_effort: Optional[str] = None
     prompt_profile: Optional[str] = None
     bash_auto_approve: Optional[int] = None
     is_archived: Optional[int] = None
 
 
-class SessionResponse(BaseModel):
-    id: str
-    name: str
-    project_dir: str
-    provider: str
-    model: str
-    temperature: float
-    thinking_effort: Optional[str]
-    prompt_profile: str = "default"
-    bash_auto_approve: int = 0
-    created_at: str
-    last_active_at: str
-    is_archived: int
-
-
 class ChatRequest(BaseModel):
     message: str
 
 
-class ChatResponse(BaseModel):
-    session_id: str
-    content: str
-
-
-class ToolCall(BaseModel):
-    id: str
-    name: str
-    arguments: dict[str, Any]
+class ResolveRequest(BaseModel):
+    """Answer to a paused tool call."""
+    tool_call_id: str
+    action: Literal["approve", "reject", "answer"]
+    value: str = ""
+    # "once" applies to this call only; "session" also enables auto-approval
+    # for the rest of this server process.
+    scope: Literal["once", "session"] = "once"
 
 
 class MessageResponse(BaseModel):
@@ -58,8 +45,11 @@ class MessageResponse(BaseModel):
     session_id: str
     role: str
     content: str
+    reasoning_content: Optional[str] = None
     tool_calls: Optional[list[dict[str, Any]]] = None
     tool_call_id: Optional[str] = None
+    tool_name: Optional[str] = None
+    is_error: int = 0
     token_count: Optional[int] = None
     created_at: str
-    is_compacted: int
+    is_compacted: int = 0

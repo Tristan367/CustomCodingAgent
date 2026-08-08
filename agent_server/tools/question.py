@@ -1,8 +1,25 @@
-from typing import Any
+"""Ask the user a question mid-run.
 
-# Stub: this tool pauses execution and waits for user input via the UI.
-# In practice, the chat loop will detect this tool call and yield a special event.
+This tool never computes anything. The agent loop recognises it as interactive,
+pauses, and the answer submitted from the UI becomes the tool result.
+"""
+
+from agent_server.tools.base import ToolContext, ToolResult
 
 
-async def ask_question(*, question: str, options: list[str] | None = None, **kwargs: Any) -> str:
-    return "[QUESTION_PENDING]"
+async def ask_question(
+    ctx: ToolContext,
+    *,
+    question: str,
+    options: list[str] | None = None,
+    **_,
+) -> ToolResult:
+    # Only reached if something bypasses the interactive pause.
+    return ToolResult.error("question tool requires user interaction", "question")
+
+
+def format_prompt(question: str, options: list[str] | None) -> str:
+    text = question
+    if options:
+        text += "\n" + "\n".join(f"  {i + 1}. {o}" for i, o in enumerate(options))
+    return text

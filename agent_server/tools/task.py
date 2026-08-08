@@ -1,100 +1,116 @@
-"""Task tool — launch subagents for autonomous work."""
+"""Subagent tool: run a focused, read-only agent loop and return its answer.
 
-from agent_server import database as db
+The subagent keeps its conversation entirely in memory. Earlier versions created
+a real row in `sessions`, which polluted the session list and leaked rows when
+the subagent raised.
+"""
 
-SUBAGENT_TOOLS = ["read", "grep", "glob", "webfetch"]
+import asyncio
+
+from agent_server.config import DEFAULT_MODEL, DEFAULT_PROVIDER, MAX_TOOL_RESULT_CHARS
+from agent_server.conversation import normalize_tool_calls, parse_arguments, tool_call_name
+from agent_server.tools.base import ToolContext, ToolResult, truncate
+
+# Deliberately read-only: a subagent researches, the main agent makes changes.
+SUBAGENT_TOOLS = ("read", "grep", "glob", "webfetch")
+MAX_ROUNDS = 20
+TIMEOUT = 600
+
+SUBAGENT_PROMPT = """You are a research subagent. You investigate and report back; \
+you cannot modify anything.
+
+Your tools are read-only: read, grep, glob, webfetch.
+
+Work autonomously until you can fully answer the task, then reply with your \
+findings. Your entire reply is the only thing returned to the parent agent, so \
+it must stand alone: include concrete file paths with line numbers, relevant \
+code snippets, and direct answers. Do not ask questions or describe your plan."""
 
 
-async def run_task(*, description: str, prompt: str) -> str:
-    from agent_server.providers import get_provider
-    from agent_server.tools.registry import get_tool_definitions, get_tool_handler
-    from agent_server.system_prompt import build_system_prompt
-    from agent_server.config import DEFAULT_MODEL, DEFAULT_PROVIDER
-    import json
-
+async def run_task(ctx: ToolContext, *, description: str, prompt: str, **_) -> ToolResult:
+    title = f"task: {description[:70]}"
     try:
-        session = await db.create_session(
-            name=f"subagent: {description}",
-            project_dir="/tmp",
-            provider=DEFAULT_PROVIDER,
-            model=DEFAULT_MODEL,
-            prompt_profile="default",
+        return await asyncio.wait_for(_run(ctx, description, prompt, title), timeout=TIMEOUT)
+    except asyncio.TimeoutError:
+        return ToolResult.error(f"subagent timed out after {TIMEOUT}s", title)
+    except asyncio.CancelledError:
+        raise
+    except Exception as e:  # noqa: BLE001
+        return ToolResult.error(f"subagent failed: {type(e).__name__}: {e}", title)
+
+
+async def _run(ctx: ToolContext, description: str, prompt: str, title: str) -> ToolResult:
+    from agent_server.providers import get_provider
+    from agent_server.tools.registry import execute_tool, tool_schemas
+
+    provider = get_provider(DEFAULT_PROVIDER)
+    tools = tool_schemas(SUBAGENT_TOOLS)
+
+    messages: list[dict] = [
+        {"role": "system", "content": f"{SUBAGENT_PROMPT}\n\nWorking directory: {ctx.project_dir}"},
+        {"role": "user", "content": prompt},
+    ]
+
+    for _round in range(MAX_ROUNDS):
+        if ctx.abort.is_set():
+            return ToolResult.error("cancelled", title)
+
+        content = ""
+        reasoning = ""
+        partials: dict[int, dict] = {}
+        finish = "stop"
+
+        async for event in provider.chat_completion(
+            messages=messages, tools=tools, model=DEFAULT_MODEL, thinking_effort="low"
+        ):
+            etype = event["type"]
+            if etype == "content":
+                content += event["text"]
+            elif etype == "reasoning":
+                reasoning += event["text"]
+            elif etype == "tool_calls":
+                _accumulate(partials, event["deltas"])
+            elif etype == "error":
+                return ToolResult.error(event["message"], title)
+            elif etype == "finish":
+                finish = event["reason"]
+
+        calls = normalize_tool_calls(
+            [partials[i] for i in sorted(partials)]
         )
-        session_id = session["id"]
-        await db.add_message(session_id, "user", prompt)
 
-        provider = get_provider(DEFAULT_PROVIDER)
-        model = DEFAULT_MODEL
+        assistant: dict = {"role": "assistant", "content": content}
+        if reasoning:
+            assistant["reasoning_content"] = reasoning
+        if calls:
+            assistant["tool_calls"] = calls
+        messages.append(assistant)
 
-        all_tools = get_tool_definitions(include_vision=not provider.supports_vision())
-        tools = [t for t in all_tools if t["function"]["name"] in SUBAGENT_TOOLS]
+        if finish != "tool_calls" or not calls:
+            if content.strip():
+                return ToolResult(output=content.strip(), title=title)
+            return ToolResult.error("subagent returned no answer", title)
 
-        system = build_system_prompt("default")
+        for call in calls:
+            result = await execute_tool(
+                tool_call_name(call), parse_arguments(call), ctx, allowed=SUBAGENT_TOOLS
+            )
+            messages.append({
+                "role": "tool",
+                "tool_call_id": call["id"],
+                "content": truncate(result.output, MAX_TOOL_RESULT_CHARS // 2),
+            })
 
-        assistant_content = ""
-        for _ in range(15):
-            active = await db.get_messages(session_id, include_compacted=False)
-            messages = [{"role": "system", "content": system}]
-            for m in active:
-                msg = {"role": m["role"], "content": m["content"]}
-                if m.get("tool_calls"):
-                    try:
-                        msg["tool_calls"] = json.loads(m["tool_calls"])
-                    except (json.JSONDecodeError, TypeError):
-                        pass
-                if m.get("tool_call_id"):
-                    msg["tool_call_id"] = m["tool_call_id"]
-                messages.append(msg)
+    return ToolResult.error(f"subagent exceeded {MAX_ROUNDS} rounds without answering", title)
 
-            assistant_content = ""
-            tool_calls_map: dict[int, dict] = {}
 
-            async for chunk in provider.chat_completion(
-                messages=messages, tools=tools, model=model, temperature=0.0,
-            ):
-                if "content" in chunk:
-                    assistant_content += chunk["content"]
-                if "tool_calls" in chunk:
-                    for tc in chunk["tool_calls"]:
-                        idx = tc["index"]
-                        if idx not in tool_calls_map:
-                            tool_calls_map[idx] = {"id": tc.get("id"), "name": "", "arguments": ""}
-                        if tc["function"].get("name"):
-                            tool_calls_map[idx]["name"] = tc["function"]["name"]
-                        if tc["function"].get("arguments"):
-                            tool_calls_map[idx]["arguments"] += tc["function"]["arguments"]
-                if "finish_reason" in chunk:
-                    finish = chunk["finish_reason"]
-                    if finish == "stop":
-                        if assistant_content:
-                            await db.add_message(session_id, "assistant", assistant_content)
-                        await db.delete_session(session_id)
-                        return assistant_content or "(no response)"
-                    elif finish == "tool_calls":
-                        tc_list = [tool_calls_map[k] for k in sorted(tool_calls_map.keys())]
-                        await db.add_message(
-                            session_id, "assistant", assistant_content or "",
-                            tool_calls=json.dumps(tc_list),
-                        )
-                        for tc in tc_list:
-                            try:
-                                args = json.loads(tc["arguments"])
-                            except json.JSONDecodeError:
-                                args = {}
-                            handler = get_tool_handler(tc["name"])
-                            if handler:
-                                try:
-                                    result = await handler(**args)
-                                except Exception as e:
-                                    result = f"Tool error: {e}"
-                            else:
-                                result = f"Unknown tool: {tc['name']}"
-                            if len(result) > 20000:
-                                result = result[:20000] + "\n... [truncated]"
-                            await db.add_message(session_id, "tool", result, tool_call_id=tc["id"])
-                        break
-
-        await db.delete_session(session_id)
-        return assistant_content or "(exceeded max rounds)"
-    except Exception as e:
-        return f"Subagent error: {e}"
+def _accumulate(partials: dict[int, dict], deltas: list[dict]):
+    for d in deltas:
+        idx = d.get("index", 0)
+        slot = partials.setdefault(idx, {"id": "", "name": "", "arguments": ""})
+        if d.get("id"):
+            slot["id"] = d["id"]
+        if d.get("name"):
+            slot["name"] = d["name"]
+        if d.get("arguments"):
+            slot["arguments"] += d["arguments"]

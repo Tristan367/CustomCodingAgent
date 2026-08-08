@@ -32,10 +32,41 @@ open_browser() {
   echo "codeagent: server did not come up at $URL" >&2
 }
 
+# Always succeeds: lsof exits non-zero when nothing matches, which under
+# `set -e` would abort the script instead of reporting "not running".
+running_pid() { lsof -ti:"$PORT" 2>/dev/null | head -1 || true; }
+
+stop_server() {
+  local pid
+  pid="$(running_pid)"
+  [ -n "$pid" ] || { echo "codeagent: not running"; return 1; }
+  # SIGTERM, not -9: uvicorn's shutdown hook is what unloads the vision model.
+  kill "$pid" 2>/dev/null || true
+  for _ in $(seq 1 40); do
+    sleep 0.25
+    [ -n "$(running_pid)" ] || { echo "codeagent: stopped"; return 0; }
+  done
+  echo "codeagent: did not stop; sending SIGKILL" >&2
+  kill -9 "$pid" 2>/dev/null || true
+  return 0
+}
+
 case "${1:-}" in
   stop)
-    lsof -ti:"$PORT" 2>/dev/null | xargs -r kill 2>/dev/null || true
-    echo "codeagent: stopped"
+    stop_server || true
+    exit 0
+    ;;
+  restart)
+    stop_server || true
+    sleep 0.5
+    ;;
+  status)
+    pid="$(running_pid)"
+    if [ -n "$pid" ]; then
+      echo "codeagent: running at $URL (pid $pid)"
+    else
+      echo "codeagent: not running"
+    fi
     exit 0
     ;;
   open)
@@ -45,9 +76,14 @@ case "${1:-}" in
   -h|--help)
     cat <<'EOF'
 codeagent            start the server and open it in your browser
-codeagent stop       stop a running server
-codeagent open       just open the browser at the running server
+codeagent stop       stop it cleanly (this is what unloads the vision model)
+codeagent restart    stop it, then start in this terminal
+codeagent status     is it running, and on what pid
+codeagent open       just open the browser at a server already running
 codeagent --no-open  start without opening a browser
+
+Ctrl-C stops a server started in this terminal. Use `codeagent stop` for one
+started somewhere else. Both run the shutdown hook; kill -9 does not.
 
 The vision rig is started on demand; see VISION_* in .env.example.
 EOF
@@ -59,7 +95,8 @@ esac
 
 # Already running? Just show it, rather than killing someone's in-flight turn.
 if curl -sf -o /dev/null --max-time 1 "$URL/"; then
-  echo "codeagent: already running at $URL"
+  echo "codeagent: already running at $URL (pid $(running_pid))"
+  echo "           opening it. Use 'codeagent stop' or 'codeagent restart' to take it down."
   [ "${1:-}" = "--no-open" ] || open_browser
   exit 0
 fi

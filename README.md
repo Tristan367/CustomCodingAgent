@@ -13,9 +13,18 @@ ln -s "$PWD/bin/codeagent" ~/.local/bin/codeagent
 codeagent                   # starts the server and opens the browser
 ```
 
-`codeagent stop` stops it, `codeagent open` opens a browser at a server that is
-already running, and `codeagent --no-open` skips the browser. Stopping with
-Ctrl-C matters: the shutdown hook is what unloads the vision model from the rig.
+| | |
+|---|---|
+| `codeagent` | start, and open a browser at it |
+| `codeagent stop` | stop it cleanly |
+| `codeagent restart` | stop it, then start in this terminal |
+| `codeagent status` | running or not, and on what pid |
+| `codeagent open` | open a browser at one already running |
+
+Ctrl-C stops a server started in this terminal; `codeagent stop` stops one
+started elsewhere. Both run the shutdown hook, which is what unloads the vision
+model from the rig. `kill -9` skips it, and the model then sits in memory until
+Ollama expires it.
 
 Add your DeepSeek API key on the home page (or set `DEEPSEEK_API_KEY`, which wins),
 pick a project directory, and create a session.

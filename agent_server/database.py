@@ -378,9 +378,12 @@ async def get_session_usage(session_id: str) -> dict:
         totals["cost"] += cost
 
     # The most recent request's prompt size is the truest measure of live context.
+    # Assistant rows only. Subagent usage is recorded on tool rows so that its
+    # cost counts, but a subagent's prompt is its own conversation and says
+    # nothing about how full this session's context is.
     last = await _fetchone(
         "SELECT usage FROM messages WHERE session_id = ? AND usage IS NOT NULL"
-        " AND is_compacted = 0 ORDER BY id DESC LIMIT 1",
+        " AND role = 'assistant' AND is_compacted = 0 ORDER BY id DESC LIMIT 1",
         (session_id,),
     )
     context = 0

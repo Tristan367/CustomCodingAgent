@@ -36,10 +36,16 @@ class ToolResult:
     is_error: bool = False
     title: str = ""
     diff: str = ""
+    # Token usage for tools that call a model themselves, so their spend is
+    # attributed to the session instead of vanishing.
+    usage: dict | None = None
 
     @classmethod
-    def error(cls, message: str, title: str = "") -> "ToolResult":
-        return cls(output=f"Error: {message}", is_error=True, title=title or "error")
+    def error(cls, message: str, title: str = "", usage: dict | None = None) -> "ToolResult":
+        return cls(
+            output=f"Error: {message}", is_error=True, title=title or "error",
+            usage=usage or None,
+        )
 
 
 def unified_diff(before: str, after: str, path: str, context: int = 3) -> str:

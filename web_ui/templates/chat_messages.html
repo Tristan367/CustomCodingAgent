@@ -26,7 +26,8 @@
 
     {% for m in messages %}
     {% if m.role == 'tool' %}
-    <div class="message tool {% if m.is_error %}tool-error{% endif %}" id="msg-{{ m.id }}">
+    <div class="message tool {% if m.is_error %}tool-error{% endif %}" id="msg-{{ m.id }}"
+         data-tool-call-id="{{ m.tool_call_id or '' }}">
         <div class="msg-role">{{ m.tool_name or 'result' }}</div>
         <div class="msg-content">
             {% if m.diff %}

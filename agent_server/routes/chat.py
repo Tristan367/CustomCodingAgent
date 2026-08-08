@@ -28,20 +28,31 @@ SSE_HEADERS = {
 
 
 def _stream(session_id: str, request: Request) -> StreamingResponse:
-    """Wrap the agent loop in SSE, aborting the run if the client goes away."""
+    """Start the turn and follow it over SSE.
+
+    The run is owned by the server, not by this request. Disconnecting -- a
+    reload, a tab switch, closing the laptop -- unsubscribes and nothing more;
+    the turn keeps going and its results are still recorded. Only an explicit
+    cancel stops it.
+    """
+    agent.start_run(session_id)
 
     async def generator() -> AsyncIterator[str]:
-        try:
-            async for event in agent.run(session_id):
-                if await request.is_disconnected():
-                    agent.request_abort(session_id)
-                    break
-                yield agent.sse(event)
-        except asyncio.CancelledError:
-            agent.request_abort(session_id)
-            raise
-        finally:
+        async for event in agent.subscribe(session_id):
+            yield agent.sse(event)
+
+    return StreamingResponse(generator(), media_type="text/event-stream", headers=SSE_HEADERS)
+
+
+def _attach(session_id: str) -> StreamingResponse:
+    """Follow a turn that is already running, without restarting it."""
+
+    async def generator() -> AsyncIterator[str]:
+        if agent.active_run(session_id) is None:
             yield agent.sse({"type": "stream_end"})
+            return
+        async for event in agent.subscribe(session_id, replay=False):
+            yield agent.sse(event)
 
     return StreamingResponse(generator(), media_type="text/event-stream", headers=SSE_HEADERS)
 
@@ -142,6 +153,12 @@ async def continue_run(session_id: str, request: Request):
     """
     await _require_session(session_id)
     return _stream(session_id, request)
+
+
+@router.get("/sessions/{session_id}/attach")
+async def attach(session_id: str):
+    await _require_session(session_id)
+    return _attach(session_id)
 
 
 @router.post("/sessions/{session_id}/cancel")

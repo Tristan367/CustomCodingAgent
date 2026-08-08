@@ -51,9 +51,11 @@ async def _run(ctx: ToolContext, description: str, prompt: str, title: str) -> T
         {"role": "user", "content": prompt},
     ]
 
+    usage_total: dict = {}
+
     for _round in range(MAX_ROUNDS):
         if ctx.abort.is_set():
-            return ToolResult.error("cancelled", title)
+            return ToolResult.error("cancelled", title, usage_total)
 
         content = ""
         reasoning = ""
@@ -70,8 +72,12 @@ async def _run(ctx: ToolContext, description: str, prompt: str, title: str) -> T
                 reasoning += event["text"]
             elif etype == "tool_calls":
                 _accumulate(partials, event["deltas"])
+            elif etype == "usage":
+                for key, value in (event["usage"] or {}).items():
+                    if isinstance(value, (int, float)):
+                        usage_total[key] = usage_total.get(key, 0) + value
             elif etype == "error":
-                return ToolResult.error(event["message"], title)
+                return ToolResult.error(event["message"], title, usage_total)
             elif etype == "finish":
                 finish = event["reason"]
 
@@ -88,8 +94,8 @@ async def _run(ctx: ToolContext, description: str, prompt: str, title: str) -> T
 
         if finish != "tool_calls" or not calls:
             if content.strip():
-                return ToolResult(output=content.strip(), title=title)
-            return ToolResult.error("subagent returned no answer", title)
+                return ToolResult(output=content.strip(), title=title, usage=usage_total or None)
+            return ToolResult.error("subagent returned no answer", title, usage_total)
 
         for call in calls:
             result = await execute_tool(
@@ -101,7 +107,9 @@ async def _run(ctx: ToolContext, description: str, prompt: str, title: str) -> T
                 "content": truncate(result.output, MAX_TOOL_RESULT_CHARS // 2),
             })
 
-    return ToolResult.error(f"subagent exceeded {MAX_ROUNDS} rounds without answering", title)
+    return ToolResult.error(
+        f"subagent exceeded {MAX_ROUNDS} rounds without answering", title, usage_total
+    )
 
 
 def _accumulate(partials: dict[int, dict], deltas: list[dict]):

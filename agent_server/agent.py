@@ -122,7 +122,104 @@ class Paused(Exception):
     """Raised internally when the loop stops to wait for the user."""
 
 
-async def run(session_id: str) -> AsyncIterator[dict]:
+class _Run:
+    """A turn in progress, owned by the server rather than by an HTTP request.
+
+    The agent loop used to run inside the SSE response, so closing the tab,
+    reloading, or navigating away cancelled it: subagents were killed and their
+    work was thrown away without ever being recorded. The loop now runs as a
+    task and clients attach to it, so a disconnect costs nothing.
+    """
+
+    __slots__ = ("events", "subscribers", "task", "done", "inflight")
+
+    def __init__(self):
+        self.events: list[dict] = []
+        self.subscribers: set[asyncio.Queue] = set()
+        self.task: asyncio.Task | None = None
+        self.done = asyncio.Event()
+        self.inflight: dict[str, dict] = {}
+
+
+_runs: dict[str, _Run] = {}
+
+
+def _publish(run: _Run, event: dict):
+    if event["type"] == "tool_start":
+        run.inflight[event["tool_call_id"]] = event
+    elif event["type"] == "tool_end":
+        run.inflight.pop(event["tool_call_id"], None)
+    run.events.append(event)
+    for queue in list(run.subscribers):
+        queue.put_nowait(event)
+
+
+async def _drive(session_id: str, run: _Run):
+    try:
+        async for event in _run_events(session_id):
+            _publish(run, event)
+    except asyncio.CancelledError:
+        _publish(run, {"type": "error", "message": "Run cancelled."})
+        raise
+    except Exception as e:  # noqa: BLE001
+        _publish(run, {"type": "error", "message": f"{type(e).__name__}: {e}"})
+    finally:
+        _publish(run, {"type": "stream_end"})
+        run.done.set()
+
+
+def start_run(session_id: str) -> _Run:
+    """Start a turn, or return the one already in progress."""
+    existing = _runs.get(session_id)
+    if existing is not None and not existing.done.is_set():
+        return existing
+    run = _Run()
+    _runs[session_id] = run
+    run.task = asyncio.create_task(_drive(session_id, run))
+    return run
+
+
+def active_run(session_id: str) -> _Run | None:
+    run = _runs.get(session_id)
+    return run if run is not None and not run.done.is_set() else None
+
+
+async def subscribe(session_id: str, replay: bool = True) -> AsyncIterator[dict]:
+    """Follow a run. Disconnecting only unsubscribes; the run continues."""
+    run = _runs.get(session_id)
+    if run is None:
+        yield {"type": "stream_end"}
+        return
+
+    queue: asyncio.Queue = asyncio.Queue()
+    # No await between these two lines, so nothing can be published in the gap:
+    # the backlog holds everything before the queue existed, the queue holds
+    # everything after, and no event lands in both.
+    run.subscribers.add(queue)
+    backlog = list(run.events) if replay else []
+
+    try:
+        if not replay:
+            # A reattaching client already has the persisted transcript; it just
+            # needs to know which calls are still outstanding.
+            yield {"type": "attached", "inflight": list(run.inflight.values())}
+        for event in backlog:
+            yield event
+            if event["type"] == "stream_end":
+                return
+        if run.done.is_set() and queue.empty():
+            yield {"type": "stream_end"}
+            return
+        while True:
+            event = await queue.get()
+            yield event
+            if event["type"] == "stream_end":
+                return
+    finally:
+        run.subscribers.discard(queue)
+
+
+async def _run_events(session_id: str) -> AsyncIterator[dict]:
     """Drive the session forward and yield UI events.
 
     Assumes any new user input has already been persisted.
@@ -496,6 +593,9 @@ async def _record(session_id: str, call: dict, result: ToolResult, duration_ms: 
         tool_title=result.title,
         duration_ms=duration_ms,
         file_path=path if result.diff else "",
+        # Subagents bill against this session; without this their spend is
+        # simply not counted anywhere.
+        usage=result.usage,
     )
 
 

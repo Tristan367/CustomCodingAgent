@@ -35,6 +35,7 @@ function initSession() {
   stopAllElapsed();
   renderStoredMessages();
   restorePending();
+  attachIfRunning();
   Dictation.init();
   markSessionSeen();
   if (!Persist.restore()) scrollToBottom(true);
@@ -70,6 +71,24 @@ document.addEventListener('htmx:afterSwap', (e) => {
     if (id === 'main-content') refreshTabBar();
   }
 });
+
+/* Pull the transcript fresh from the server. Used after following a run that
+   was already in progress, where the earlier part was never streamed here. */
+async function refreshTranscript() {
+  if (!App.sessionId) return;
+  try {
+    const html = await (await fetch(`/_messages/${App.sessionId}`)).text();
+    const holder = document.createElement('div');
+    holder.innerHTML = html;
+    const fresh = holder.querySelector('#messages');
+    if (fresh && App.els.messages) {
+      App.els.messages.replaceWith(fresh);
+      App.els.messages = fresh;
+      renderStoredMessages();
+      scrollToBottom(true);
+    }
+  } catch (_) { /* leave what is on screen */ }
+}
 
 /* Render markdown for server-rendered message bodies. */
 function renderStoredMessages() {
@@ -134,12 +153,30 @@ async function resolveToolCall(toolCallId, action, value, scope, grantPath) {
   });
 }
 
-async function streamRequest(url, options) {
+/* Reattach to a turn that is still running server-side, after a reload or a
+   tab switch. Without this the run continues but the page shows nothing, which
+   looks exactly like it was cancelled. */
+async function attachIfRunning() {
+  if (!App.sessionId || App.streaming) return;
+  let running = false;
+  try {
+    const data = await (await fetch('/api/status')).json();
+    running = (data.sessions || {})[App.sessionId]?.status === 'running';
+  } catch (_) {
+    return;
+  }
+  if (!running) return;
+  await streamRequest(`/api/sessions/${App.sessionId}/attach`, { method: 'GET' }, true);
+}
+
+async function streamRequest(url, options, attached = false) {
   setStreaming(true);
   App.abortController = new AbortController();
 
-  const stream = { assistantEl: null, contentEl: null, text: '', reasoningEl: null };
-  const status = showStatus('Sending');
+  const stream = {
+    assistantEl: null, contentEl: null, text: '', reasoningEl: null, attached,
+  };
+  const status = showStatus(attached ? 'Reattaching' : 'Sending');
 
   try {
     const resp = await fetch(url, { ...options, signal: App.abortController.signal });
@@ -282,6 +319,10 @@ function handleEvent(event, stream) {
       }
       stream.text += event.text;
       scheduleRender(stream);
+      break;
+
+    case 'attached':
+      for (const call of event.inflight || []) appendToolCall(call);
       break;
 
     case 'tool_progress':
@@ -486,6 +527,9 @@ function collapseReasoning(textEl) {
 }
 
 function appendToolCall(event) {
+  const existing = App.els.messages.querySelector(
+    `.message.tool[data-tool-call-id="${cssEscape(event.tool_call_id)}"]`);
+  if (existing) return existing;
   const node = el('div', 'message tool pending');
   node.dataset.toolCallId = event.tool_call_id;
   node.appendChild(el('div', 'msg-role', event.name));

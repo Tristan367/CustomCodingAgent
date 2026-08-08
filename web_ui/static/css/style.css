@@ -840,3 +840,203 @@ select { cursor: pointer; }
   .session-dir, .session-info .chip:nth-child(n+4) { display: none; }
   #messages, #chat-form { padding-left: 12px; padding-right: 12px; }
 }
+
+/* ── Context ring ────────────────────────────────────────────────────────── */
+
+.context-ring {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 26px;
+  height: 26px;
+  padding: 0;
+  background: none;
+  border: 0;
+  cursor: pointer;
+  flex: 0 0 auto;
+}
+.ring-track { stroke: var(--border-strong); }
+.ring-fill { transition: stroke-dasharray 400ms ease, stroke 300ms ease; }
+.ring-ok    .ring-fill { stroke: var(--success); }
+.ring-warn  .ring-fill { stroke: var(--warn); }
+.ring-danger .ring-fill { stroke: var(--danger); }
+.ring-label {
+  position: absolute;
+  font-size: 8px;
+  font-family: var(--mono);
+  color: var(--text-dim);
+  pointer-events: none;
+}
+.context-ring:hover .ring-label { color: var(--text); }
+
+.cost-chip {
+  font-family: var(--mono);
+  font-size: 11px;
+  color: var(--text-dim);
+  padding: 1px 7px;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: var(--bg-inset);
+  white-space: nowrap;
+}
+
+/* ── Tab status dots ─────────────────────────────────────────────────────── */
+
+.tab-dot {
+  width: 6px;
+  height: 6px;
+  margin-left: 9px;
+  border-radius: 50%;
+  background: transparent;
+  flex: 0 0 auto;
+  transition: background 200ms ease;
+}
+.tab-wrap[data-state="running"] .tab-dot { background: var(--accent); animation: pulse 1.1s ease-in-out infinite; }
+.tab-wrap[data-state="waiting"] .tab-dot { background: var(--warn); }
+.tab-wrap[data-state="done"]    .tab-dot { background: var(--success); }
+.tab-wrap[data-state="error"]   .tab-dot { background: var(--danger); }
+.tab-wrap[data-state] .tab { color: var(--text); }
+.tab-wrap:not([data-state]) .tab-dot,
+.tab-wrap[data-state=""] .tab-dot { background: transparent; }
+.tab-wrap .tab { padding-left: 7px; }
+
+/* ── Message actions ─────────────────────────────────────────────────────── */
+
+.msg-side { display: flex; align-items: center; gap: 8px; padding-top: 3px; }
+.msg-actions { display: flex; gap: 4px; opacity: 0; transition: opacity 120ms ease; }
+.message:hover .msg-actions { opacity: 1; }
+.msg-actions button {
+  background: none;
+  border: 0;
+  color: var(--text-faint);
+  font-family: var(--mono);
+  font-size: 10px;
+  cursor: pointer;
+  padding: 1px 4px;
+  border-radius: 3px;
+}
+.msg-actions button:hover { background: var(--bg-hover); color: var(--accent); }
+
+.message-editor {
+  width: 100%;
+  min-height: 70px;
+  margin-top: 4px;
+  padding: 8px 10px;
+  background: var(--bg-inset);
+  border: 1px solid var(--accent-dim);
+  border-radius: 4px;
+  color: var(--text);
+  font-family: inherit;
+  font-size: 13.5px;
+  resize: vertical;
+}
+.message-edit-actions { display: flex; gap: 8px; margin-top: 6px; }
+
+/* ── Diffs ───────────────────────────────────────────────────────────────── */
+
+.diff-block {
+  margin: 5px 0;
+  padding: 7px 0;
+  background: var(--bg-inset);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  overflow-x: auto;
+  font-size: 11.5px;
+  line-height: 1.45;
+  max-height: 420px;
+  overflow-y: auto;
+}
+.diff-block span { display: block; padding: 0 10px; white-space: pre; }
+.diff-add  { background: rgba(63, 185, 80, 0.13); color: #7ee787; }
+.diff-del  { background: rgba(248, 81, 73, 0.12); color: #ffa198; }
+.diff-hunk { color: var(--text-faint); background: rgba(110, 118, 129, 0.10); }
+.diff-ctx  { color: var(--text-dim); }
+
+/* ── Threshold slider ────────────────────────────────────────────────────── */
+
+.modal-content.wide { width: min(560px, 94vw); }
+.field-label { display: block; font-size: 11.5px; color: var(--text-dim); margin: 10px 0 4px; }
+.field-label textarea { width: 100%; margin-top: 4px; resize: vertical; }
+
+.threshold-readout {
+  text-align: center;
+  font-family: var(--mono);
+  font-size: 13px;
+  color: var(--text-dim);
+  margin: 12px 0 6px;
+}
+#threshold-value { font-size: 24px; color: var(--accent); font-weight: 600; }
+
+#threshold-slider {
+  width: 100%;
+  accent-color: var(--accent);
+  cursor: pointer;
+}
+.threshold-scale {
+  display: flex;
+  justify-content: space-between;
+  font-family: var(--mono);
+  font-size: 10px;
+  color: var(--text-faint);
+  margin-top: 2px;
+}
+
+.btn-ghost {
+  padding: 6px 15px;
+  border-radius: 4px;
+  font-size: 12.5px;
+  font-family: inherit;
+  cursor: pointer;
+  background: none;
+  border: 1px solid transparent;
+  color: var(--text-dim);
+}
+.btn-ghost:hover { color: var(--text); background: var(--bg-hover); }
+
+.notice-info .content-text {
+  background: var(--bg-raised);
+  border-left: 2px solid var(--accent);
+  color: var(--text-dim);
+}
+.notice-info .msg-role { color: var(--accent); }
+
+/* ── Stats grid ──────────────────────────────────────────────────────────── */
+
+.stat-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(110px, 1fr));
+  gap: 8px;
+}
+.stat {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  padding: 9px 11px;
+  background: var(--bg-inset);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+}
+.stat-value { font-family: var(--mono); font-size: 15px; color: var(--text); }
+.stat-label { font-size: 10.5px; color: var(--text-faint); text-transform: uppercase; letter-spacing: 0.04em; }
+
+/* ── Writable directory list ─────────────────────────────────────────────── */
+
+.dir-list { list-style: none; margin: 0 0 10px; padding: 0; display: flex; flex-direction: column; gap: 1px; }
+.dir-list li {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 5px 9px;
+  background: var(--bg-inset);
+  border-radius: 4px;
+  font-size: 12px;
+}
+.dir-list li.hint { background: none; padding-left: 0; }
+.dir-list code { flex: 1; color: var(--text-dim); overflow: hidden; text-overflow: ellipsis; }
+.dir-list .icon-btn { width: 22px; height: 22px; font-size: 11px; }
+
+.permission-card.permission-path { border-color: var(--accent); background: rgba(79, 156, 249, 0.07); }
+.permission-card.permission-path .permission-head { color: var(--accent); }
+.permission-card.permission-denied { border-color: var(--danger); background: rgba(248, 81, 73, 0.07); }
+.permission-card.permission-denied .permission-head { color: var(--danger); }

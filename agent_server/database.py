@@ -29,6 +29,7 @@ CREATE TABLE IF NOT EXISTS sessions (
     thinking_effort TEXT,
     prompt_profile TEXT DEFAULT 'default',
     bash_auto_approve INTEGER DEFAULT 0,
+    compact_threshold INTEGER,
     created_at TEXT NOT NULL,
     last_active_at TEXT NOT NULL,
     is_archived INTEGER DEFAULT 0
@@ -75,6 +76,7 @@ CREATE INDEX IF NOT EXISTS idx_compactions_session ON compactions(session_id, id
 MIGRATIONS: list[tuple[str, str, str]] = [
     ("sessions", "prompt_profile", "TEXT DEFAULT 'default'"),
     ("sessions", "bash_auto_approve", "INTEGER DEFAULT 0"),
+    ("sessions", "compact_threshold", "INTEGER"),
     ("messages", "reasoning_content", "TEXT"),
     ("messages", "tool_name", "TEXT"),
     ("messages", "is_error", "INTEGER DEFAULT 0"),
@@ -141,7 +143,7 @@ async def _execute(sql: str, params: tuple = ()) -> int:
 
 SESSION_FIELDS = {
     "name", "project_dir", "provider", "model", "thinking_effort",
-    "prompt_profile", "bash_auto_approve", "is_archived",
+    "prompt_profile", "bash_auto_approve", "is_archived", "compact_threshold",
 }
 
 
@@ -251,6 +253,21 @@ async def delete_message(message_id: int):
     await _execute("DELETE FROM messages WHERE id = ?", (message_id,))
 
 
+async def delete_messages_after(session_id: str, message_id: int) -> int:
+    """Drop everything after a message. Used by retry and edit-and-resend."""
+    db = await connect()
+    async with _write_lock:
+        cur = await db.execute(
+            "DELETE FROM messages WHERE session_id = ? AND id > ?", (session_id, message_id)
+        )
+        await db.commit()
+        return cur.rowcount or 0
+
+
+async def update_message(message_id: int, content: str):
+    await _execute("UPDATE messages SET content = ? WHERE id = ?", (content, message_id))
+
+
 async def mark_messages_compacted(session_id: str, message_ids: list[int]):
     if not message_ids:
         return
@@ -261,43 +278,97 @@ async def mark_messages_compacted(session_id: str, message_ids: list[int]):
     )
 
 
+def _price(usage_json: str, pricing: dict) -> tuple[dict, float]:
+    """Split one usage record into token counts and its dollar cost."""
+    try:
+        u = json.loads(usage_json)
+    except (json.JSONDecodeError, TypeError):
+        return {}, 0.0
+    if not pricing:
+        return u, 0.0
+    cached = u.get("cached_tokens", 0) or 0
+    prompt = u.get("prompt_tokens", 0) or 0
+    completion = u.get("completion_tokens", 0) or 0
+    cost = (
+        cached * pricing["price_in_hit"]
+        + max(prompt - cached, 0) * pricing["price_in_miss"]
+        + completion * pricing["price_out"]
+    ) / 1_000_000
+    return u, cost
+
+
 async def get_session_usage(session_id: str) -> dict:
-    """Aggregate token usage and estimated cost for a session."""
-    from agent_server.config import MODELS_BY_ID
+    """Token totals, spend, and live context size for one session."""
+    from agent_server.config import COMPACT_THRESHOLD_TOKENS, MODELS_BY_ID
 
     session = await get_session(session_id)
+    pricing = MODELS_BY_ID.get((session or {}).get("model", ""), {})
     rows = await _fetchall(
         "SELECT usage FROM messages WHERE session_id = ? AND usage IS NOT NULL", (session_id,)
     )
-    totals = {"input": 0, "cached": 0, "output": 0, "reasoning": 0, "cost": 0.0}
-    pricing = MODELS_BY_ID.get((session or {}).get("model", ""), {})
+
+    totals = {"input": 0, "cached": 0, "output": 0, "reasoning": 0, "cost": 0.0, "requests": 0}
     for row in rows:
-        try:
-            u = json.loads(row["usage"])
-        except (json.JSONDecodeError, TypeError):
+        u, cost = _price(row["usage"], pricing)
+        if not u:
             continue
-        cached = u.get("cached_tokens", 0) or 0
-        prompt = u.get("prompt_tokens", 0) or 0
-        completion = u.get("completion_tokens", 0) or 0
-        miss = max(prompt - cached, 0)
-        totals["input"] += prompt
-        totals["cached"] += cached
-        totals["output"] += completion
+        totals["requests"] += 1
+        totals["input"] += u.get("prompt_tokens", 0) or 0
+        totals["cached"] += u.get("cached_tokens", 0) or 0
+        totals["output"] += u.get("completion_tokens", 0) or 0
         totals["reasoning"] += u.get("reasoning_tokens", 0) or 0
-        if pricing:
-            totals["cost"] += (
-                cached * pricing["price_in_hit"]
-                + miss * pricing["price_in_miss"]
-                + completion * pricing["price_out"]
-            ) / 1_000_000
-    # Live context size = tokens the next request will actually send.
-    row = await _fetchone(
-        "SELECT COALESCE(SUM(token_count), 0) AS total FROM messages"
-        " WHERE session_id = ? AND is_compacted = 0",
+        totals["cost"] += cost
+
+    # The most recent request's prompt size is the truest measure of live context.
+    last = await _fetchone(
+        "SELECT usage FROM messages WHERE session_id = ? AND usage IS NOT NULL"
+        " AND is_compacted = 0 ORDER BY id DESC LIMIT 1",
         (session_id,),
     )
-    totals["context"] = (row or {}).get("total", 0)
+    context = 0
+    if last:
+        u, _ = _price(last["usage"], {})
+        context = u.get("prompt_tokens", 0) or 0
+    if not context:
+        row = await _fetchone(
+            "SELECT COALESCE(SUM(token_count), 0) AS total FROM messages"
+            " WHERE session_id = ? AND is_compacted = 0",
+            (session_id,),
+        )
+        context = (row or {}).get("total", 0)
+
+    totals["context"] = context
+    totals["threshold"] = (session or {}).get("compact_threshold") or COMPACT_THRESHOLD_TOKENS
+    totals["max_context"] = pricing.get("context", 1_000_000)
+    totals["percent"] = round(100 * context / totals["threshold"], 1) if totals["threshold"] else 0
+    totals["cache_hit_rate"] = (
+        round(100 * totals["cached"] / totals["input"], 1) if totals["input"] else 0
+    )
     return totals
+
+
+async def get_total_cost() -> dict:
+    """Cumulative spend across every session, priced per that session's model."""
+    from agent_server.config import MODELS_BY_ID
+
+    rows = await _fetchall(
+        "SELECT s.model AS model, m.usage AS usage FROM messages m"
+        " JOIN sessions s ON s.id = m.session_id WHERE m.usage IS NOT NULL"
+    )
+    total = {"cost": 0.0, "input": 0, "output": 0, "cached": 0, "requests": 0}
+    for row in rows:
+        u, cost = _price(row["usage"], MODELS_BY_ID.get(row["model"], {}))
+        if not u:
+            continue
+        total["requests"] += 1
+        total["input"] += u.get("prompt_tokens", 0) or 0
+        total["cached"] += u.get("cached_tokens", 0) or 0
+        total["output"] += u.get("completion_tokens", 0) or 0
+        total["cost"] += cost
+    total["cache_hit_rate"] = (
+        round(100 * total["cached"] / total["input"], 1) if total["input"] else 0
+    )
+    return total
 
 
 # ── Compactions ─────────────────────────────────────────────────────────────

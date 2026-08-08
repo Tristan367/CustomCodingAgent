@@ -3,6 +3,7 @@
         {% for s in sessions %}
         <span class="tab-wrap {% if current_session_id == s.id %}active-wrap{% endif %}"
               draggable="true" data-sid="{{ s.id }}">
+            <span class="tab-dot" aria-hidden="true"></span>
             <a href="/sessions/{{ s.id }}"
                class="tab {% if current_session_id == s.id %}active{% endif %}"
                title="{{ s.name }} &mdash; {{ s.project_dir }}"

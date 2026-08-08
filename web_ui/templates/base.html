@@ -9,7 +9,7 @@
     <script src="/static/js/htmx.min.js"></script>
     <script src="/static/js/markdown.js"></script>
 </head>
-<body>
+<body data-sound="{{ 'off' if sound_enabled is defined and not sound_enabled else 'on' }}">
     <header id="top-bar">
         <a href="/" class="logo" title="Home">CodeAgent</a>
         <nav id="tab-bar"><div class="tab-scroll" id="tab-scroll"></div></nav>

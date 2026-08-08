@@ -1,5 +1,6 @@
-{% set ctx_pct = ((usage.context / 1000000) * 100) | round(1) if usage.context else 0 %}
-<div id="session-meta">
+{% set pct = usage.percent if usage.percent else 0 %}
+{% set ring = 'ring-danger' if pct >= 90 else ('ring-warn' if pct >= 70 else 'ring-ok') %}
+<div id="session-meta" data-threshold="{{ usage.threshold }}" data-max-context="{{ usage.max_context }}">
     <div class="session-info">
         <span class="session-title">{{ session.name }}</span>
         <code class="session-dir" title="{{ session.project_dir }}">{{ session.project_dir }}</code>
@@ -12,11 +13,19 @@
 
         <span class="spacer"></span>
 
-        <span class="chip {% if should_compact %}chip-warn{% endif %}"
-              title="Context in use / 1M window &middot; estimated spend this session">
-            {{ '{:,}'.format(usage.context) }} tok
-            {%- if usage.cost %} &middot; ${{ '%.4f' % usage.cost }}{% endif %}
-        </span>
+        <span class="cost-chip" title="Estimated spend in this session">${{ '%.4f' % usage.cost }}</span>
+
+        {# Context ring: filled arc = share of the compaction threshold in use. #}
+        <button type="button" class="context-ring {{ ring }}" onclick="openCompactModal()"
+                title="{{ '{:,}'.format(usage.context) }} / {{ '{:,}'.format(usage.threshold) }} tokens ({{ pct }}%) &#10;Model window: {{ '{:,}'.format(usage.max_context) }} &#10;Cache hit rate: {{ usage.cache_hit_rate }}% &#10;Session cost: ${{ '%.4f' % usage.cost }} over {{ usage.requests }} requests &#10;&#10;Click to compact or change the threshold">
+            <svg viewBox="0 0 36 36" width="22" height="22" aria-hidden="true">
+                <circle class="ring-track" cx="18" cy="18" r="15.5" fill="none" stroke-width="4"/>
+                <circle class="ring-fill" cx="18" cy="18" r="15.5" fill="none" stroke-width="4"
+                        stroke-dasharray="{{ [pct, 100] | min * 0.9739 }} 100"
+                        transform="rotate(-90 18 18)" stroke-linecap="round"/>
+            </svg>
+            <span class="ring-label">{{ pct | round | int }}%</span>
+        </button>
 
         <div class="dropdown">
             <button type="button" class="icon-btn" onclick="toggleMenu(this)" title="Session options"
@@ -30,7 +39,8 @@
                 <button type="button" onclick="setAutoApprove(true, true)">Auto-approve shell (always)</button>
                 {% endif %}
                 <hr>
-                <button type="button" onclick="compactSession()">Compact conversation</button>
+                <button type="button" onclick="openCompactModal()">Compact conversation&hellip;</button>
+                <button type="button" onclick="openThresholdModal()">Compaction threshold&hellip;</button>
                 <button type="button" onclick="navigator.clipboard.writeText(this.dataset.dir)"
                         data-dir="{{ session.project_dir }}">Copy project path</button>
                 <hr>
@@ -68,11 +78,4 @@
             </div>
         </div>
     </div>
-    {% if should_compact %}
-    <div class="meta-banner">
-        This conversation is large ({{ '{:,}'.format(usage.context) }} tokens).
-        <button type="button" class="link-btn" onclick="compactSession()">Compact it</button>
-        to cut cost and keep the model focused.
-    </div>
-    {% endif %}
 </div>

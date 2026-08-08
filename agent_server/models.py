@@ -35,9 +35,15 @@ class ResolveRequest(BaseModel):
     tool_call_id: str
     action: Literal["approve", "reject", "answer"]
     value: str = ""
-    # "once" applies to this call only; "session" also enables auto-approval
-    # for the rest of this server process.
-    scope: Literal["once", "session"] = "once"
+    # once      this call only
+    # session   also auto-approve shell for the rest of this server process
+    # directory persistently allow writes under `grant_path`
+    scope: Literal["once", "session", "directory"] = "once"
+    grant_path: str = ""
+
+
+class EditMessageRequest(BaseModel):
+    content: str
 
 
 class MessageResponse(BaseModel):

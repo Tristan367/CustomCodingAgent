@@ -8,7 +8,6 @@ offset and could split a group; this one only ever cuts on a group boundary.
 """
 
 from agent_server import database as db
-from agent_server.config import COMPACT_THRESHOLD_TOKENS
 from agent_server.conversation import normalize_tool_calls
 from agent_server.providers import get_provider
 from agent_server.system_prompt import get_compact_prompt
@@ -87,10 +86,20 @@ def render_transcript(rows: list[dict], per_message_limit: int = 4000) -> str:
 
 async def should_offer_compaction(session_id: str) -> bool:
     usage = await db.get_session_usage(session_id)
-    return usage.get("context", 0) >= COMPACT_THRESHOLD_TOKENS
+    return bool(usage["threshold"]) and usage["context"] >= usage["threshold"]
 
 
-async def compact_session(session_id: str, manual_summary: str = "") -> dict:
+async def compact_session(
+    session_id: str,
+    manual_summary: str = "",
+    extra_instructions: str = "",
+) -> dict:
+    """Summarise the older part of a conversation.
+
+    `extra_instructions` is appended to the compaction prompt for this run only,
+    so the user can say "keep the deployment steps" without permanently editing
+    the saved prompt.
+    """
     session = await db.get_session(session_id)
     if session is None:
         return {"ok": False, "reason": "Session not found"}
@@ -108,6 +117,8 @@ async def compact_session(session_id: str, manual_summary: str = "") -> dict:
         if not provider.has_credentials():
             return {"ok": False, "reason": "No API key configured."}
         instructions = await get_compact_prompt()
+        if extra_instructions.strip():
+            instructions += f"\n\nAdditional instructions for this summary:\n{extra_instructions.strip()}"
         summary = ""
         async for event in provider.chat_completion(
             messages=[
@@ -145,4 +156,5 @@ async def compact_session(session_id: str, manual_summary: str = "") -> dict:
         "kept": len(kept),
         "original_tokens": original_tokens,
         "compressed_tokens": compressed_tokens,
+        "summary": summary,
     }

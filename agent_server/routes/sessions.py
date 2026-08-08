@@ -8,7 +8,6 @@ from agent_server.config import MODELS_BY_ID, REASONING_EFFORTS
 from agent_server.models import SessionCreate, SessionUpdate
 from agent_server.providers import list_providers
 from agent_server.system_prompt import PROFILE_NAMES
-from agent_server.tools.todowrite import clear_todos, get_todos
 
 router = APIRouter(prefix="/api/sessions", tags=["sessions"])
 
@@ -67,7 +66,6 @@ async def delete_session(session_id: str):
     if await db.get_session(session_id) is None:
         raise HTTPException(404, "Session not found")
     agent.request_abort(session_id)
-    clear_todos(session_id)
     await db.delete_session(session_id)
     return {"ok": True}
 
@@ -78,7 +76,3 @@ async def get_messages(session_id: str):
         raise HTTPException(404, "Session not found")
     return await db.get_messages(session_id)
 
-
-@router.get("/{session_id}/todos")
-async def todos(session_id: str):
-    return {"todos": get_todos(session_id)}

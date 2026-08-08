@@ -29,10 +29,11 @@ from agent_server.conversation import (
     tool_call_name,
 )
 from agent_server.providers import Provider, get_provider
-from agent_server.system_prompt import build_system_prompt
+from agent_server.system_prompt import build_system_prompt, get_compact_prompt
 from agent_server.tools.base import ToolContext, ToolResult, truncate
 from agent_server.tools.question import format_prompt
-from agent_server.tools.registry import execute_tool, get_tool, requires_permission, tool_schemas
+from agent_server import permissions
+from agent_server.tools.registry import execute_tool, get_tool, tool_schemas
 
 # session_id -> abort signal for the in-flight run.
 _aborts: dict[str, asyncio.Event] = {}
@@ -42,6 +43,41 @@ _runtime_auto_approve: set[str] = set()
 # so the approved tool runs inside the loop and streams its output like any
 # other tool call, instead of executing silently in the resolve endpoint.
 _approved_calls: set[str] = set()
+# Sessions whose compaction prompt the user dismissed for the current run.
+_compaction_snoozed: set[str] = set()
+
+# ── Session status, for the tab-bar indicators ──────────────────────────────
+# "running"  the agent is working
+# "waiting"  paused on a permission prompt, question, or compaction confirm
+# "idle"     nothing in flight
+_status: dict[str, str] = {}
+# Sessions that finished or started waiting since the user last looked at them.
+_unseen: dict[str, str] = {}
+
+
+def _set_status(session_id: str, status: str, notify: str = ""):
+    if status == "idle":
+        _status.pop(session_id, None)
+    else:
+        _status[session_id] = status
+    if notify:
+        _unseen[session_id] = notify
+
+
+def session_status(session_id: str) -> str:
+    return _status.get(session_id, "idle")
+
+
+def status_snapshot() -> dict[str, dict]:
+    ids = set(_status) | set(_unseen)
+    return {
+        sid: {"status": _status.get(sid, "idle"), "unseen": _unseen.get(sid, "")}
+        for sid in ids
+    }
+
+
+def mark_seen(session_id: str):
+    _unseen.pop(session_id, None)
 
 
 def request_abort(session_id: str) -> bool:
@@ -65,6 +101,11 @@ def set_runtime_auto_approve(session_id: str, enabled: bool):
 
 def runtime_auto_approve(session_id: str) -> bool:
     return session_id in _runtime_auto_approve
+
+
+def snooze_compaction(session_id: str):
+    """Stop re-prompting for compaction until this run finishes."""
+    _compaction_snoozed.add(session_id)
 
 
 async def _auto_approves(session: dict) -> bool:
@@ -99,18 +140,37 @@ async def run(session_id: str) -> AsyncIterator[dict]:
 
     abort = asyncio.Event()
     _aborts[session_id] = abort
-    ctx = ToolContext(session_id=session_id, project_dir=session["project_dir"], abort=abort)
+    ctx = ToolContext(
+        session_id=session_id,
+        project_dir=session["project_dir"],
+        provider=session["provider"],
+        model=session["model"],
+        abort=abort,
+    )
+    _set_status(session_id, "running")
+    outcome = "done"
 
     try:
         async for event in _loop(session, provider, ctx, abort):
+            if event["type"] in ("permission", "question", "compaction_required"):
+                outcome = "waiting"
+            elif event["type"] == "error":
+                outcome = "error"
             yield event
     except asyncio.CancelledError:
         # Client disconnected: stop quietly, transcript is already consistent.
+        _set_status(session_id, "idle")
         raise
     except Exception as e:  # noqa: BLE001
+        outcome = "error"
         yield {"type": "error", "message": f"Agent error: {type(e).__name__}: {e}"}
     finally:
         _aborts.pop(session_id, None)
+        if outcome == "waiting":
+            _set_status(session_id, "waiting", notify="waiting")
+        else:
+            _compaction_snoozed.discard(session_id)
+            _set_status(session_id, "idle", notify=outcome)
 
 
 async def _loop(
@@ -140,6 +200,22 @@ async def _loop(
         if abort.is_set():
             yield {"type": "aborted"}
             return
+
+        # Offer compaction at a clean turn boundary, before spending another
+        # full-context request. Snoozed for the rest of the run once the user
+        # either compacts or raises the threshold.
+        if session_id not in _compaction_snoozed:
+            usage = await db.get_session_usage(session_id)
+            if usage["threshold"] and usage["context"] >= usage["threshold"]:
+                yield {
+                    "type": "compaction_required",
+                    "context": usage["context"],
+                    "threshold": usage["threshold"],
+                    "max_context": usage["max_context"],
+                    "cost": round(usage["cost"], 4),
+                    "instructions": await get_compact_prompt(),
+                }
+                return
 
         rows = await db.get_messages(session_id)
         messages = build_messages(system_prompt, await db.get_compactions(session_id), rows)
@@ -256,7 +332,7 @@ async def _drain_pending(session: dict, ctx: ToolContext) -> AsyncIterator[dict]
     if assistant_row is None or not pending:
         return
 
-    auto = await _auto_approves(session)
+    shell_auto = await _auto_approves(session)
 
     for call in pending:
         if ctx.abort.is_set():
@@ -278,16 +354,19 @@ async def _drain_pending(session: dict, ctx: ToolContext) -> AsyncIterator[dict]
             }
             return
 
-        if not auto and call["id"] not in _approved_calls and requires_permission(name, args):
-            yield {
-                "type": "permission",
-                "tool_call_id": call["id"],
-                "name": name,
-                "args": args,
-                "command": args.get("command", ""),
-                "workdir": args.get("workdir") or session["project_dir"],
-            }
-            return
+        if call["id"] not in _approved_calls:
+            prompt = await permissions.check(
+                name, args, session["project_dir"], shell_auto
+            )
+            if prompt is not None:
+                yield {
+                    "type": "permission",
+                    "tool_call_id": call["id"],
+                    "name": name,
+                    "args": args,
+                    **prompt,
+                }
+                return
 
         _approved_calls.discard(call["id"])
         yield {"type": "tool_start", "tool_call_id": call["id"], "name": name, "args": args}
@@ -300,6 +379,7 @@ async def _drain_pending(session: dict, ctx: ToolContext) -> AsyncIterator[dict]
             "title": result.title,
             "output": truncate(result.output, 20_000, "preview"),
             "is_error": result.is_error,
+            "diff": result.diff,
         }
 
 
@@ -323,6 +403,8 @@ async def resolve_pending(
     tool_call_id: str,
     action: str,
     value: str = "",
+    scope: str = "once",
+    grant_path: str = "",
 ) -> bool:
     """Answer one paused tool call so the loop can continue.
 
@@ -342,8 +424,11 @@ async def resolve_pending(
     name = tool_call_name(call)
 
     if action == "approve":
+        # Grant a persistent write scope before running, if the user asked for it.
+        if scope == "directory" and grant_path:
+            await permissions.allow_directory(grant_path)
         # Don't run it here. Marking it approved lets the agent loop execute it
-        # and stream tool_start/tool_end, so the user sees the command output.
+        # and stream tool_start/tool_end, so the user sees the result.
         _approved_calls.add(tool_call_id)
         return True
 

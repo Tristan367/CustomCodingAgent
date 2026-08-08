@@ -7,7 +7,7 @@ the subagent raised.
 
 import asyncio
 
-from agent_server.config import DEFAULT_MODEL, DEFAULT_PROVIDER, MAX_TOOL_RESULT_CHARS
+from agent_server.config import MAX_TOOL_RESULT_CHARS
 from agent_server.conversation import normalize_tool_calls, parse_arguments, tool_call_name
 from agent_server.tools.base import ToolContext, ToolResult, truncate
 
@@ -43,7 +43,7 @@ async def _run(ctx: ToolContext, description: str, prompt: str, title: str) -> T
     from agent_server.providers import get_provider
     from agent_server.tools.registry import execute_tool, tool_schemas
 
-    provider = get_provider(DEFAULT_PROVIDER)
+    provider = get_provider(ctx.provider)
     tools = tool_schemas(SUBAGENT_TOOLS)
 
     messages: list[dict] = [
@@ -61,7 +61,7 @@ async def _run(ctx: ToolContext, description: str, prompt: str, title: str) -> T
         finish = "stop"
 
         async for event in provider.chat_completion(
-            messages=messages, tools=tools, model=DEFAULT_MODEL, thinking_effort="low"
+            messages=messages, tools=tools, model=ctx.model, thinking_effort="low"
         ):
             etype = event["type"]
             if etype == "content":

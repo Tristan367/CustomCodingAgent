@@ -50,7 +50,12 @@ MODELS = [
 MODELS_BY_ID = {m["id"]: m for m in MODELS}
 
 # Offer compaction once a session's live context passes this many tokens.
+# Overridable per session; the ceiling is the model's context window.
 COMPACT_THRESHOLD_TOKENS = int(os.getenv("COMPACT_THRESHOLD_TOKENS", "262144"))
+MIN_COMPACT_THRESHOLD = 4096
+
+# Slider stops offered in the UI: powers of two from 4K to 1M.
+THRESHOLD_STEPS = [4096 * 2 ** i for i in range(8)] + [1_000_000]
 
 # Safety rails on the agent loop.
 MAX_TOOL_ROUNDS = int(os.getenv("MAX_TOOL_ROUNDS", "40"))

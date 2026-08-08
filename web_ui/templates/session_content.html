@@ -53,3 +53,43 @@
         </div>
     </div>
 </div>
+
+{# Shown automatically when context crosses the threshold, and from the ⋮ menu. #}
+<div id="compact-modal" class="modal" hidden>
+    <div class="modal-content wide">
+        <h3>Compact this conversation?</h3>
+        <p class="hint" id="compact-stats"></p>
+        <label class="field-label">Anything the summary must keep?
+            <textarea id="compact-extra" rows="3"
+                      placeholder="e.g. don't forget the deployment steps and the API key rotation plan"></textarea>
+        </label>
+        <p class="hint">
+            Older turns are replaced by a summary; the most recent turns are kept verbatim.
+            The split never breaks a tool call away from its results.
+        </p>
+        <div class="modal-actions">
+            <button type="button" class="btn-primary" onclick="confirmCompaction()">Confirm compaction</button>
+            <button type="button" class="btn-secondary" onclick="openThresholdModal()">Set a higher threshold</button>
+            <button type="button" class="btn-ghost" onclick="closeModal('compact-modal')">Not now</button>
+        </div>
+    </div>
+</div>
+
+<div id="threshold-modal" class="modal" hidden>
+    <div class="modal-content">
+        <h3>Compaction threshold</h3>
+        <p class="hint">Compaction is offered once the live context passes this size.
+            The model window is <span id="threshold-max"></span> tokens.</p>
+        <div class="threshold-readout"><span id="threshold-value">256k</span> tokens</div>
+        <input type="range" id="threshold-slider" min="0" max="8" step="1" value="6"
+               oninput="updateThresholdLabel()">
+        <div class="threshold-scale">
+            <span>4k</span><span>32k</span><span>256k</span><span>1M</span>
+        </div>
+        <p class="hint" id="threshold-cost"></p>
+        <div class="modal-actions">
+            <button type="button" class="btn-primary" onclick="saveThreshold()">Save threshold</button>
+            <button type="button" class="btn-secondary" onclick="closeModal('threshold-modal')">Cancel</button>
+        </div>
+    </div>
+</div>

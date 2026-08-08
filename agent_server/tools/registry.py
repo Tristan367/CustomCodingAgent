@@ -11,7 +11,6 @@ from agent_server.tools.file_ops import edit_file, read_file, write_file
 from agent_server.tools.question import ask_question
 from agent_server.tools.search import glob_search, grep_search
 from agent_server.tools.task import run_task
-from agent_server.tools.todowrite import todowrite
 from agent_server.tools.vision import vision
 from agent_server.tools.web import webfetch
 
@@ -193,36 +192,6 @@ register(Tool(
 ))
 
 register(Tool(
-    name="todowrite",
-    description=(
-        "Record or update the task list for multi-step work. Send the complete list every "
-        "time. Exactly one item may be in_progress. Skip this for single-step requests."
-    ),
-    parameters={
-        "type": "object",
-        "properties": {
-            "todos": {
-                "type": "array",
-                "items": {
-                    "type": "object",
-                    "properties": {
-                        "content": {"type": "string", "description": "What needs doing"},
-                        "status": {
-                            "type": "string",
-                            "enum": ["pending", "in_progress", "completed", "cancelled"],
-                        },
-                        "priority": {"type": "string", "enum": ["high", "medium", "low"]},
-                    },
-                    "required": ["content", "status"],
-                },
-            }
-        },
-        "required": ["todos"],
-    },
-    handler=todowrite,
-))
-
-register(Tool(
     name="task",
     description=(
         "Delegate open-ended research to a read-only subagent that works autonomously and "
@@ -278,19 +247,6 @@ def get_tool(name: str) -> Tool | None:
     return TOOLS.get(name)
 
 
-def requires_permission(name: str, args: dict) -> bool:
-    tool = TOOLS.get(name)
-    if tool is None or tool.pause != "permission":
-        return False
-    if tool.auto_allow is not None:
-        try:
-            if tool.auto_allow(args):
-                return False
-        except Exception:  # noqa: BLE001
-            return True
-    return True
-
-
 async def execute_tool(
     name: str,
     args: dict[str, Any],
@@ -329,5 +285,5 @@ async def execute_tool(
 
 __all__ = [
     "Tool", "TOOLS", "ToolContext", "ToolResult",
-    "tool_schemas", "get_tool", "execute_tool", "requires_permission",
+    "tool_schemas", "get_tool", "execute_tool",
 ]

@@ -2,7 +2,7 @@
 
 from pathlib import Path
 
-from agent_server.tools.base import ToolContext, ToolResult, truncate
+from agent_server.tools.base import ToolContext, ToolResult, diff_stats, truncate, unified_diff
 
 MAX_READ_BYTES = 2_000_000
 DEFAULT_LIMIT = 2000
@@ -139,9 +139,12 @@ async def edit_file(
 
     replaced = count if replaceAll else 1
     line_no = content[: content.index(oldString)].count("\n") + 1
+    diff = unified_diff(content, updated, _display(path, ctx))
+    added, removed = diff_stats(diff)
     return ToolResult(
         output=f"Edited {path} ({replaced} replacement{'s' if replaced != 1 else ''} at line ~{line_no}).",
-        title=f"{title} (+{len(newString.splitlines())}/-{len(oldString.splitlines())} lines)",
+        title=f"{title} (+{added}/-{removed})",
+        diff=diff,
     )
 
 
@@ -159,6 +162,13 @@ async def write_file(ctx: ToolContext, *, filePath: str, content: str, **_) -> T
             title,
         )
 
+    previous = ""
+    if existed:
+        try:
+            previous = path.read_text(encoding="utf-8")
+        except Exception:  # noqa: BLE001
+            previous = ""
+
     try:
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text(content, encoding="utf-8")
@@ -168,7 +178,14 @@ async def write_file(ctx: ToolContext, *, filePath: str, content: str, **_) -> T
     mark_read(ctx.session_id, path)
     verb = "Overwrote" if existed else "Created"
     lines = len(content.splitlines())
-    return ToolResult(output=f"{verb} {path} ({lines} lines).", title=f"{title} ({lines} lines)")
+    diff = unified_diff(previous, content, _display(path, ctx))
+    added, removed = diff_stats(diff)
+    summary = f"{title} (+{added}/-{removed})" if existed else f"{title} ({lines} lines)"
+    return ToolResult(
+        output=f"{verb} {path} ({lines} lines).",
+        title=summary,
+        diff=diff,
+    )
 
 
 def _display(path: Path, ctx: ToolContext) -> str:

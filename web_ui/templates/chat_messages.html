@@ -55,7 +55,17 @@
             </details>
             {% endfor %}
         </div>
-        <span class="msg-time">{{ m.created_at | clocktime }}</span>
+        <span class="msg-side">
+            {% if m.role == 'user' %}
+            <span class="msg-actions">
+                <button type="button" title="Edit and re-run from here"
+                        onclick="editMessage({{ m.id }})">edit</button>
+                <button type="button" title="Discard what follows and try again"
+                        onclick="retryFrom({{ m.id }})">retry</button>
+            </span>
+            {% endif %}
+            <span class="msg-time">{{ m.created_at | clocktime }}</span>
+        </span>
     </div>
     {% endif %}
     {% endfor %}

@@ -17,8 +17,10 @@ from agent_server.config import (
     DEFAULT_MODEL,
     MODELS,
     REASONING_EFFORTS,
+    THRESHOLD_STEPS,
     stt_available,
 )
+from agent_server.stt import availability as stt_availability
 from agent_server.conversation import (
     normalize_tool_calls,
     parse_arguments,
@@ -35,7 +37,8 @@ from agent_server.system_prompt import (
     COMPACT_PROMPT_DEFAULT,
     PROFILE_NAMES,
 )
-from agent_server.tools.registry import TOOLS, get_tool, requires_permission
+from agent_server import permissions
+from agent_server.tools.registry import TOOLS, get_tool
 from agent_server.tools.vision import rig_available
 
 BASE_DIR = Path(__file__).resolve().parent.parent
@@ -108,6 +111,10 @@ templates.env.filters["toolcalls"] = normalize_tool_calls
 
 # ── Shared context ──────────────────────────────────────────────────────────
 
+async def _sound_enabled() -> bool:
+    return await db.get_setting("sound_enabled", "1") != "0"
+
+
 async def _session_context(session: dict) -> dict:
     usage = await db.get_session_usage(session["id"])
     messages = await db.get_messages(session["id"])
@@ -123,11 +130,13 @@ async def _session_context(session: dict) -> dict:
         "auto_approve": bool(session.get("bash_auto_approve"))
         or agent.runtime_auto_approve(session["id"]),
         "stt_enabled": stt_available(),
-        "pending": _pending_prompt(session, messages),
+        "pending": await _pending_prompt(session, messages),
+        "sound_enabled": await _sound_enabled(),
+        "threshold_steps": THRESHOLD_STEPS,
     }
 
 
-def _pending_prompt(session: dict, messages: list[dict]) -> dict | None:
+async def _pending_prompt(session: dict, messages: list[dict]) -> dict | None:
     """Describe a tool call still waiting on the user, so a page reload can
     re-offer the approval or question instead of stranding the session."""
     _, pending = pending_tool_calls(messages)
@@ -144,22 +153,26 @@ def _pending_prompt(session: dict, messages: list[dict]) -> dict | None:
             "question": args.get("question", ""),
             "options": args.get("options") or [],
         }
-    auto = bool(session.get("bash_auto_approve")) or agent.runtime_auto_approve(session["id"])
-    if not auto and requires_permission(name, args):
-        return {
-            "type": "permission",
-            "tool_call_id": call["id"],
-            "name": name,
-            "args": args,
-            "command": args.get("command", ""),
-            "workdir": args.get("workdir") or session["project_dir"],
-        }
-    return None
+    shell_auto = bool(session.get("bash_auto_approve")) or agent.runtime_auto_approve(session["id"])
+    prompt = await permissions.check(name, args, session["project_dir"], shell_auto)
+    if prompt is None:
+        return None
+    return {
+        "type": "permission",
+        "tool_call_id": call["id"],
+        "name": name,
+        "args": args,
+        **prompt,
+    }
 
 
 async def _home_context(error: str = "") -> dict:
     return {
         "sessions": await db.list_sessions(),
+        "totals": await db.get_total_cost(),
+        "allowed_dirs": await permissions.list_allowed(),
+        "sound_enabled": await _sound_enabled(),
+        "stt": stt_availability(),
         "settings": await db.get_all_settings(),
         "providers": list_providers(),
         "models": MODELS,
@@ -286,6 +299,12 @@ async def save_settings(request: Request, deepseek_api_key: str = Form("")):
     )
 
 
+@app.post("/_settings/sound")
+async def save_sound_setting(enabled: str = Form("1")):
+    await db.set_setting("sound_enabled", "1" if enabled in ("1", "true", "on") else "0")
+    return {"ok": True}
+
+
 @app.post("/_create_session")
 async def create_session_form(
     request: Request,
@@ -365,6 +384,7 @@ async def _prompts_context(saved: bool = False) -> dict:
         ],
         "tools_tokens": len(json.dumps(schemas)) // 4,
         "saved": saved,
+        "sound_enabled": await _sound_enabled(),
     }
 
 

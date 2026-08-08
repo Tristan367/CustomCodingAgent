@@ -26,15 +26,33 @@ function initSession() {
     App.els.form.dataset.bound = '1';
     App.els.form.addEventListener('submit', onSubmit);
   }
+  if (App.els.scroller && !App.els.scroller.dataset.bound) {
+    App.els.scroller.dataset.bound = '1';
+    App.els.scroller.addEventListener('scroll', saveScrollSoon, { passive: true });
+  }
   renderStoredMessages();
   restorePending();
   Dictation.init();
-  scrollToBottom(true);
+  markSessionSeen();
+  if (!Persist.restore()) scrollToBottom(true);
 }
 
 document.addEventListener('DOMContentLoaded', () => {
+  Notifier.init();
   initSession();
   refreshTabBar();
+  Notifier.poll();
+  setInterval(() => Notifier.poll(), 2000);
+});
+
+window.addEventListener('focus', markSessionSeen);
+window.addEventListener('beforeunload', () => { Persist.saveDraft(); Persist.saveScroll(); });
+
+document.addEventListener('htmx:beforeSwap', (e) => {
+  if (e.detail.target && e.detail.target.id === 'main-content') {
+    Persist.saveDraft();
+    Persist.saveScroll();
+  }
 });
 
 document.addEventListener('htmx:afterSwap', (e) => {
@@ -48,6 +66,7 @@ document.addEventListener('htmx:afterSwap', (e) => {
 /* Render markdown for server-rendered message bodies. */
 function renderStoredMessages() {
   document.querySelectorAll('[data-markdown]:not([data-rendered])').forEach((el) => {
+    el.dataset.raw = el.textContent;
     el.innerHTML = md.render(el.textContent);
     el.dataset.rendered = '1';
   });
@@ -72,6 +91,7 @@ async function onSubmit(event) {
 
   appendMessage('user', message || '(image)');
   App.els.textarea.value = '';
+  Persist.clearDraft();
   autosize(App.els.textarea);
 
   let endpoint, body, headers = {};
@@ -91,13 +111,17 @@ async function onSubmit(event) {
 }
 
 /* Resume the loop after the user answers a paused tool call. */
-async function resolveToolCall(toolCallId, action, value, scope) {
+async function resolveToolCall(toolCallId, action, value, scope, grantPath) {
   if (App.streaming) return;
   await streamRequest(`/api/sessions/${App.sessionId}/resolve`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({
-      tool_call_id: toolCallId, action, value: value || '', scope: scope || 'once',
+      tool_call_id: toolCallId,
+      action,
+      value: value || '',
+      scope: scope || 'once',
+      grant_path: grantPath || '',
     }),
   });
 }
@@ -194,6 +218,10 @@ function handleEvent(event, stream) {
 
     case 'question':
       appendQuestionCard(event);
+      break;
+
+    case 'compaction_required':
+      openCompactModal(event);
       break;
 
     case 'usage':
@@ -298,11 +326,27 @@ function completeToolCall(event) {
   if (summary) summary.textContent = event.title || event.name;
 
   const details = node.querySelector('.tool-details');
+  if (event.diff) node.querySelector('.msg-content').appendChild(renderDiff(event.diff));
   const result = el('div', 'tool-result');
   result.appendChild(el('div', 'tool-result-label', event.is_error ? 'error' : 'output'));
   result.appendChild(el('pre', 'tool-raw', md.escapeHtml(event.output || '(no output)')));
   details.appendChild(result);
   autoscroll();
+}
+
+/* Unified diff with per-line colouring. */
+function renderDiff(diff) {
+  const box = el('pre', 'diff-block');
+  for (const line of diff.replace(/\n+$/, '').split('\n')) {
+    let cls = 'diff-ctx';
+    if (line.startsWith('@@')) cls = 'diff-hunk';
+    else if (line.startsWith('+')) cls = 'diff-add';
+    else if (line.startsWith('-')) cls = 'diff-del';
+    const row = el('span', cls);
+    row.textContent = line + '\n';
+    box.appendChild(row);
+  }
+  return box;
 }
 
 function toolSummary(name, args) {
@@ -338,32 +382,67 @@ function appendPermissionCard(event) {
   const node = el('div', 'message permission-card');
   node.dataset.toolCallId = event.tool_call_id;
 
-  const head = el('div', 'permission-head', 'Run this command?');
-  const cmd = el('pre', 'permission-command', md.escapeHtml(event.command || JSON.stringify(event.args)));
-  const dir = el('div', 'permission-dir', md.escapeHtml(event.workdir || ''));
-
+  const kind = event.kind || 'shell';
+  const head = el('div', 'permission-head');
+  const detail = el('pre', 'permission-command');
+  const sub = el('div', 'permission-dir');
   const actions = el('div', 'permission-actions');
-  const approve = button('Approve', 'btn-approve', () => finish('approve', '', 'once'));
-  const approveAll = button('Approve all this session', 'btn-approve-all', () => finish('approve', '', 'session'));
-  const reject = button('Reject', 'btn-reject', () => {
+
+  if (kind === 'denied') {
+    // Nothing to grant: this location is permanently off limits.
+    node.classList.add('permission-denied');
+    head.textContent = 'Blocked write';
+    detail.textContent = event.path;
+    sub.textContent = 'This location is on the permanent deny list and cannot be allowed.';
+    actions.append(button('Tell the agent', 'btn-reject', () => finish('reject', 'That path is off limits.', 'once')));
+  } else if (kind === 'path') {
+    node.classList.add('permission-path');
+    head.textContent = `Write outside the project directory?`;
+    detail.textContent = `${event.tool}  ${event.path}`;
+    sub.textContent = `Project is ${event.project_dir}. This file is not inside it.`;
+    actions.append(
+      button('Allow once', 'btn-approve', () => finish('approve', '', 'once')),
+      button(`Always allow ${shortPath(event.scope)}`, 'btn-approve-all',
+        () => finish('approve', '', 'directory')),
+      button('Reject', 'btn-reject', reject),
+    );
+  } else {
+    head.textContent = 'Run this command?';
+    detail.textContent = event.command || JSON.stringify(event.args);
+    sub.textContent = event.workdir || '';
+    actions.append(
+      button('Approve', 'btn-approve', () => finish('approve', '', 'once')),
+      button('Approve all this session', 'btn-approve-all', () => finish('approve', '', 'session')),
+      button('Reject', 'btn-reject', reject),
+    );
+  }
+
+  function reject() {
     const why = prompt('Optional: tell the agent why, so it can try something else.', '');
     if (why === null) return;
     finish('reject', why, 'once');
-  });
-  actions.append(approve, approveAll, reject);
+  }
 
   function finish(action, value, scope) {
     actions.remove();
     node.classList.add('resolved');
-    head.textContent = action === 'approve' ? 'Approved' : 'Rejected';
+    head.textContent = action === 'approve'
+      ? (scope === 'directory' ? `Allowed — ${event.scope} is now writable` : 'Approved')
+      : 'Rejected';
     if (scope === 'session') markAutoApprove(true);
-    resolveToolCall(event.tool_call_id, action, value, scope);
+    resolveToolCall(event.tool_call_id, action, value, scope, event.scope);
   }
 
-  node.append(head, cmd, dir, actions);
+  node.append(head, detail, sub, actions);
   App.els.messages.appendChild(node);
   autoscroll();
-  approve.focus();
+  actions.querySelector('button')?.focus();
+}
+
+function shortPath(path) {
+  if (!path) return 'this directory';
+  const parts = String(path).split('/').filter(Boolean);
+  return parts.length > 2 ? `.../${parts.slice(-2).join('/')}` : path;
 }
 
 function appendQuestionCard(event) {
@@ -418,6 +497,326 @@ function restorePending() {
   if (event.type === 'permission') appendPermissionCard(event);
   else if (event.type === 'question') appendQuestionCard(event);
 }
+
+/* ── Compaction ──────────────────────────────────────────────────────────── */
+
+const THRESHOLD_STEPS = [4096, 8192, 16384, 32768, 65536, 131072, 262144, 524288, 1000000];
+
+/* Set when the agent loop stops and asks to compact, so Confirm knows to resume
+ * the interrupted run rather than just compacting in place. */
+let compactionPause = null;
+
+function formatTokens(n) {
+  n = Number(n) || 0;
+  if (n >= 1000000) return `${(n / 1000000).toFixed(n % 1000000 ? 2 : 0)}M`;
+  if (n >= 1000) return `${Math.round(n / 1000)}k`;
+  return String(n);
+}
+
+function currentUsage() {
+  const meta = document.getElementById('session-meta');
+  return {
+    threshold: Number(meta?.dataset.threshold) || 262144,
+    maxContext: Number(meta?.dataset.maxContext) || 1000000,
+  };
+}
+
+function openCompactModal(pause) {
+  compactionPause = pause || null;
+  const stats = document.getElementById('compact-stats');
+  if (pause) {
+    stats.textContent =
+      `This conversation has reached ${Number(pause.context).toLocaleString()} tokens, `
+      + `past your ${formatTokens(pause.threshold)} threshold. `
+      + `The run is paused until you decide.`;
+  } else {
+    const ring = document.querySelector('.context-ring');
+    stats.textContent = ring ? ring.title.split('\n')[0] : '';
+  }
+  document.getElementById('compact-extra').value = '';
+  document.getElementById('compact-modal').hidden = false;
+  document.getElementById('compact-extra').focus();
+}
+
+async function confirmCompaction() {
+  const extra = document.getElementById('compact-extra').value;
+  closeModal('compact-modal');
+  const resume = !!compactionPause;
+  compactionPause = null;
+
+  const form = new FormData();
+  form.append('extra_instructions', extra);
+  form.append('resume', resume ? 'true' : 'false');
+
+  if (resume) {
+    // Compaction and the continuation stream in one request.
+    appendNotice('info', 'Compacting, then continuing...');
+    await streamRequest(`/api/sessions/${App.sessionId}/compact`, { method: 'POST', body: form });
+    htmx.ajax('GET', `/_messages/${App.sessionId}`, { target: '#chat-container', swap: 'innerHTML' });
+    return;
+  }
+
+  appendNotice('info', 'Compacting...');
+  const resp = await fetch(`/api/sessions/${App.sessionId}/compact`, { method: 'POST', body: form });
+  const data = await resp.json();
+  if (!data.ok) { appendNotice('error', data.reason || 'Compaction failed'); return; }
+  htmx.ajax('GET', `/_messages/${App.sessionId}`, { target: '#chat-container', swap: 'innerHTML' });
+  refreshMeta();
+}
+
+function openThresholdModal() {
+  closeModal('compact-modal');
+  document.querySelectorAll('.dropdown-menu').forEach((m) => { m.hidden = true; });
+
+  const { threshold, maxContext } = currentUsage();
+  const usable = THRESHOLD_STEPS.filter((s) => s <= maxContext);
+  const slider = document.getElementById('threshold-slider');
+  slider.max = String(usable.length - 1);
+  let index = usable.findIndex((s) => s >= threshold);
+  slider.value = String(index < 0 ? usable.length - 1 : index);
+
+  document.getElementById('threshold-max').textContent = Number(maxContext).toLocaleString();
+  updateThresholdLabel();
+  document.getElementById('threshold-modal').hidden = false;
+}
+
+function updateThresholdLabel() {
+  const { maxContext } = currentUsage();
+  const usable = THRESHOLD_STEPS.filter((s) => s <= maxContext);
+  const value = usable[Number(document.getElementById('threshold-slider').value)] || usable.at(-1);
+  document.getElementById('threshold-value').textContent = formatTokens(value);
+  // Rough guide: a cached full-context request at V4 Pro's cache-hit rate.
+  const perRequest = (value * 0.003625) / 1000000;
+  document.getElementById('threshold-cost').textContent =
+    `At this size a cached request costs about $${perRequest.toFixed(4)}; `
+    + `an uncached one about $${((value * 0.435) / 1000000).toFixed(3)}.`;
+}
+
+async function saveThreshold() {
+  const { maxContext } = currentUsage();
+  const usable = THRESHOLD_STEPS.filter((s) => s <= maxContext);
+  const value = usable[Number(document.getElementById('threshold-slider').value)] || usable.at(-1);
+  closeModal('threshold-modal');
+
+  const resume = !!compactionPause;
+  compactionPause = null;
+  const form = new FormData();
+  form.append('threshold', String(value));
+  form.append('resume', resume ? 'true' : 'false');
+
+  if (resume) {
+    await streamRequest(`/api/sessions/${App.sessionId}/compact-threshold`, { method: 'POST', body: form });
+  } else {
+    await fetch(`/api/sessions/${App.sessionId}/compact-threshold`, { method: 'POST', body: form });
+  }
+  refreshMeta();
+}
+
+function closeModal(id) {
+  const el = document.getElementById(id);
+  if (el) el.hidden = true;
+}
+
+document.addEventListener('keydown', (e) => {
+  if (e.key === 'Escape') document.querySelectorAll('.modal').forEach((m) => { m.hidden = true; });
+});
+
+/* ── Retry and edit ──────────────────────────────────────────────────────── */
+
+async function retryFrom(messageId) {
+  if (App.streaming) return;
+  if (!confirm('Re-run from this message? Everything after it will be discarded.')) return;
+  dropMessagesAfter(messageId);
+  await streamRequest(`/api/sessions/${App.sessionId}/messages/${messageId}/retry`, { method: 'POST' });
+}
+
+function editMessage(messageId) {
+  if (App.streaming) return;
+  const node = document.getElementById(`msg-${messageId}`);
+  const body = node?.querySelector('.content-text');
+  if (!body || node.dataset.editing) return;
+  node.dataset.editing = '1';
+
+  const original = body.dataset.raw ?? body.textContent;
+  const editor = document.createElement('textarea');
+  editor.className = 'message-editor';
+  editor.value = original;
+  const actions = el('div', 'message-edit-actions');
+  actions.append(
+    button('Save & re-run', 'btn-primary', save),
+    button('Cancel', 'btn-secondary', cancel),
+  );
+
+  body.hidden = true;
+  body.after(editor, actions);
+  editor.focus();
+  editor.style.height = `${Math.min(editor.scrollHeight + 4, 300)}px`;
+
+  function cleanup() {
+    editor.remove();
+    actions.remove();
+    body.hidden = false;
+    delete node.dataset.editing;
+  }
+  function cancel() { cleanup(); }
+  async function save() {
+    const content = editor.value.trim();
+    if (!content) return;
+    cleanup();
+    body.textContent = content;
+    body.dataset.raw = content;
+    body.innerHTML = md.render(content);
+    dropMessagesAfter(messageId);
+    await streamRequest(`/api/sessions/${App.sessionId}/messages/${messageId}/edit`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ content }),
+    });
+  }
+}
+
+/* Remove the stale DOM for turns the server is about to delete. */
+function dropMessagesAfter(messageId) {
+  const anchor = document.getElementById(`msg-${messageId}`);
+  if (!anchor) return;
+  let node = anchor.nextElementSibling;
+  while (node) {
+    const next = node.nextElementSibling;
+    node.remove();
+    node = next;
+  }
+}
+
+/* ── Session status + notification sounds ────────────────────────────────── */
+
+const Notifier = {
+  enabled: true,
+  ctx: null,
+  lastUnseen: {},
+
+  init() {
+    this.enabled = document.body.dataset.sound !== 'off';
+  },
+
+  /* Synthesised so there is no audio file to ship or load. */
+  play(kind) {
+    if (!this.enabled) return;
+    try {
+      this.ctx = this.ctx || new (window.AudioContext || window.webkitAudioContext)();
+      if (this.ctx.state === 'suspended') this.ctx.resume();
+      const tones = kind === 'waiting' ? [660, 880] : kind === 'error' ? [300, 220] : [880];
+      tones.forEach((freq, i) => {
+        const osc = this.ctx.createOscillator();
+        const gain = this.ctx.createGain();
+        const start = this.ctx.currentTime + i * 0.11;
+        osc.type = 'sine';
+        osc.frequency.value = freq;
+        gain.gain.setValueAtTime(0.0001, start);
+        gain.gain.exponentialRampToValueAtTime(0.10, start + 0.012);
+        gain.gain.exponentialRampToValueAtTime(0.0001, start + 0.10);
+        osc.connect(gain).connect(this.ctx.destination);
+        osc.start(start);
+        osc.stop(start + 0.12);
+      });
+    } catch (_) { /* audio unavailable */ }
+  },
+
+  async poll() {
+    let data;
+    try {
+      data = await (await fetch('/api/status')).json();
+    } catch (_) {
+      return;
+    }
+    const sessions = data.sessions || {};
+
+    document.querySelectorAll('#tab-scroll .tab-wrap').forEach((tab) => {
+      const info = sessions[tab.dataset.sid] || { status: 'idle', unseen: '' };
+      const active = tab.dataset.sid === App.sessionId;
+      // Don't badge the tab you're already looking at.
+      const state = info.status === 'running' ? 'running'
+        : (active ? '' : info.unseen);
+      tab.dataset.state = state || '';
+    });
+
+    for (const [sid, info] of Object.entries(sessions)) {
+      const previous = this.lastUnseen[sid] || '';
+      const isActive = sid === App.sessionId && document.hasFocus();
+      if (info.unseen && info.unseen !== previous && !isActive) this.play(info.unseen);
+      this.lastUnseen[sid] = info.unseen;
+    }
+    for (const sid of Object.keys(this.lastUnseen)) {
+      if (!sessions[sid]) delete this.lastUnseen[sid];
+    }
+  },
+};
+
+function markSessionSeen() {
+  if (!App.sessionId) return;
+  Notifier.lastUnseen[App.sessionId] = '';
+  fetch(`/api/sessions/${App.sessionId}/seen`, { method: 'POST' }).catch(() => {});
+}
+
+async function toggleSound(enabled) {
+  Notifier.enabled = enabled;
+  document.body.dataset.sound = enabled ? 'on' : 'off';
+  const form = new FormData();
+  form.append('enabled', enabled ? '1' : '0');
+  await fetch('/_settings/sound', { method: 'POST', body: form });
+  if (enabled) Notifier.play('done');
+}
+
+/* ── Drafts and scroll position ──────────────────────────────────────────── */
+
+const Persist = {
+  key(kind) { return `codeagent:${kind}:${App.sessionId}`; },
+
+  restore() {
+    if (!App.sessionId) return;
+    const draft = localStorage.getItem(this.key('draft'));
+    if (draft && App.els.textarea && !App.els.textarea.value) {
+      App.els.textarea.value = draft;
+      autosize(App.els.textarea);
+    }
+    const top = Number(localStorage.getItem(this.key('scroll')));
+    if (top && App.els.scroller) {
+      requestAnimationFrame(() => { App.els.scroller.scrollTop = top; });
+      return true;
+    }
+    return false;
+  },
+
+  saveDraft() {
+    if (!App.sessionId || !App.els.textarea) return;
+    const value = App.els.textarea.value;
+    if (value) localStorage.setItem(this.key('draft'), value);
+    else localStorage.removeItem(this.key('draft'));
+  },
+
+  clearDraft() {
+    if (App.sessionId) localStorage.removeItem(this.key('draft'));
+  },
+
+  saveScroll() {
+    if (!App.sessionId || !App.els.scroller) return;
+    const box = App.els.scroller;
+    // At the bottom is the default; don't pin the user there artificially.
+    const atBottom = box.scrollHeight - box.scrollTop - box.clientHeight < 40;
+    if (atBottom) localStorage.removeItem(this.key('scroll'));
+    else localStorage.setItem(this.key('scroll'), String(box.scrollTop));
+  },
+};
+
+function debounce(fn, ms) {
+  let timer;
+  return (...args) => {
+    clearTimeout(timer);
+    timer = setTimeout(() => fn(...args), ms);
+  };
+}
+
+const saveDraftSoon = debounce(() => Persist.saveDraft(), 400);
+const saveScrollSoon = debounce(() => Persist.saveScroll(), 250);
 
 function button(label, className, onClick) {
   const b = document.createElement('button');
@@ -757,7 +1156,10 @@ document.addEventListener('keydown', (e) => {
 });
 
 document.addEventListener('input', (e) => {
-  if (e.target.id === 'chat-textarea') autosize(e.target);
+  if (e.target.id === 'chat-textarea') {
+    autosize(e.target);
+    saveDraftSoon();
+  }
 });
 
 /* ── Image attachment ────────────────────────────────────────────────────── */

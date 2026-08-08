@@ -400,6 +400,18 @@ async def _loop(
         if session_id not in _compaction_snoozed:
             usage = await db.get_session_usage(session_id)
             if usage["threshold"] and usage["context"] >= usage["threshold"]:
+                if session.get("auto_compact"):
+                    # Asked not to be asked: compact in place and carry on.
+                    from agent_server.compaction import compact_session
+
+                    yield {"type": "compacting"}
+                    result = await compact_session(session_id)
+                    _compaction_snoozed.add(session_id)
+                    yield {"type": "compacted", **result}
+                    if not result.get("ok"):
+                        yield {"type": "error", "message": result.get("reason", "Compaction failed")}
+                        return
+                    continue
                 yield {
                     "type": "compaction_required",
                     "context": usage["context"],

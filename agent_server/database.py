@@ -84,6 +84,7 @@ MIGRATIONS: list[tuple[str, str, str]] = [
     ("sessions", "prompt_profile", "TEXT DEFAULT 'default'"),
     ("sessions", "bash_auto_approve", "INTEGER DEFAULT 0"),
     ("sessions", "compact_threshold", "INTEGER"),
+    ("sessions", "auto_compact", "INTEGER DEFAULT 0"),
     ("messages", "reasoning_content", "TEXT"),
     ("messages", "tool_name", "TEXT"),
     ("messages", "is_error", "INTEGER DEFAULT 0"),
@@ -156,6 +157,7 @@ async def _execute(sql: str, params: tuple = ()) -> int:
 SESSION_FIELDS = {
     "name", "project_dir", "provider", "model", "thinking_effort",
     "prompt_profile", "bash_auto_approve", "is_archived", "compact_threshold",
+    "auto_compact",
 }
 
 

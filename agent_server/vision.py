@@ -26,6 +26,7 @@ from agent_server.config import (
     VISION_MAX_PIXELS,
     VISION_MODEL,
     VISION_KEEP_ALIVE,
+    VISION_MAX_TOKENS,
     VISION_NUM_CTX,
     VISION_OLLAMA_URL,
     VISION_TIMEOUT,
@@ -125,7 +126,16 @@ async def analyze(images: list[bytes], prompt: str, labels: list[str] | None = N
         raise VisionError("no images to analyse")
 
     labels = labels or [f"Image {i + 1}" for i in range(len(images))]
-    messages: list[dict] = []
+    # Left to itself the model writes a long structured report regardless of
+    # what was asked, and generation is the whole cost of a vision call.
+    messages: list[dict] = [{
+        "role": "system",
+        "content": (
+            "Answer only what is asked, in as few words as the question allows. "
+            "No headings, no bullet lists, no restating the question, and no "
+            "commentary on anything the question did not mention."
+        ),
+    }]
 
     if len(images) == 1:
         messages.append({
@@ -157,7 +167,11 @@ async def analyze(images: list[bytes], prompt: str, labels: list[str] | None = N
         "keep_alive": VISION_KEEP_ALIVE,
         # Left unset, Ollama falls back to a small default context and silently
         # truncates, which is easy to miss when comparing several images.
-        "options": {"temperature": 0.1, "num_ctx": VISION_NUM_CTX},
+        "options": {
+            "temperature": 0.1,
+            "num_ctx": VISION_NUM_CTX,
+            "num_predict": VISION_MAX_TOKENS,
+        },
     }
 
     try:

@@ -1256,3 +1256,14 @@ select { cursor: pointer; }
 /* A message handed to a run in progress, not yet picked up. */
 .message.user.queued .content-text { opacity: 0.62; border-left-style: dashed; }
 .message.user.queued .msg-actions button { color: var(--warn); }
+
+/* Compaction modal: the summariser prompt, editable for one run. */
+#compact-prompt {
+  width: 100%;
+  margin-top: 6px;
+  font-family: var(--mono);
+  font-size: 11.5px;
+  resize: vertical;
+}
+#compact-prompt-box { margin: 8px 0; }
+.message.compaction .msg-role { color: var(--accent); }

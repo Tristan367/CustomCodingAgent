@@ -364,6 +364,33 @@ function handleEvent(event, stream) {
       break;
     }
 
+    case 'compacting':
+      appendNotice('info', 'Compacting the conversation...');
+      break;
+
+    case 'compact_delta':
+      if (!stream.compactEl) stream.compactEl = appendCompactionDraft();
+      stream.compactEl.textContent += event.text;
+      autoscroll();
+      break;
+
+    case 'compact_done':
+    case 'compacted': {
+      if (stream.compactEl) {
+        stream.compactEl.closest('.message')?.remove();
+        stream.compactEl = null;
+      }
+      if (!event.ok) {
+        appendNotice('error', event.reason || 'Compaction failed.');
+        break;
+      }
+      // Re-render: the compacted turns are gone from what the model sees, and
+      // the transcript must show the same thing.
+      refreshTranscript();
+      refreshMeta();
+      break;
+    }
+
     case 'attached':
       for (const call of event.inflight || []) appendToolCall(call);
       break;
@@ -531,6 +558,19 @@ function attachMessageActions(messageId) {
   const node = bubbles[bubbles.length - 1];
   if (!node || node.id) return;
   node.id = `msg-${messageId}`;
+}
+
+/* The summary as it is written, replaced by the real card when it lands. */
+function appendCompactionDraft() {
+  const node = el('div', 'message compaction');
+  node.appendChild(el('div', 'msg-role', 'summarising'));
+  const body = el('div', 'msg-content');
+  const text = el('pre', 'reasoning-text');
+  body.appendChild(text);
+  node.appendChild(body);
+  App.els.messages.appendChild(node);
+  autoscroll();
+  return text;
 }
 
 /* A message handed to a running turn. Nothing has been persisted or sent, so
@@ -973,32 +1013,58 @@ function openCompactModal(pause) {
   document.getElementById('compact-extra').value = '';
   document.getElementById('compact-modal').hidden = false;
   document.getElementById('compact-extra').focus();
+  loadCompactPrompt(pause && pause.instructions);
 }
 
 async function confirmCompaction() {
   const extra = document.getElementById('compact-extra').value;
+  const promptBox = document.getElementById('compact-prompt');
+  const override = promptBox && promptBox.value !== promptBox.dataset.saved
+    ? promptBox.value
+    : '';
   closeModal('compact-modal');
   const resume = !!compactionPause;
   compactionPause = null;
 
   const form = new FormData();
   form.append('extra_instructions', extra);
+  form.append('prompt_override', override);
   form.append('resume', resume ? 'true' : 'false');
 
-  if (resume) {
-    // Compaction and the continuation stream in one request.
-    appendNotice('info', 'Compacting, then continuing...');
-    await streamRequest(`/api/sessions/${App.sessionId}/compact`, { method: 'POST', body: form });
-    htmx.ajax('GET', `/_messages/${App.sessionId}`, { target: '#chat-container', swap: 'innerHTML' });
-    return;
-  }
+  // Summarising a long transcript is slow, so show the summary as it is
+  // written. Previously this was a static notice that vanished on failure.
+  await streamRequest(`/api/sessions/${App.sessionId}/compact`, { method: 'POST', body: form });
+  if (!resume) refreshMeta();
+}
 
-  appendNotice('info', 'Compacting...');
-  const resp = await fetch(`/api/sessions/${App.sessionId}/compact`, { method: 'POST', body: form });
-  const data = await resp.json();
-  if (!data.ok) { appendNotice('error', data.reason || 'Compaction failed'); return; }
-  htmx.ajax('GET', `/_messages/${App.sessionId}`, { target: '#chat-container', swap: 'innerHTML' });
-  refreshMeta();
+function resetCompactPrompt() {
+  const box = document.getElementById('compact-prompt');
+  if (box) box.value = box.dataset.saved || '';
+}
+
+async function saveAutoCompact(enabled) {
+  const form = new FormData();
+  form.append('enabled', enabled ? 'true' : 'false');
+  await fetch(`/api/sessions/${App.sessionId}/auto-compact`, { method: 'POST', body: form })
+    .catch(() => appendNotice('error', 'Could not save that setting.'));
+}
+
+/* Show the prompt that will actually be used, so it can be adjusted for this
+   run without editing the saved one. */
+async function loadCompactPrompt(known) {
+  const box = document.getElementById('compact-prompt');
+  if (!box) return;
+  let text = known;
+  if (!text) {
+    text = await fetch('/api/compact-prompt')
+      .then((r) => r.json()).then((d) => d.prompt)
+      .catch(() => '');
+  }
+  box.dataset.saved = text || '';
+  box.value = text || '';
+  const auto = document.getElementById('compact-auto');
+  const meta = document.getElementById('session-meta');
+  if (auto && meta) auto.checked = meta.dataset.autoCompact === '1';
 }
 
 function openThresholdModal() {

@@ -118,21 +118,46 @@ async def compact_session(
     session_id: str,
     manual_summary: str = "",
     extra_instructions: str = "",
+    prompt_override: str = "",
 ) -> dict:
-    """Summarise the older part of a conversation.
+    """Summarise the older part of a conversation. See compact_session_events."""
+    result = {}
+    async for event in compact_session_events(
+        session_id, manual_summary, extra_instructions, prompt_override
+    ):
+        if event["type"] == "compact_done":
+            result = event["result"]
+    return result
 
-    `extra_instructions` is appended to the compaction prompt for this run only,
-    so the user can say "keep the deployment steps" without permanently editing
-    the saved prompt.
+
+async def compact_session_events(
+    session_id: str,
+    manual_summary: str = "",
+    extra_instructions: str = "",
+    prompt_override: str = "",
+):
+    """Summarise the older part of a conversation, streaming the summary.
+
+    Summarising a long transcript takes a while, so the text is emitted as it
+    arrives rather than leaving the user watching a spinner.
+
+    `prompt_override` replaces the saved compaction prompt for this run only,
+    and `extra_instructions` is appended to it, so neither requires editing the
+    saved prompt permanently.
     """
+    def fail(reason):
+        return {"type": "compact_done", "result": {"ok": False, "reason": reason}}
+
     session = await db.get_session(session_id)
     if session is None:
-        return {"ok": False, "reason": "Session not found"}
+        yield fail("Session not found")
+        return
 
     rows = await db.get_messages(session_id)
     to_compact, kept = split_for_compaction(rows)
     if not to_compact:
-        return {"ok": False, "reason": "Not enough completed turns to compact yet."}
+        yield fail("Not enough completed turns to compact yet.")
+        return
 
     provider = get_provider(session["provider"])
 
@@ -140,8 +165,9 @@ async def compact_session(
         summary = manual_summary.strip()
     else:
         if not provider.has_credentials():
-            return {"ok": False, "reason": "No API key configured."}
-        instructions = await get_compact_prompt()
+            yield fail("No API key configured.")
+            return
+        instructions = prompt_override.strip() or await get_compact_prompt()
         if extra_instructions.strip():
             instructions += f"\n\nAdditional instructions for this summary:\n{extra_instructions.strip()}"
         summary = ""
@@ -156,11 +182,14 @@ async def compact_session(
         ):
             if event["type"] == "content":
                 summary += event["text"]
+                yield {"type": "compact_delta", "text": event["text"]}
             elif event["type"] == "error":
-                return {"ok": False, "reason": event["message"]}
+                yield fail(event["message"])
+                return
         summary = summary.strip()
         if not summary:
-            return {"ok": False, "reason": "The model returned an empty summary."}
+            yield fail("The model returned an empty summary.")
+            return
 
     original_tokens = sum(r.get("token_count") or 0 for r in to_compact)
     compressed_tokens = provider.count_tokens([{"role": "system", "content": summary}])
@@ -175,11 +204,14 @@ async def compact_session(
     )
     await db.mark_messages_compacted(session_id, [r["id"] for r in to_compact])
 
-    return {
-        "ok": True,
-        "compacted": len(to_compact),
-        "kept": len(kept),
-        "original_tokens": original_tokens,
-        "compressed_tokens": compressed_tokens,
-        "summary": summary,
+    yield {
+        "type": "compact_done",
+        "result": {
+            "ok": True,
+            "compacted": len(to_compact),
+            "kept": len(kept),
+            "original_tokens": original_tokens,
+            "compressed_tokens": compressed_tokens,
+            "summary": summary,
+        },
     }

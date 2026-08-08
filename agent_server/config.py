@@ -72,6 +72,10 @@ VISION_KEEP_ALIVE = os.getenv("VISION_KEEP_ALIVE", "30m")
 # Must be identical on every request: Ollama reloads the model whenever the
 # options change, which would reintroduce the cold start it is meant to avoid.
 VISION_NUM_CTX = int(os.getenv("VISION_NUM_CTX", "8192"))
+# Vision calls are dominated by generation, not by loading or by the image: a
+# 32B model writing an unprompted 1,300-token essay costs ~35s at 37 tok/s.
+# Capping the answer is the single biggest speed-up available.
+VISION_MAX_TOKENS = int(os.getenv("VISION_MAX_TOKENS", "400"))
 # Downscale anything larger before sending; phone photos are needlessly huge.
 VISION_MAX_PIXELS = int(os.getenv("VISION_MAX_PIXELS", str(1600 * 1600)))
 

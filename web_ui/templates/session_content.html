@@ -79,10 +79,23 @@
             <textarea id="compact-extra" rows="3"
                       placeholder="e.g. don't forget the deployment steps and the API key rotation plan"></textarea>
         </label>
+        <details class="tool-details" id="compact-prompt-box">
+            <summary class="tool-summary">
+                <span class="tool-label">Summariser prompt &mdash; edit for this compaction only</span>
+            </summary>
+            {# Changes here apply to this run and are not saved, so the prompt on
+               the Prompts page stays as it is. #}
+            <textarea id="compact-prompt" rows="12" spellcheck="false"></textarea>
+            <button type="button" class="btn-ghost" onclick="resetCompactPrompt()">Reset to saved prompt</button>
+        </details>
         <p class="hint">
             Older turns are replaced by a summary; the most recent turns are kept verbatim.
             The split never breaks a tool call away from its results.
         </p>
+        <label class="checkbox-label">
+            <input type="checkbox" id="compact-auto" onchange="saveAutoCompact(this.checked)">
+            Compact automatically from now on, without asking
+        </label>
         <div class="modal-actions">
             <button type="button" class="btn-primary" onclick="confirmCompaction()">Confirm compaction</button>
             <button type="button" class="btn-secondary" onclick="openThresholdModal()">Set a higher threshold</button>

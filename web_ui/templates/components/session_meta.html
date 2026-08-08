@@ -1,6 +1,7 @@
 {% set pct = usage.percent if usage.percent else 0 %}
 {% set ring = 'ring-danger' if pct >= 90 else ('ring-warn' if pct >= 70 else 'ring-ok') %}
-<div id="session-meta" data-threshold="{{ usage.threshold }}" data-max-context="{{ usage.max_context }}">
+<div id="session-meta" data-threshold="{{ usage.threshold }}" data-max-context="{{ usage.max_context }}"
+     data-auto-compact="{{ 1 if session.auto_compact else 0 }}">
     <div class="session-info">
         <span class="session-title">{{ session.name }}</span>
         <code class="session-dir" title="{{ session.project_dir }}">{{ session.project_dir | tildepath }}</code>

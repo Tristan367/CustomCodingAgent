@@ -11,10 +11,11 @@ from agent_server import agent
 from agent_server import database as db
 from agent_server import permissions
 from agent_server import stt as stt_service
-from agent_server.compaction import compact_session, should_offer_compaction
+from agent_server.compaction import compact_session_events, should_offer_compaction
 from agent_server.config import MIN_COMPACT_THRESHOLD, MODELS_BY_ID, UPLOAD_DIR
 from agent_server.models import ChatRequest, ResolveRequest
 from agent_server import vision as vision_engine
+from agent_server.system_prompt import get_compact_prompt
 
 router = APIRouter(prefix="/api", tags=["chat"])
 
@@ -263,23 +264,58 @@ async def set_auto_approve(session_id: str, payload: dict = Body(default={})):
     return {"ok": True, "enabled": enabled}
 
 
+@router.get("/compact-prompt")
+async def compact_prompt():
+    """The prompt the summariser will use, so it can be seen and adjusted."""
+    return {"prompt": await get_compact_prompt()}
+
+
 @router.post("/sessions/{session_id}/compact")
 async def compact(
     session_id: str,
     request: Request,
     summary: str = Form(""),
     extra_instructions: str = Form(""),
+    prompt_override: str = Form(""),
     resume: bool = Form(False),
 ):
-    """Compact the conversation. With `resume`, stream the continuation after."""
+    """Compact the conversation, streaming the summary as it is written.
+
+    Summarising a long transcript is slow enough that a silent wait reads as a
+    hang, and any failure used to be swallowed with it.
+    """
     await _require_session(session_id)
-    result = await compact_session(session_id, summary, extra_instructions)
-    if not result.get("ok"):
-        return JSONResponse(result, status_code=400)
-    agent.snooze_compaction(session_id)
-    if resume:
-        return _stream(session_id, request)
-    return JSONResponse(result)
+
+    async def generator() -> AsyncIterator[str]:
+        ok = False
+        async for event in compact_session_events(
+            session_id, summary, extra_instructions, prompt_override
+        ):
+            if event["type"] == "compact_done":
+                ok = event["result"].get("ok", False)
+                yield agent.sse({"type": "compact_done", **event["result"]})
+            else:
+                yield agent.sse(event)
+        if not ok:
+            yield agent.sse({"type": "stream_end"})
+            return
+        agent.snooze_compaction(session_id)
+        if resume:
+            agent.start_run(session_id)
+            async for event in agent.subscribe(session_id):
+                yield agent.sse(event)
+        else:
+            yield agent.sse({"type": "stream_end"})
+
+    return StreamingResponse(generator(), media_type="text/event-stream", headers=SSE_HEADERS)
+
+
+@router.post("/sessions/{session_id}/auto-compact")
+async def set_auto_compact(session_id: str, enabled: bool = Form(False)):
+    """Compact without asking, for people who never want the prompt."""
+    await _require_session(session_id)
+    await db.update_session(session_id, auto_compact=1 if enabled else 0)
+    return {"ok": True, "auto_compact": enabled}
 
 
 @router.post("/sessions/{session_id}/compact-threshold")

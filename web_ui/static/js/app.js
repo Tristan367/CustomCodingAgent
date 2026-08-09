@@ -1417,11 +1417,14 @@ const Dictation = {
   analyser: null,
   rafId: null,
   meterGeneration: 0,   // stale animation loops check this and exit
+  transcribeTimer: null,
   els: {},
 
   init() {
     this.els.button = document.getElementById('mic-btn');
     this.els.meter = document.getElementById('mic-meter');
+    this.els.status = document.getElementById('stt-status');
+    this.els.elapsed = document.getElementById('stt-elapsed');
     if (!this.els.button || this.els.button.dataset.bound) return;
     this.els.button.dataset.bound = '1';
     this.els.button.addEventListener('click', () => this.toggle());
@@ -1512,6 +1515,7 @@ const Dictation = {
     this.els.button.classList.remove('recording');
     this.els.button.classList.add('transcribing');
     this.stopMeter();
+    this.showTranscribing();
 
     let blob;
     try {
@@ -1548,9 +1552,37 @@ const Dictation = {
     return text;
   },
 
+  /* Transcription is the one stretch with no feedback: the recorder has stopped,
+     the meter is gone, and whisper can take seconds on a long take. Say so, and
+     count, so a slow one reads as slow rather than as nothing happening. */
+  showTranscribing() {
+    if (!this.els.status) return;
+    const started = Date.now();
+    this.els.status.hidden = false;
+    if (this.els.elapsed) this.els.elapsed.textContent = '';
+    clearInterval(this.transcribeTimer);
+    this.transcribeTimer = setInterval(() => {
+      // The node goes away when the session is swapped out; stop with it.
+      if (!this.els.status || !this.els.status.isConnected) {
+        clearInterval(this.transcribeTimer);
+        return;
+      }
+      const secs = Math.floor((Date.now() - started) / 1000);
+      if (this.els.elapsed) this.els.elapsed.textContent = secs >= 2 ? ` ${secs}s` : '';
+    }, 250);
+  },
+
+  hideTranscribing() {
+    clearInterval(this.transcribeTimer);
+    this.transcribeTimer = null;
+    if (this.els.status) this.els.status.hidden = true;
+    if (this.els.elapsed) this.els.elapsed.textContent = '';
+  },
+
   /* Return to a known-clean state from any path. */
   teardown() {
     this.recording = false;
+    this.hideTranscribing();
     updateComposerButtons();
     this.starting = false;
     this.pushToTalk = false;

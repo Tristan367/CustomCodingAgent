@@ -258,7 +258,6 @@ async def _pending_prompt(session: dict, messages: list[dict]) -> dict | None:
 async def _home_context(error: str = "") -> dict:
     return {
         "sessions": await db.list_sessions(),
-        "totals": await db.get_month_usage(),
         "sound_enabled": await _sound_enabled(),
         "stt": stt_availability(),
         "settings": await db.get_all_settings(),
@@ -425,12 +424,6 @@ async def create_session_form(
         thinking_effort=thinking_effort or None,
     )
     return RedirectResponse(f"/sessions/{session['id']}", status_code=303)
-
-
-@app.post("/_reset_usage")
-async def reset_usage(request: Request):
-    await db.reset_usage()
-    return RedirectResponse("/", status_code=303)
 
 
 @app.post("/_quick_chat")

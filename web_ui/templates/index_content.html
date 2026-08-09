@@ -99,29 +99,6 @@
     </section>
 
     <section class="panel">
-        <div class="quick-row">
-            <h2>Spend <span class="count">{{ totals.label }}</span></h2>
-            <form method="POST" action="/_reset_usage"
-                  onsubmit="return confirm('Reset the totals for {{ totals.label }} to zero?')">
-                <button type="submit" class="btn-ghost">Reset</button>
-            </form>
-        </div>
-        <div class="stat-grid">
-            <div class="stat"><span class="stat-value">${{ '%.4f' % totals.cost }}</span><span class="stat-label">this month</span></div>
-            <div class="stat"><span class="stat-value">{{ '{:,}'.format(totals.input) }}</span><span class="stat-label">input tokens</span></div>
-            <div class="stat"><span class="stat-value">{{ '{:,}'.format(totals.output) }}</span><span class="stat-label">output tokens</span></div>
-            <div class="stat"><span class="stat-value">{{ totals.cache_hit_rate }}%</span><span class="stat-label">cache hit rate</span></div>
-            <div class="stat"><span class="stat-value">{{ '{:,}'.format(totals.requests) }}</span><span class="stat-label">requests</span></div>
-        </div>
-        <p class="hint">
-            This month only. Last month is dropped when a new one starts, rather than
-            accumulating in the database with no way to clear it.
-            A cached input token costs about 1/120th of an uncached one, so a high hit
-            rate is where nearly all of the savings come from.
-        </p>
-    </section>
-
-    <section class="panel">
         <h2>Sessions <span class="count">{{ sessions | length }}</span></h2>
         <div id="session-list">
             {% for s in sessions %}

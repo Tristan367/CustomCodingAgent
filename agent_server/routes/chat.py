@@ -209,11 +209,6 @@ async def seen(session_id: str):
     return {"ok": True}
 
 
-@router.get("/usage")
-async def total_usage():
-    return await db.get_month_usage()
-
-
 # ── Write permissions ───────────────────────────────────────────────────────
 
 @router.get("/sessions/{session_id}/write-dirs")

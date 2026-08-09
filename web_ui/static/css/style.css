@@ -1077,25 +1077,6 @@ select { cursor: pointer; }
 }
 .notice-info .msg-role { color: var(--accent); }
 
-/* ── Stats grid ──────────────────────────────────────────────────────────── */
-
-.stat-grid {
-  display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(110px, 1fr));
-  gap: 8px;
-}
-.stat {
-  display: flex;
-  flex-direction: column;
-  gap: 1px;
-  padding: 9px 11px;
-  background: var(--bg-inset);
-  border: 1px solid var(--border);
-  border-radius: 4px;
-}
-.stat-value { font-family: var(--mono); font-size: 15px; color: var(--text); }
-.stat-label { font-size: 10.5px; color: var(--text-faint); text-transform: uppercase; letter-spacing: 0.04em; }
-
 /* ── Writable directory list ─────────────────────────────────────────────── */
 
 .dir-list { list-style: none; margin: 0 0 10px; padding: 0; display: flex; flex-direction: column; gap: 1px; }

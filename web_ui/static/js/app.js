@@ -415,6 +415,14 @@ function handleEvent(event, stream) {
       appendPermissionCard(event);
       break;
 
+    case 'notice':
+      appendNotice(event.level === 'warn' ? 'error' : 'info', event.message);
+      break;
+
+    case 'cache_warning':
+      openCacheModal(event);
+      break;
+
     case 'compaction_required':
       openCompactModal(event);
       break;
@@ -957,6 +965,23 @@ function currentUsage() {
     threshold: Number(meta?.dataset.threshold) || 262144,
     maxContext: Number(meta?.dataset.maxContext) || 1000000,
   };
+}
+
+/* Everything before the last message is what gets re-read, so a change up
+   there is charged again in full. Better to ask than to surprise. */
+function openCacheModal(pause) {
+  const money = (n) => `$${Number(n).toFixed(4)}`;
+  document.getElementById('cache-detail').textContent =
+    `Up to ${Number(pause.lost).toLocaleString()} cached tokens will be re-read at the `
+    + `uncached rate: at most ${money(pause.cost)}, against ${money(pause.saved_cost)} `
+    + `had the cache held. Cause: ${pause.reason}.`;
+  document.getElementById('cache-modal').hidden = false;
+}
+
+async function acceptCacheWarning() {
+  closeModal('cache-modal');
+  await streamRequest(`/api/sessions/${App.sessionId}/accept-cache-warning`,
+                      { method: 'POST' });
 }
 
 function openCompactModal(pause) {

@@ -107,6 +107,12 @@ MIGRATIONS: list[tuple[str, str, str]] = [
     # system prompt: the instructions for writing a summary have nothing to do
     # with the instructions for doing the work.
     ("sessions", "compact_profile", "TEXT DEFAULT 'default'"),
+    # Fingerprint of the last request sent, so the next one can be compared
+    # against it and a cache miss predicted before it is paid for.
+    ("sessions", "cache_fp", "TEXT"),
+    ("sessions", "cache_fp_tokens", "TEXT"),
+    ("sessions", "cache_checked_at", "TEXT"),
+    ("sessions", "cache_prompt_tokens", "INTEGER"),
     # A new shared prompt waiting to be adopted. Applied at the next compaction
     # rather than immediately: compaction rewrites the conversation anyway, so
     # the prefix is already a miss at that point and the swap is close to free.
@@ -212,6 +218,7 @@ async def _execute(sql: str, params: tuple = ()) -> int:
 SESSION_FIELDS = {
     "name", "project_dir", "provider", "model", "thinking_effort",
     "prompt_profile", "compact_profile", "bash_auto_approve", "is_archived", "compact_threshold",
+    "cache_fp", "cache_fp_tokens", "cache_checked_at", "cache_prompt_tokens",
     "auto_compact", "system_prompt", "prompt_custom", "pending_system_prompt",
 }
 

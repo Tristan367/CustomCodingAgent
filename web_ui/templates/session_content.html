@@ -113,6 +113,22 @@
     </div>
 </div>
 
+<div id="cache-modal" class="modal" hidden>
+    <div class="modal-content">
+        <h3>This turn will not use the cache</h3>
+        <p class="hint" id="cache-detail"></p>
+        <p class="hint">
+            A cached prefix is re-read at a fraction of the price, and the cache matches
+            on an exact prefix, so anything changed ahead of the last message is charged
+            again. The figure is an upper bound: the provider sometimes keeps part of it.
+        </p>
+        <div class="modal-actions">
+            <button type="button" class="btn-primary" onclick="acceptCacheWarning()">Send it anyway</button>
+            <button type="button" class="btn-ghost" onclick="closeModal('cache-modal')">Stop here</button>
+        </div>
+    </div>
+</div>
+
 <div id="prompt-modal" class="modal" hidden>
     <div class="modal-content wide">
         <h3>System prompt for this session</h3>

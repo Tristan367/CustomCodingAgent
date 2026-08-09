@@ -14,12 +14,14 @@ Responsibilities, in order of how badly they used to break:
 
 import asyncio
 import json
+from datetime import datetime, timezone
 import time
 import uuid
 from typing import AsyncIterator
 
+from agent_server import cache_guard
 from agent_server import database as db
-from agent_server.config import MAX_TOOL_RESULT_CHARS
+from agent_server.config import CACHE_WARN_TOKENS, MAX_TOOL_RESULT_CHARS, MODELS_BY_ID
 from agent_server.conversation import (
     build_messages,
     normalize_tool_calls,
@@ -48,6 +50,9 @@ PARALLEL_SAFE_TOOLS = frozenset({"read", "grep", "glob", "webfetch", "task", "vi
 _approved_calls: set[str] = set()
 # Sessions whose compaction prompt the user dismissed for the current run.
 _compaction_snoozed: set[str] = set()
+
+# Sessions where the user has accepted a predicted cache miss for this turn.
+_cache_warning_ack: set[str] = set()
 
 # ── Session status, for the tab-bar indicators ──────────────────────────────
 # "running"  the agent is working
@@ -118,6 +123,11 @@ def set_runtime_auto_approve(session_id: str, enabled: bool):
 
 def runtime_auto_approve(session_id: str) -> bool:
     return session_id in _runtime_auto_approve
+
+
+def accept_cache_warning(session_id: str):
+    """Proceed through one predicted cache miss for this session."""
+    _cache_warning_ack.add(session_id)
 
 
 def snooze_compaction(session_id: str):
@@ -243,6 +253,7 @@ def forget_session(session_id: str):
     _aborts.pop(session_id, None)
     _tool_tasks.pop(session_id, None)
     _compaction_snoozed.discard(session_id)
+    _cache_warning_ack.discard(session_id)
 
 
 def start_run(session_id: str) -> _Run:
@@ -340,7 +351,7 @@ async def run(session_id: str) -> AsyncIterator[dict]:
             yield {"type": "turn_start", "user_message_id": last_user["id"]}
 
         async for event in _loop(session, provider, ctx, abort):
-            if event["type"] in ("permission", "compaction_required"):
+            if event["type"] in ("permission", "compaction_required", "cache_warning"):
                 outcome = "waiting"
             elif event["type"] == "error":
                 outcome = "error"
@@ -432,6 +443,43 @@ async def _loop(
             yield {"type": "error", "message": "Nothing to send: the conversation is empty."}
             return
 
+        # Anything that changed ahead of the last message re-bills everything
+        # after it at the miss rate. That is computable before sending, so a
+        # large accidental invalidation gets a confirmation rather than turning
+        # up on the bill.
+        fp = cache_guard.fingerprint(tools, messages)
+        fp_tokens = cache_guard.slot_tokens(provider, tools, messages)
+        forecast = cache_guard.predict(
+            json.loads(session.get("cache_fp") or "[]"),
+            json.loads(session.get("cache_fp_tokens") or "[]"),
+            fp, fp_tokens,
+            measured_total=int(session.get("cache_prompt_tokens") or 0),
+            messages=messages,
+        )
+        if (
+            forecast["lost"] >= CACHE_WARN_TOKENS
+            and session_id not in _cache_warning_ack
+        ):
+            model = MODELS_BY_ID.get(session["model"], {})
+            yield {
+                "type": "cache_warning",
+                "lost": forecast["lost"],
+                "reason": forecast["reason"],
+                "cost": round(forecast["lost"] * model.get("price_in_miss", 0) / 1e6, 4),
+                "saved_cost": round(
+                    forecast["lost"] * model.get("price_in_hit", 0) / 1e6, 4
+                ),
+            }
+            return
+        _cache_warning_ack.discard(session_id)
+        await db.update_session(
+            session_id,
+            cache_fp=json.dumps(fp),
+            cache_fp_tokens=json.dumps(fp_tokens),
+            cache_checked_at=datetime.now(timezone.utc).isoformat(),
+        )
+        session = await db.get_session(session_id) or session
+
         content = ""
         reasoning = ""
         partials: dict[int, dict] = {}
@@ -518,7 +566,29 @@ async def _loop(
             usage=usage,
         )
         if usage:
+            # Anchor the next prediction on what was really billed, not on a
+            # character estimate that runs high.
+            if usage.get("prompt_tokens"):
+                await db.update_session(
+                    session_id, cache_prompt_tokens=usage["prompt_tokens"]
+                )
             yield {"type": "usage", "usage": usage}
+            # The cache can also expire server-side, which nothing local can
+            # foresee. Say so once it has happened, so the next expensive turn
+            # is a decision rather than a surprise.
+            if (
+                forecast["reusable"] >= CACHE_WARN_TOKENS
+                and not usage.get("cached_tokens")
+            ):
+                yield {
+                    "type": "notice",
+                    "level": "warn",
+                    "message": (
+                        f"The cache expired: {forecast['reusable']:,} tokens that should "
+                        "have been re-read cheaply were billed in full. Nothing changed "
+                        "locally, so this was the provider ageing it out."
+                    ),
+                }
 
         if finish == "length":
             yield {"type": "error", "message": "Model hit its output limit. Ask it to continue."}

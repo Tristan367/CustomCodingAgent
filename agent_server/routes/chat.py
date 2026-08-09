@@ -295,6 +295,14 @@ async def set_compact_profile(session_id: str, body: CompactProfileRequest):
     return {"ok": True, "prompt": await prompt_body(body.name, COMPACTION)}
 
 
+@router.post("/sessions/{session_id}/accept-cache-warning")
+async def accept_cache_warning(session_id: str, request: Request):
+    """Go ahead with a turn that will re-read the conversation uncached."""
+    await _require_session(session_id)
+    agent.accept_cache_warning(session_id)
+    return _stream(session_id, request)
+
+
 @router.post("/sessions/{session_id}/compact")
 async def compact(
     session_id: str,

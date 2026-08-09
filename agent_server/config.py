@@ -57,6 +57,11 @@ MIN_COMPACT_THRESHOLD = 4096
 # Slider stops offered in the UI: powers of two from 4K to 1M.
 THRESHOLD_STEPS = [4096 * 2 ** i for i in range(8)] + [1_000_000]
 
+# Warn before a request throws away this many previously cached tokens. At the
+# miss rate a cached prefix costs ~120x more to re-read, so a large accidental
+# invalidation is worth a confirmation rather than a surprise on the bill.
+CACHE_WARN_TOKENS = int(os.getenv("CACHE_WARN_TOKENS", "25000"))
+
 # Safety rails on the agent loop.
 MAX_TOOL_RESULT_CHARS = int(os.getenv("MAX_TOOL_RESULT_CHARS", "50000"))
 

@@ -8,9 +8,14 @@ offset and could split a group; this one only ever cuts on a group boundary.
 """
 
 from agent_server import database as db
-from agent_server.conversation import normalize_tool_calls
+from agent_server.config import MODELS
+from agent_server.conversation import (
+    build_messages,
+    normalize_tool_calls,
+    pending_tool_calls,
+)
 from agent_server.providers import get_provider
-from agent_server.system_prompt import get_compact_prompt
+from agent_server.system_prompt import get_compact_prompt, session_system_prompt
 
 # Work kept verbatim at the tail so recent context survives compaction. A
 # summary alone loses the concrete detail the model is actively working with --
@@ -99,6 +104,50 @@ def split_for_compaction(
         return [], rows
 
     return [m for g in head for m in g], [m for g in tail for m in g]
+
+
+async def _summariser_messages(
+    session: dict, rows: list[dict], to_compact: list[dict], instructions: str
+) -> list[dict]:
+    """Ask for the summary on top of the conversation that is already cached.
+
+    Flattening the transcript into a fresh request re-buys, at the cache-miss
+    rate, tokens that were already paid for once. Continuing the real
+    conversation reuses the prefix the last turn already established: measured
+    on a 106,000-token session, the fresh call billed 24,284 uncached tokens
+    while continuing billed 58, which is 26x cheaper despite sending four times
+    as much. It is also the fuller picture, because the flattened rendering
+    truncates every message to 4,000 characters.
+
+    The fallback stays for the cases where continuing is not possible: an open
+    tool call that a user message cannot legally follow, or a conversation too
+    large for the window.
+    """
+    fallback = [
+        {"role": "system", "content": instructions},
+        {"role": "user", "content": render_transcript(to_compact)},
+    ]
+    _, open_calls = pending_tool_calls(rows)
+    if open_calls:
+        return fallback
+
+    provider = get_provider(session["provider"])
+    live = build_messages(
+        await session_system_prompt(session),
+        await db.get_compactions(session["id"]),
+        rows,
+    )
+    ask = {"role": "user", "content": instructions}
+    if provider.count_tokens(live + [ask]) > _context_limit(session) * 0.9:
+        return fallback
+    return live + [ask]
+
+
+def _context_limit(session: dict) -> int:
+    for m in MODELS:
+        if m["id"] == session.get("model"):
+            return m["context"]
+    return 128_000
 
 
 async def drop_closed_reasoning(kept: list[dict]) -> int:
@@ -205,12 +254,11 @@ async def compact_session_events(
         instructions = prompt_override.strip() or await get_compact_prompt(session)
         if extra_instructions.strip():
             instructions += f"\n\nAdditional instructions for this summary:\n{extra_instructions.strip()}"
+
+        messages = await _summariser_messages(session, rows, to_compact, instructions)
         summary = ""
         async for event in provider.chat_completion(
-            messages=[
-                {"role": "system", "content": instructions},
-                {"role": "user", "content": render_transcript(to_compact)},
-            ],
+            messages=messages,
             tools=[],
             model=session["model"],
             thinking_effort="low",

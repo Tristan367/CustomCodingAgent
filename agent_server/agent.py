@@ -19,10 +19,7 @@ import uuid
 from typing import AsyncIterator
 
 from agent_server import database as db
-from agent_server.config import (
-    MAX_TOOL_RESULT_CHARS,
-    MAX_TOOL_ROUNDS,
-)
+from agent_server.config import MAX_TOOL_RESULT_CHARS
 from agent_server.conversation import (
     build_messages,
     normalize_tool_calls,
@@ -386,7 +383,11 @@ async def _loop(
     # that changes underneath. See session_system_prompt for why that matters.
     system_prompt = await session_system_prompt(session)
 
-    for _round in range(MAX_TOOL_ROUNDS):
+    # No round cap. A turn ends when the model stops asking for tools, hits its
+    # output limit, pauses for the user, or the user stops it -- all of which
+    # are checked below. A counter here only ever cut off work that was going
+    # fine, and the user already has a Stop button.
+    while True:
         if abort.is_set():
             yield {"type": "aborted"}
             return
@@ -540,11 +541,6 @@ async def _loop(
                 paused = True
         if paused:
             return
-
-    yield {
-        "type": "error",
-        "message": f"Stopped after {MAX_TOOL_ROUNDS} tool rounds without finishing.",
-    }
 
 
 async def _drain_pending(session: dict, ctx: ToolContext) -> AsyncIterator[dict]:

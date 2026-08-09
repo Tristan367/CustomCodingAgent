@@ -58,7 +58,6 @@ MIN_COMPACT_THRESHOLD = 4096
 THRESHOLD_STEPS = [4096 * 2 ** i for i in range(8)] + [1_000_000]
 
 # Safety rails on the agent loop.
-MAX_TOOL_ROUNDS = int(os.getenv("MAX_TOOL_ROUNDS", "40"))
 MAX_TOOL_RESULT_CHARS = int(os.getenv("MAX_TOOL_RESULT_CHARS", "50000"))
 
 # ── Vision ──────────────────────────────────────────────────────────────────

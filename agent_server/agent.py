@@ -456,18 +456,23 @@ async def _loop(
             measured_total=int(session.get("cache_prompt_tokens") or 0),
             messages=messages,
         )
+        # A compaction is a deliberate act whose entire purpose is to make the
+        # next turns cheaper. Interrupting to announce the miss it necessarily
+        # causes would frame the saving as a cost.
+        expected = forecast["index"] >= 0 and "compacted" in forecast["reason"]
         if (
-            forecast["lost"] >= CACHE_WARN_TOKENS
+            forecast["billable"] >= CACHE_WARN_TOKENS
+            and not expected
             and session_id not in _cache_warning_ack
         ):
             model = MODELS_BY_ID.get(session["model"], {})
             yield {
                 "type": "cache_warning",
-                "lost": forecast["lost"],
+                "lost": forecast["billable"],
                 "reason": forecast["reason"],
-                "cost": round(forecast["lost"] * model.get("price_in_miss", 0) / 1e6, 4),
+                "cost": round(forecast["billable"] * model.get("price_in_miss", 0) / 1e6, 4),
                 "saved_cost": round(
-                    forecast["lost"] * model.get("price_in_hit", 0) / 1e6, 4
+                    forecast["billable"] * model.get("price_in_hit", 0) / 1e6, 4
                 ),
             }
             return

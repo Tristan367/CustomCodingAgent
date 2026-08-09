@@ -86,7 +86,7 @@ def predict(
     if not previous:
         # Nothing was cached, so nothing is being lost. A first request is
         # uncached by nature and not worth interrupting anyone over.
-        return {"lost": 0, "index": -1, "reason": "", "reusable": 0}
+        return {"lost": 0, "billable": 0, "index": -1, "reason": "", "reusable": 0}
 
     idx = break_index(previous, current)
     if idx == -1:
@@ -96,16 +96,30 @@ def predict(
         estimated_total = sum(previous_tokens)
         if measured_total and estimated_total:
             reusable = round(measured_total * reusable / estimated_total)
-        return {"lost": 0, "index": -1, "reason": "", "reusable": reusable}
+        return {"lost": 0, "billable": 0, "index": -1, "reason": "", "reusable": reusable}
 
     lost = sum(previous_tokens[idx:])
     reusable = sum(previous_tokens[:idx])
+    # What is actually billed is the part of *this* request that no longer
+    # matches, which is not the same as the part of the old one being thrown
+    # away. After a compaction the two are wildly different: a large cached
+    # prefix stops being reusable, but the request replacing it is small, so
+    # charging the discarded figure would overstate the cost several times over.
+    billable = sum(current_tokens[idx:])
     estimated_total = sum(previous_tokens)
     if measured_total and estimated_total:
         scale = measured_total / estimated_total
-        lost, reusable = round(lost * scale), round(reusable * scale)
+        lost, reusable, billable = (
+            round(lost * scale), round(reusable * scale), round(billable * scale)
+        )
     reason = describe(idx, len(previous) - 1, messages)
-    return {"lost": lost, "index": idx, "reason": reason, "reusable": reusable}
+    return {
+        "lost": lost,
+        "billable": billable,
+        "index": idx,
+        "reason": reason,
+        "reusable": reusable,
+    }
 
 
 def slot_tokens(provider, tools: list[dict], messages: list[dict]) -> list[int]:

@@ -96,3 +96,21 @@ def test_the_estimate_is_scaled_onto_the_last_measured_billing():
     scaled = cache_guard.predict(a, at, b, bt, measured_total=500)
     assert raw["lost"] == sum(at)
     assert scaled["lost"] == 500, "a total loss is the whole measured prompt"
+
+
+def test_the_charge_is_the_new_request_not_the_discarded_prefix():
+    """Compaction discards a large prefix and replaces it with a small one.
+
+    Billing the discarded figure overstated the cost several times over: what is
+    actually paid for is the part of the new request that no longer matches.
+    """
+    long_convo = MSGS + [{"role": "user", "content": "U" * 40_000}]
+    a, at = fp_and_tokens(TOOLS, long_convo)
+    # What compaction produces: the big history replaced by a short summary.
+    compacted = [MSGS[0], {"role": "system", "content": "summary"},
+                 {"role": "user", "content": "next"}]
+    b, bt = fp_and_tokens(TOOLS, compacted)
+
+    out = cache_guard.predict(a, at, b, bt)
+    assert out["lost"] > 10_000, "a large cached prefix does stop being reusable"
+    assert out["billable"] < 100, "but the request replacing it is tiny"

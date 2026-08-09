@@ -1,9 +1,12 @@
 """Named prompts: storage, migration off the old settings keys, and propagation."""
 
+import hashlib
+
 import pytest
 
 from agent_server import database as db
 from agent_server.system_prompt import (
+    _SHIPPED_HASHES,
     DEFAULT_PROMPT,
     MINIMAL_PROMPT,
     PROTECTED_PROMPT,
@@ -108,3 +111,28 @@ async def test_editing_a_prompt_does_not_disturb_a_live_session(fresh, tmp_path)
     await db.save_prompt("default", "Totally new instructions.")
     row = await db.get_session(s["id"])
     assert row["system_prompt"] == frozen
+
+
+async def test_an_improved_builtin_reaches_an_install_that_never_edited_it(fresh):
+    """Seeding once froze a built-in at whatever shipped the day the db was made."""
+    await migrate_prompts()
+    stale = "You are a coding agent working in the user's local codebase.\n\nOld wording."
+    await db.save_prompt("default", stale)
+    _SHIPPED_HASHES.add(hashlib.sha256(stale.encode()).hexdigest())
+
+    await migrate_prompts()
+    assert await prompt_body("default") == DEFAULT_PROMPT.strip()
+
+
+async def test_refresh_leaves_a_prompt_the_user_wrote_alone(fresh):
+    await migrate_prompts()
+    await db.save_prompt("default", "My own wording, do not touch.")
+    await migrate_prompts()
+    assert await prompt_body("default") == "My own wording, do not touch."
+
+
+async def test_refresh_does_not_touch_prompts_the_user_created(fresh):
+    await migrate_prompts()
+    await db.save_prompt("deepseek-minimal", "Mine.")
+    await migrate_prompts()
+    assert await prompt_body("deepseek-minimal") == "Mine."

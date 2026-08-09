@@ -48,8 +48,6 @@ reproduces the thing you are fixing and that the conditions the bug needs are \
 present -- a check that never runs looks exactly like a check that succeeded.
 
 # Tools
-Issue independent calls in the same message so they run at once.
-
 You cannot see images. When a path to one appears, call `vision` on it and ask \
 something specific rather than for a description. `screenshot` captures a running \
 page and describes it in one call.
@@ -106,6 +104,7 @@ async def migrate_prompts():
     wording lands; anything unrecognised is genuinely the user's and is kept.
     """
     if await db.list_prompts():
+        await _refresh_untouched_builtins()
         return
 
     settings = await db.get_all_settings()
@@ -133,12 +132,30 @@ _SHIPPED_HASHES = {
     "3868d771daffb15aa2d68cd6a0236aefadf83e140259355214e6daeec8870d31",  # default
     "4faaa19aa524bb24e7891374949c59b346d0efcdad6aa182132189570b91a915",  # minimal
     "c6795a039b62f7ae7d9629c8c5b9f938804947258dbb82e03f223987a51025b7",  # visual-verify
+    "1f85feeb0ab7af8d341d371cb62afcc36ee4e857fda815bd9e0ac4288fe2c294",  # default, before the parallel-calls line was dropped
 }
+
+
+async def _refresh_untouched_builtins():
+    """Carry an improved built-in through to installs that never edited it.
+
+    Seeding once meant a built-in froze at whatever shipped the day the database
+    was created, so later wording never reached anyone but new installs. A body
+    still matching something this app shipped was not written by the user and is
+    safe to move forward; anything else is theirs and is left alone.
+    """
+    for name, starter in STARTER_PROMPTS.items():
+        row = await db.get_prompt(name)
+        if row is None:
+            await db.save_prompt(name, starter.strip())
+        elif _is_shipped(row["body"]) and row["body"].strip() != starter.strip():
+            await db.save_prompt(name, starter.strip())
 
 
 def _is_shipped(body: str) -> bool:
     digest = hashlib.sha256(body.strip().encode()).hexdigest()
     return digest in _SHIPPED_HASHES
+
 
 
 

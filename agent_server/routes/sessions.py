@@ -63,22 +63,33 @@ async def update_session(session_id: str, body: SessionUpdate):
 
 @router.get("/{session_id}/system-prompt")
 async def get_system_prompt(session_id: str):
-    """The exact prompt this session is running with."""
+    """What this session is running with, and what it will switch to.
+
+    Both are returned separately. Collapsing them into one field meant a queued
+    change was displayed as though it were already in force, with no way to see
+    the text actually being sent.
+    """
     session = await db.get_session(session_id)
     if session is None:
         raise HTTPException(404, "Session not found")
     from agent_server.system_prompt import session_system_prompt
 
-    started = bool(await db.get_messages(session_id))
-    pending = session.get("pending_system_prompt")
     return {
-        # Show the queued text if there is one: that is what the user last
-        # asked for, and what they will want to edit further.
-        "prompt": pending or await session_system_prompt(session),
-        "pending": bool(pending),
+        "live": await session_system_prompt(session),
+        "pending": session.get("pending_system_prompt") or None,
+        "profile": session.get("prompt_profile") or "default",
         "custom": bool(session.get("prompt_custom")),
-        "started": started,
+        "started": bool(await db.get_messages(session_id)),
     }
+
+
+@router.delete("/{session_id}/system-prompt/pending")
+async def discard_pending_prompt(session_id: str):
+    """Drop a queued change and stay on the prompt already in use."""
+    if await db.get_session(session_id) is None:
+        raise HTTPException(404, "Session not found")
+    await db.update_session(session_id, pending_system_prompt=None)
+    return {"ok": True}
 
 
 @router.post("/{session_id}/system-prompt")
@@ -103,21 +114,40 @@ async def set_system_prompt(session_id: str, payload: dict):
         )
         custom = 0
 
+    from agent_server.system_prompt import session_system_prompt
+
+    live = await session_system_prompt(session)
+    pending = session.get("pending_system_prompt") or None
+
+    # Saying "saved, it will apply at the next compaction" when the text is
+    # identical to what is already running is a lie that repeats every click.
+    if text == live:
+        if pending:
+            await db.update_session(session_id, pending_system_prompt=None)
+            return {"ok": True, "status": "cancelled", "prompt": text,
+                    "custom": bool(custom), "deferred": False}
+        return {"ok": True, "status": "unchanged", "prompt": text,
+                "custom": bool(custom), "deferred": False}
+    if text == pending:
+        return {"ok": True, "status": "already_queued", "prompt": text,
+                "custom": bool(custom), "deferred": True}
+
     # Changing the prompt of a conversation that has already started rewrites
     # the front of the prefix and re-bills every token of it. Before the first
     # message there is nothing cached, so it applies straight away; after that
     # it waits for compaction, which rewrites the prefix anyway.
-    started = bool(await db.get_messages(session_id))
-    if started:
+    if await db.get_messages(session_id):
         await db.update_session(
             session_id, pending_system_prompt=text, prompt_custom=custom
         )
-        return {"ok": True, "prompt": text, "custom": bool(custom), "deferred": True}
+        return {"ok": True, "status": "queued", "prompt": text,
+                "custom": bool(custom), "deferred": True}
 
     await db.update_session(
         session_id, system_prompt=text, prompt_custom=custom, pending_system_prompt=None
     )
-    return {"ok": True, "prompt": text, "custom": bool(custom), "deferred": False}
+    return {"ok": True, "status": "applied", "prompt": text,
+            "custom": bool(custom), "deferred": False}
 
 
 @router.delete("/{session_id}")

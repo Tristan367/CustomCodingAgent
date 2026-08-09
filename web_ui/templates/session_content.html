@@ -116,14 +116,16 @@
 <div id="prompt-modal" class="modal" hidden>
     <div class="modal-content wide">
         <h3>System prompt for this session</h3>
-        <p class="hint">
-            Frozen when the session started, so editing the shared prompts page does
-            not disturb it. Saving a change here costs one cache miss as the model
-            re-reads the conversation, then the new text caches in its turn.
-        </p>
-        <div id="prompt-pending" class="hint" hidden>
-            A newer shared prompt is queued and will be adopted at the next
-            compaction. Saving here instead keeps this session on its own prompt.
+        <p class="hint" id="prompt-origin"></p>
+        {# Which text is on screen has to be unmistakable: a queued change used
+           to be shown as though it were already running. #}
+        <div class="prompt-tabs" id="prompt-tabs" hidden>
+            <button type="button" class="prompt-tab" data-view="live"
+                    onclick="showPromptView('live')">In use now</button>
+            <button type="button" class="prompt-tab" data-view="pending"
+                    onclick="showPromptView('pending')">Queued for next compaction</button>
+            <button type="button" class="btn-ghost prompt-discard"
+                    onclick="discardPendingPrompt()">Discard queued change</button>
         </div>
         <textarea id="session-prompt" rows="18" spellcheck="false"></textarea>
         <div class="modal-actions">

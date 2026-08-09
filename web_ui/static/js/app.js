@@ -1055,6 +1055,11 @@ async function loadCompactPrompt(known) {
   if (auto && meta) auto.checked = meta.dataset.autoCompact === '1';
 }
 
+/* Which prompt is running, and which one is waiting, are different questions.
+   The modal answers both explicitly rather than showing one and describing the
+   other in a sentence. */
+let promptState = { live: '', pending: null, view: 'live' };
+
 async function openSystemPrompt() {
   document.querySelectorAll('.dropdown-menu').forEach((m) => { m.hidden = true; });
   const box = document.getElementById('session-prompt');
@@ -1062,17 +1067,76 @@ async function openSystemPrompt() {
   document.getElementById('prompt-modal').hidden = false;
   const data = await fetch(`/api/sessions/${App.sessionId}/system-prompt`)
     .then((r) => r.json()).catch(() => null);
-  box.value = data ? data.prompt : '';
+  if (!data) { box.value = ''; return; }
+  promptState = { ...data, view: data.pending ? 'pending' : 'live' };
+  renderPromptModal();
+}
+
+function renderPromptModal() {
+  const { live, pending, profile, custom, started, view } = promptState;
+  const origin = document.getElementById('prompt-origin');
+  const tabs = document.getElementById('prompt-tabs');
+
+  const source = custom
+    ? 'a prompt written for this session'
+    : `the shared "${profile}" prompt`;
+  origin.textContent = pending
+    ? `Running ${source}. A change is queued and swaps in at the next compaction, `
+      + 'which rebuilds the prefix anyway so the switch is free.'
+    : started
+      ? `Running ${source}. A change saved here is queued until the next compaction, `
+        + 'because switching mid-conversation re-reads every token of it.'
+      : `Running ${source}. Nothing has been sent yet, so a change applies immediately.`;
+
+  tabs.hidden = !pending;
+  tabs.querySelectorAll('.prompt-tab').forEach((b) => {
+    b.classList.toggle('active', b.dataset.view === view);
+  });
+  const box = document.getElementById('session-prompt');
+  box.value = (view === 'pending' ? pending : live) || '';
   box.dataset.original = box.value;
-  const pending = document.getElementById('prompt-pending');
+  markPendingPrompt(!!pending);
+}
+
+function showPromptView(view) {
+  promptState.view = view;
+  renderPromptModal();
+}
+
+/* The menu is rendered server-side, so without this the queued marker only
+   appeared after a full page reload. */
+function markPendingPrompt(pending) {
+  const btn = document.getElementById('system-prompt-item');
+  if (!btn) return;
+  const badge = btn.querySelector('.menu-badge');
+  if (badge) badge.remove();
   if (pending) {
-    pending.hidden = !(data && (data.pending || data.started));
-    pending.textContent = data && data.pending
-      ? 'A change is queued and will be adopted at the next compaction.'
-      : 'This conversation has started, so a change here is queued until the next '
-        + 'compaction. Before the first message it would apply immediately.';
+    const span = document.createElement('span');
+    span.className = 'menu-badge';
+    span.textContent = ' \u2022 update queued';
+    btn.appendChild(span);
   }
 }
+
+async function discardPendingPrompt() {
+  const resp = await fetch(`/api/sessions/${App.sessionId}/system-prompt/pending`, {
+    method: 'DELETE',
+  }).catch(() => null);
+  if (!resp || !resp.ok) { appendNotice('error', 'Could not discard the queued change.'); return; }
+  promptState.pending = null;
+  promptState.view = 'live';
+  renderPromptModal();
+  appendNotice('info', 'Queued prompt change discarded. This session stays on the prompt it is using.');
+}
+
+const PROMPT_SAVE_MESSAGE = {
+  queued: 'System prompt saved. It swaps in at the next compaction \u2014 switching now '
+        + 'would re-read the whole conversation and bill it again.',
+  applied: 'System prompt updated. Nothing has been sent yet, so it is already in use.',
+  unchanged: 'That is already the prompt this session is using \u2014 nothing to change.',
+  already_queued: 'That change is already queued for the next compaction.',
+  cancelled: 'Back to the prompt already in use, so the queued change was dropped.',
+};
 
 async function saveSystemPrompt(text) {
   const box = document.getElementById('session-prompt');
@@ -1082,13 +1146,11 @@ async function saveSystemPrompt(text) {
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ prompt }),
   }).catch(() => null);
-  closeModal('prompt-modal');
   if (!resp || !resp.ok) { appendNotice('error', 'Could not save the prompt.'); return; }
   const data = await resp.json().catch(() => ({}));
-  appendNotice('info', data.deferred
-    ? 'System prompt saved. It takes effect at the next compaction \u2014 switching '
-      + 'now would re-read the whole conversation and bill it again.'
-    : 'System prompt updated. The conversation has not started, so it is already in use.');
+  closeModal('prompt-modal');
+  markPendingPrompt(data.status === 'queued' || data.status === 'already_queued');
+  appendNotice('info', PROMPT_SAVE_MESSAGE[data.status] || 'System prompt saved.');
 }
 
 /* Empty means "whatever the shared prompt renders to now". */

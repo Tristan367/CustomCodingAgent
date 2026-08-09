@@ -164,17 +164,37 @@ def test_compaction_summaries_precede_history():
 
 # ── compaction grouping ─────────────────────────────────────────────────────
 
-def test_tool_group_stays_atomic():
+def test_a_tool_call_stays_with_its_results():
+    """The one hard constraint: split these and every later request 400s."""
     rows = [
         row(1, "user", "a"),
         row(2, "assistant", tool_calls=[call("c1")]),
         row(3, "tool", "r", tool_call_id="c1"),
         row(4, "assistant", "done"),
     ]
-    assert [len(g) for g in group_messages(rows)] == [4]
+    # One unit per round, not one per turn -- a long agent run has to remain
+    # divisible or it can never be compacted.
+    assert [len(g) for g in group_messages(rows)] == [1, 2, 1]
+    call_unit = group_messages(rows)[1]
+    assert call_unit[0]["role"] == "assistant" and call_unit[1]["role"] == "tool"
 
 
-def test_split_never_cuts_through_a_tool_group():
+def _assert_wire_valid(tail):
+    """No dangling tool call, no orphaned result -- either is a hard 400."""
+    msgs = sanitize(build_messages("S", [], tail))
+    open_ids = set()
+    for m in msgs:
+        if m["role"] == "assistant":
+            open_ids = {c["id"] for c in m.get("tool_calls") or []}
+        elif m["role"] == "tool":
+            assert m["tool_call_id"] in open_ids, "orphaned tool result"
+            open_ids.discard(m["tool_call_id"])
+        else:
+            assert not open_ids, "tool call left unanswered"
+    assert not open_ids, "tool call left unanswered at the end"
+
+
+def test_split_never_cuts_through_a_tool_round():
     rows = []
     for i in range(6):
         base = i * 4
@@ -186,10 +206,26 @@ def test_split_never_cuts_through_a_tool_group():
         ]
     head, tail = split_for_compaction(rows)
     assert head and tail
-    assert len(head) % 4 == 0          # cut landed on a boundary
-    assert tail[0]["role"] == "user"   # kept window opens cleanly
-    # The surviving payload must still be valid on the wire.
-    assert sanitize(build_messages("S", [], tail))[-1]["role"] == "assistant"
+    _assert_wire_valid(tail)
+
+
+def test_a_single_long_turn_can_still_be_compacted():
+    """The failure this grouping exists to fix.
+
+    One user message and 30 tool rounds used to be one atomic unit, so a real
+    session sat at 74,000 tokens and compaction summarised nothing at all.
+    """
+    rows = [row(1, "user", "go")]
+    for i in range(30):
+        rows += [
+            row(2 + i * 2, "assistant", tool_calls=[call(f"c{i}")], token_count=200),
+            row(3 + i * 2, "tool", "r" * 40, tool_call_id=f"c{i}", token_count=3_000),
+        ]
+    head, tail = split_for_compaction(rows)
+    assert head, "a long single turn must still be compactable"
+    kept = sum(r.get("token_count") or 0 for r in tail)
+    assert kept <= 24_000, f"tail should respect the budget, got {kept:,}"
+    _assert_wire_valid(tail)
 
 
 def test_short_conversations_are_not_compacted():
@@ -214,10 +250,15 @@ def test_tail_window_grows_for_cheap_turns():
     assert head, "something must still be summarised"
 
 
-def test_tail_window_falls_back_to_floor_for_expensive_turns():
+def test_expensive_turns_shrink_the_window_to_the_minimum():
+    """The budget decides, not a count of turns.
+
+    A floor measured in turns is what disabled compaction once turns got long:
+    four of them came to 74,000 tokens, far past any budget worth keeping.
+    """
     rows = [m for i in range(20) for m in _turn(i, 20_000)]
     head, tail = split_for_compaction(rows)
-    assert len(tail) == 8, "four groups of two messages"
+    assert len(tail) == 2, "one expensive answer plus the message that asked for it"
     assert len(head) == len(rows) - len(tail)
 
 

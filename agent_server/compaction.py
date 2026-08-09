@@ -12,70 +12,82 @@ from agent_server.conversation import normalize_tool_calls
 from agent_server.providers import get_provider
 from agent_server.system_prompt import get_compact_prompt
 
-# Turns kept verbatim at the tail so recent context survives compaction.
-# A summary alone loses the concrete detail the model is actively working with
-# -- exact identifiers, file contents it just read, the wording of the last
-# instruction -- so compaction always leaves a real window of recent turns in
-# place. The floor is a count; beyond that the window grows to fill a token
-# budget, because three turns of one-line answers is a far smaller window than
-# three turns that each read a large file.
-KEEP_RECENT_GROUPS = 4
+# Work kept verbatim at the tail so recent context survives compaction. A
+# summary alone loses the concrete detail the model is actively working with --
+# exact identifiers, file contents it just read, the wording of the last
+# instruction -- so compaction always leaves a real window in place.
+#
+# The window is a token budget, not a count of turns. It used to be a floor of
+# four whole turns, which silently disabled compaction once turns got long: a
+# single request can now run for dozens of tool rounds, and four of those came
+# to 74,000 tokens in one real session, so the early return fired every time and
+# nothing was ever summarised.
+KEEP_MIN_UNITS = 2
 KEEP_TAIL_TOKENS = 24_000
 
 
 def group_messages(rows: list[dict]) -> list[list[dict]]:
-    """Split a transcript into atomic units that must not be broken apart."""
+    """Split a transcript into the smallest units that are safe to cut between.
+
+    The hard constraint is only that an assistant message carrying `tool_calls`
+    stays with the `tool` messages answering it. One unit is therefore one
+    round -- that assistant message and its results -- not a whole turn.
+
+    Grouping by turn made a long agent run atomic, so a 74,000-token turn could
+    never be compacted at all. Rounds inside a turn are safe to cut between:
+    each is closed by its own results.
+    """
     groups: list[list[dict]] = []
     current: list[dict] = []
 
+    def flush():
+        nonlocal current
+        if current:
+            groups.append(current)
+            current = []
+
     for row in rows:
         role = row["role"]
-        if role == "user":
-            if current:
-                groups.append(current)
-            current = [row]
-        elif role == "tool":
-            # Always belongs with the assistant turn that requested it.
+        if role == "tool":
+            # Always belongs with the assistant round that requested it.
             if current:
                 current.append(row)
             else:
                 groups.append([row])
-        else:  # assistant / system
-            if current:
-                current.append(row)
-            else:
-                current = [row]
-            if not normalize_tool_calls(row.get("tool_calls")):
-                groups.append(current)
-                current = []
+            continue
 
-    if current:
-        groups.append(current)
+        flush()
+        current = [row]
+        if role != "assistant" or not normalize_tool_calls(row.get("tool_calls")):
+            # Nothing is coming to answer this one, so the unit is already closed.
+            flush()
+
+    flush()
     return groups
 
 
 def split_for_compaction(
     rows: list[dict], keep_tail_tokens: int = KEEP_TAIL_TOKENS
 ) -> tuple[list[dict], list[dict]]:
-    """Return (messages_to_summarise, messages_to_keep) cut on a group boundary."""
+    """Return (messages_to_summarise, messages_to_keep) cut on a unit boundary."""
     groups = group_messages(rows)
-    if len(groups) <= KEEP_RECENT_GROUPS:
+    if len(groups) <= KEEP_MIN_UNITS:
         return [], rows
 
     # Grow the kept window backwards from the end until it fills the budget,
-    # always stopping on a group boundary, and always leaving at least one
-    # group to summarise.
+    # always stopping on a unit boundary, and always leaving at least one unit
+    # to summarise. The budget is what decides; the minimum only stops a huge
+    # final round from leaving no verbatim context at all.
     keep = 0
     total = 0
     for group in reversed(groups):
         cost = sum(r.get("token_count") or 0 for r in group)
-        if keep >= KEEP_RECENT_GROUPS and total + cost > keep_tail_tokens:
+        if keep >= KEEP_MIN_UNITS and total + cost > keep_tail_tokens:
             break
         if keep >= len(groups) - 1:
             break
         keep += 1
         total += cost
-    keep = max(keep, KEEP_RECENT_GROUPS)
 
     head = groups[:-keep]
     tail = groups[-keep:]
@@ -87,6 +99,29 @@ def split_for_compaction(
         return [], rows
 
     return [m for g in head for m in g], [m for g in tail for m in g]
+
+
+async def drop_closed_reasoning(kept: list[dict]) -> int:
+    """Stop echoing reasoning for tool turns the user has already moved past.
+
+    It is only required while a turn is open. Measured on a real session it is
+    around 5% of the retained tail -- small next to the tool output, but it buys
+    nothing, and compaction is the one moment when rewriting the prefix is free
+    because it is being rewritten anyway.
+    """
+    last_user = max(
+        (i for i, r in enumerate(kept) if r["role"] == "user"), default=-1
+    )
+    freed = 0
+    for row in kept[:last_user]:
+        if row["role"] != "assistant" or not row.get("reasoning_content"):
+            continue
+        if row.get("send_reasoning", 1) == 0:
+            continue
+        await db.update_message(row["id"], send_reasoning=0)
+        row["send_reasoning"] = 0
+        freed += len(row["reasoning_content"]) // 4
+    return freed
 
 
 def render_transcript(rows: list[dict], per_message_limit: int = 4000) -> str:
@@ -204,6 +239,10 @@ async def compact_session_events(
     )
     await db.mark_messages_compacted(session_id, [r["id"] for r in to_compact])
 
+    # The retained tail is the whole cost of a compacted session, so trim what
+    # it does not need while the prefix is being rebuilt regardless.
+    reasoning_freed = await drop_closed_reasoning(kept)
+
     # Compaction rewrites the prefix anyway, so this is the cheap moment to
     # adopt a shared prompt that changed while the conversation was running.
     pending = session.get("pending_system_prompt")
@@ -218,6 +257,7 @@ async def compact_session_events(
             "ok": True,
             "compacted": len(to_compact),
             "kept": len(kept),
+            "reasoning_freed": reasoning_freed,
             "original_tokens": original_tokens,
             "compressed_tokens": compressed_tokens,
             "summary": summary,

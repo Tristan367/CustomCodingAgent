@@ -121,6 +121,12 @@ MIGRATIONS: list[tuple[str, str, str]] = [
     ("messages", "tool_title", "TEXT"),
     ("messages", "duration_ms", "INTEGER"),
     ("messages", "file_path", "TEXT"),
+    # Whether this row's reasoning is still echoed back to the API. Thinking
+    # mode requires it while a tool turn is open; once a later user message
+    # closes the turn it is dead weight. The decision is stored rather than
+    # derived, because deriving it would silently rewrite the prefix the moment
+    # the user typed again and re-bill the whole conversation at the miss rate.
+    ("messages", "send_reasoning", "INTEGER DEFAULT 1"),
 ]
 
 
@@ -363,8 +369,17 @@ async def delete_messages_after(session_id: str, message_id: int) -> int:
         return cur.rowcount or 0
 
 
-async def update_message(message_id: int, content: str):
-    await _execute("UPDATE messages SET content = ? WHERE id = ?", (content, message_id))
+MESSAGE_FIELDS = {"content", "send_reasoning"}
+
+
+async def update_message(message_id: int, **fields):
+    fields = {k: v for k, v in fields.items() if k in MESSAGE_FIELDS}
+    if not fields:
+        return
+    sets = ", ".join(f"{k} = ?" for k in fields)
+    await _execute(
+        f"UPDATE messages SET {sets} WHERE id = ?", (*fields.values(), message_id)
+    )
 
 
 async def get_turn_changes(session_id: str) -> dict:

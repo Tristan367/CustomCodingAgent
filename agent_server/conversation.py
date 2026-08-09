@@ -84,9 +84,14 @@ def to_api_message(row: dict) -> dict:
         tool_calls = normalize_tool_calls(row.get("tool_calls"))
         if tool_calls:
             msg["tool_calls"] = tool_calls
-            # Required: the API rejects an open tool turn whose assistant message
-            # is missing its reasoning_content. Verified against the live API.
-            if row.get("reasoning_content"):
+            # Thinking mode rejects an *open* tool turn -- one the model is
+            # being asked to continue -- unless every assistant message in it
+            # carries its reasoning back. Measured against the live API: with
+            # the turn still open, dropping it on any of them returns 400,
+            # including when only the most recent keeps it. Once a later user
+            # message closes the turn, none of them need it, and compaction
+            # marks them so.
+            if row.get("reasoning_content") and (row.get("send_reasoning", 1) != 0):
                 msg["reasoning_content"] = row["reasoning_content"]
         # Assistant messages without tool calls always terminate a turn, and the
         # API neither needs nor uses their reasoning. Dropping it shrinks the

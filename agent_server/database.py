@@ -276,9 +276,8 @@ async def touch_session(session_id: str):
 async def delete_session(session_id: str):
     """Remove a session and everything hanging off it.
 
-    There is no cascade: SQLite only enforces foreign keys when asked, and the
-    schema does not declare them, so deleting just the session row left its
-    messages behind forever.
+    Schema declares ON DELETE CASCADE and foreign keys are enabled, but we
+    delete children explicitly as a safety net.
     """
     db = await connect()
     async with _write_lock:

@@ -51,7 +51,10 @@ async def read_file(
         suggestion = _suggest(path)
         return ToolResult.error(f"file not found: {path}{suggestion}", title)
     if path.is_dir():
-        entries = sorted(p.name + ("/" if p.is_dir() else "") for p in path.iterdir())
+        try:
+            entries = sorted(p.name + ("/" if p.is_dir() else "") for p in path.iterdir())
+        except PermissionError:
+            return ToolResult.error(f"permission denied reading directory: {path}", title)
         return ToolResult(
             output=f"{path} is a directory. Contents:\n" + "\n".join(entries[:200]),
             title=f"list {_display(path, ctx)}",

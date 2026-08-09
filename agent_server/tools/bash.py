@@ -111,7 +111,7 @@ async def run_bash(
     body = "\n".join(parts) or "(no output)"
 
     return ToolResult(
-        output=truncate(body, MAX_TOOL_RESULT_CHARS),
+        output=truncate(body, MAX_TOOL_RESULT_CHARS, spill=True),
         is_error=code != 0,
         title=f"{title} (exit {code})",
     )

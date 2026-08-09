@@ -237,3 +237,47 @@ def test_a_cancelled_batch_still_records_a_result_for_every_call():
 
     assert len(recorded) == 3, f"every call needs a result, got {recorded}"
     assert all("cancelled" in output for _, output in recorded)
+
+
+def test_a_fast_call_reports_before_a_slow_one_ahead_of_it():
+    """A batch used to be awaited in call order, so a grep sharing a batch with
+    a subagent held its finished result -- and kept its timer ticking -- until
+    the subagent was done. Both then landed on the same duration."""
+    import agent_server.agent as ag
+    from agent_server.tools.base import ToolContext
+    from agent_server.tools.base import ToolResult
+
+    async def fake_record(session_id, call, result, duration_ms=0):
+        return {"id": 1}
+
+    async def by_name(name, args, ctx):
+        await asyncio.sleep(0.30 if name == "task" else 0.01)
+        return ToolResult(output=name, title=name)
+
+    calls = [
+        {"id": "slow", "type": "function", "function": {"name": "task", "arguments": "{}"}},
+        {"id": "fast", "type": "function", "function": {"name": "grep", "arguments": "{}"}},
+    ]
+
+    async def go():
+        ctx = ToolContext(project_dir="/tmp", session_id="s", abort=asyncio.Event())
+        return [e async for e in ag._run_batch("s", ctx, calls)]
+
+    real_record, ag._record = ag._record, fake_record
+    real_exec, ag.execute_tool = ag.execute_tool, by_name
+    try:
+        events = asyncio.run(go())
+    finally:
+        ag._record, ag.execute_tool = real_record, real_exec
+        ag._tool_tasks.pop("s", None)
+
+    ends = [e for e in events if e["type"] == "tool_end"]
+    assert [e["tool_call_id"] for e in ends] == ["fast", "slow"], \
+        "the fast call must be reported first, not held behind the slow one"
+    # And each carries its own duration rather than the batch wall time.
+    fast, slow = ends[0], ends[1]
+    assert fast["duration_ms"] < 150, fast["duration_ms"]
+    assert slow["duration_ms"] >= 250, slow["duration_ms"]
+    # Rows are still created in call order, so a reload matches the stream.
+    starts = [e["tool_call_id"] for e in events if e["type"] == "tool_start"]
+    assert starts == ["slow", "fast"]

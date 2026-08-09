@@ -182,7 +182,7 @@ when you look at the session.
 ### Dictation
 
 If `whisper-cli` and `ffmpeg` are on `PATH`, a mic button appears. Click it to
-toggle recording, or hold **Ctrl+Space** to push-to-talk. Releasing transcribes
+toggle recording, or hold **Right Ctrl** to push-to-talk. Releasing transcribes
 and inserts at the cursor; pressing Enter while recording stops, transcribes and
 sends in one go. A level meter sits on the bottom edge of the composer while
 recording. Everything stays local; no audio leaves the machine.

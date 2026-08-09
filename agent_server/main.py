@@ -23,6 +23,7 @@ from agent_server.config import (
     stt_available,
 )
 from agent_server.stt import availability as stt_availability
+from agent_server import tts as tts_service
 from agent_server.conversation import (
     normalize_tool_calls,
     parse_arguments,
@@ -33,7 +34,7 @@ from agent_server.database import close as close_db
 from agent_server.database import init_db
 from agent_server.providers import list_providers
 from agent_server.providers.deepseek import invalidate_key_cache
-from agent_server.routes import chat, sessions
+from agent_server.routes import chat, sessions, tts
 from agent_server.system_prompt import (
     COMPACTION,
     PROTECTED_PROMPT,
@@ -85,6 +86,7 @@ app = FastAPI(title="CodeAgent", lifespan=lifespan)
 app.mount("/static", StaticFiles(directory=str(STATIC_DIR)), name="static")
 app.include_router(sessions.router)
 app.include_router(chat.router)
+app.include_router(tts.router)
 
 templates = Jinja2Templates(directory=str(TEMPLATE_DIR))
 
@@ -260,6 +262,7 @@ async def _home_context(error: str = "") -> dict:
         "sessions": await db.list_sessions(),
         "sound_enabled": await _sound_enabled(),
         "stt": stt_availability(),
+        "tts": tts_service.availability(),
         "settings": await db.get_all_settings(),
         "providers": list_providers(),
         "models": MODELS,
@@ -397,6 +400,30 @@ async def save_settings(request: Request, deepseek_api_key: str = Form("")):
 async def save_sound_setting(enabled: str = Form("1")):
     await db.set_setting("sound_enabled", "1" if enabled in ("1", "true", "on") else "0")
     return {"ok": True}
+
+
+@app.post("/_settings/tts")
+async def save_tts_settings(
+    voice: str = Form(""), speed: str = Form(""), volume: str = Form(""),
+    tone: str = Form(""),
+):
+    """Each field is optional so the controls can save independently."""
+    if voice:
+        await db.set_setting("tts_voice", voice)
+    if speed:
+        await db.set_setting("tts_speed", str(_clamp(speed, 0.5, 2.0, 1.0)))
+    if volume:
+        await db.set_setting("tts_volume", str(_clamp(volume, 0.0, 1.0, 0.66)))
+    if tone:
+        await db.set_setting("tts_tone", str(int(_clamp(tone, 2000, 20000, 20000))))
+    return {"ok": True}
+
+
+def _clamp(raw: str, low: float, high: float, fallback: float) -> float:
+    try:
+        return min(max(float(raw), low), high)
+    except ValueError:
+        return fallback
 
 
 @app.post("/_create_session")

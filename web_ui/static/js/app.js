@@ -4,6 +4,7 @@
 const App = {
   sessionId: null,
   streaming: false,
+  ttsAvailable: false,
   timers: new Set(),
   abortController: null,
   els: {},
@@ -41,10 +42,12 @@ function initSession() {
     initJumpButton();
   }
   stopAllElapsed();
+  Speech.stop();
   renderStoredMessages();
   restorePending();
   attachIfRunning();
   Dictation.init();
+  Speech.settings().then((ok) => { App.ttsAvailable = ok; attachPlayButtons(); });
   markSessionSeen();
   updateComposerButtons();
   if (!Persist.restore()) scrollToBottom(true);
@@ -106,6 +109,7 @@ function renderStoredMessages() {
     el.innerHTML = md.render(el.textContent);
     el.dataset.rendered = '1';
   });
+  attachPlayButtons();
 }
 
 /* ── Sending ─────────────────────────────────────────────────────────────── */
@@ -276,7 +280,7 @@ function showToolProgress(event, stream) {
   if (!calls.length) return;
   if (!stream.progressEl) {
     stream.progressEl = el('div', 'message notice tool-progress');
-    stream.progressEl.append(el('div', 'msg-role', 'working'));
+    stream.progressEl.append(roleEl('working'));
     const body = el('div', 'msg-content');
     body.appendChild(el('div', 'content-text'));
     stream.progressEl.appendChild(body);
@@ -313,7 +317,9 @@ function endAssistantSegment(stream) {
   if (text && !text.textContent.trim()
       && !node.querySelector('.diff-block, .msg-attachments, .reasoning-details')) {
     node.remove();
+    return;
   }
+  attachPlayButtons();
 }
 
 function handleEvent(event, stream) {
@@ -440,6 +446,7 @@ function handleEvent(event, stream) {
 
     case 'done':
       renderChangeSummary(event.changes);
+      attachPlayButtons();
       break;
   }
 }
@@ -512,6 +519,15 @@ function el(tag, className, html) {
   return node;
 }
 
+/* The role gutter is narrow enough to clip the longer names, so the full one
+ * always goes on the title. Anything short enough to fit shows the same text
+ * twice, which costs nothing. */
+function roleEl(text) {
+  const node = el('div', 'msg-role', text);
+  node.title = text;
+  return node;
+}
+
 /* A transient "Sending / Waiting" line, so there is feedback in the second or
  * two before the first token arrives. */
 let statusEl = null;
@@ -541,7 +557,7 @@ function clearStatus() {
 
 function appendMessage(role, text) {
   const node = el('div', `message ${role}`);
-  node.appendChild(el('div', 'msg-role', role));
+  node.appendChild(roleEl(role));
   const body = el('div', 'msg-content');
   const content = el('div', 'content-text');
   content.dataset.raw = text;
@@ -566,7 +582,7 @@ function attachMessageActions(messageId) {
 /* The summary as it is written, replaced by the real card when it lands. */
 function appendCompactionDraft() {
   const node = el('div', 'message compaction');
-  node.appendChild(el('div', 'msg-role', 'summarising'));
+  node.appendChild(roleEl('summarising'));
   const body = el('div', 'msg-content');
   const text = el('pre', 'reasoning-text');
   body.appendChild(text);
@@ -636,7 +652,7 @@ function appendUserMessage(text, attachments) {
    does not change how a thinking block looks. */
 function appendReasoning() {
   const node = el('div', 'message assistant');
-  node.appendChild(el('div', 'msg-role', 'thinking'));
+  node.appendChild(roleEl('thinking'));
   const body = el('div', 'msg-content');
   const details = el('details', 'tool-details reasoning-details');
   details.open = true;
@@ -660,7 +676,7 @@ function appendToolCall(event) {
   if (existing) return existing;
   const node = el('div', 'message tool pending');
   node.dataset.toolCallId = event.tool_call_id;
-  node.appendChild(el('div', 'msg-role', event.name));
+  node.appendChild(roleEl(event.name));
   const body = el('div', 'msg-content');
   const details = el('details', 'tool-details');
   const summary = el('summary', 'tool-summary');
@@ -771,7 +787,7 @@ function renderChangeSummary(changes) {
   if (!changes || !changes.files || !changes.files.length) return;
   document.querySelectorAll('.change-summary').forEach((n) => n.remove());
   const node = el('div', 'message change-summary');
-  node.appendChild(el('div', 'msg-role', 'changes'));
+  node.appendChild(roleEl('changes'));
   const body = el('div', 'msg-content');
   const outer = el('details', 'tool-details');
   outer.open = true;
@@ -841,7 +857,7 @@ function toolSummary(name, args) {
 
 function appendNotice(kind, text) {
   const node = el('div', `message notice notice-${kind}`);
-  node.appendChild(el('div', 'msg-role', kind));
+  node.appendChild(roleEl(kind));
   const body = el('div', 'msg-content');
   body.appendChild(el('div', 'content-text', md.escapeHtml(text)));
   node.appendChild(body);
@@ -1428,7 +1444,7 @@ function button(label, className, onClick) {
 
 /* ── Dictation ───────────────────────────────────────────────────────────── */
 
-const MIC_TITLE = 'Dictate \u2014 click to toggle, or hold Ctrl+Space to talk';
+const MIC_TITLE = 'Dictate \u2014 click to toggle, or hold Right Ctrl to talk';
 
 const Dictation = {
   recording: false,
@@ -1933,10 +1949,16 @@ function cssEscape(value) {
   return window.CSS && CSS.escape ? CSS.escape(value) : String(value).replace(/["\\]/g, '\\$&');
 }
 
-const PUSH_TO_TALK = { code: 'Space', ctrl: true, label: 'Ctrl+Space' };
+/* Right Ctrl, because a modifier is the only kind of key that is safe to hold.
+ *
+ * Caps Lock was the obvious candidate and is unusable: a page can read the caps
+ * state but cannot set it, so holding it to talk leaves caps stuck on with no
+ * way to put it back. A modifier has no state and no default action. */
+const PUSH_TO_TALK = { code: 'ControlRight', label: 'Right Ctrl' };
 
 function isPushToTalk(e) {
-  return e.code === PUSH_TO_TALK.code && e.ctrlKey && !e.altKey && !e.metaKey && !e.shiftKey;
+  // ctrlKey is set by this very key, so it cannot be a disqualifier.
+  return e.code === PUSH_TO_TALK.code && !e.altKey && !e.metaKey && !e.shiftKey;
 }
 
 document.addEventListener('keydown', (e) => {
@@ -1951,6 +1973,15 @@ document.addEventListener('keydown', (e) => {
     Dictation.hold();
     return;
   }
+  // Space reads the newest reply, the way it plays and pauses a video. Right
+  // Alt was the plan until it turned out Firefox owns it. Only when the caret
+  // is not in a field, and Space must still scroll nothing.
+  if (e.code === 'Space' && !e.ctrlKey && !e.altKey && !e.metaKey && !e.shiftKey
+      && !isTyping(e.target)) {
+    e.preventDefault();
+    if (!e.repeat) playLatestReply();
+    return;
+  }
   if (e.key === 'Escape' && App.streaming) {
     e.preventDefault();
     stopStreaming();
@@ -1958,7 +1989,7 @@ document.addEventListener('keydown', (e) => {
 });
 
 document.addEventListener('keyup', (e) => {
-  if (e.code === PUSH_TO_TALK.code || e.key === 'Control') Dictation.release();
+  if (e.code === PUSH_TO_TALK.code) Dictation.release();
 });
 
 // Releasing the key outside the window would otherwise leave the mic hot.
@@ -2042,4 +2073,313 @@ async function revokeWriteDir(path) {
   await fetch(`/api/sessions/${App.sessionId}/write-dirs?path=${encodeURIComponent(path)}`,
     { method: 'DELETE' });
   refreshMeta();
+}
+
+/* ── Speech ──────────────────────────────────────────────────────────────── */
+
+/* Reading a reply aloud, one growing chunk at a time.
+ *
+ * Synthesis is a few times faster than playback, so the trick is to start
+ * speaking after a single sentence and then let the chunks get longer as a
+ * buffer builds. A chunk boundary is a small unnatural pause; early on that is
+ * a fair price for starting quickly, but once there is audio in reserve there
+ * is no reason to keep paying it. So the next chunk takes one more sentence for
+ * every clip already waiting, which is what stops a bulleted list being read as
+ * three fast items, pause, three fast items.
+ *
+ * A short sentence is never a chunk on its own regardless of reserve -- "Yes."
+ * followed by a gap sounds broken. RealtimeTTS calls this minimum_sentence_length
+ * and lands on the same idea from the other direction.
+ *
+ * There is exactly one playback in the app. Starting a new one discards the old
+ * one entirely, including its pause position: nothing about speech is stored
+ * per message. */
+const Speech = {
+  el: null,            // the .message element being read
+  sentences: [],
+  cursor: 0,           // next sentence awaiting synthesis
+  queue: [],           // { url } clips ready but not yet played
+  current: null,       // the clip in the element right now
+  token: 0,            // bumped on every stop, to strand in-flight fetches
+  producing: false,
+  audioEl: null, ctx: null, filter: null, gainNode: null,
+  voice: '',
+  speed: 1,
+  volume: 0.66,
+  tone: 20000,         // lowpass cutoff in Hz; 20k is effectively off
+  MIN_CHARS: 60,
+  MAX_SENTENCES: 5,
+  ORPHAN_WORDS: 3,
+  HARD_MAX: 8,
+
+  async settings() {
+    try {
+      const s = await (await fetch('/api/tts/status')).json();
+      this.voice = s.voice || s.default_voice || '';
+      this.speed = s.speed || 1;
+      this.volume = s.volume != null ? s.volume : 0.66;
+      this.tone = s.tone || 20000;
+      return s.available;
+    } catch (_) { return false; }
+  },
+
+  /* One element for the whole app, reused for every clip.
+   *
+   * It has to be one, because a media element can only be adopted into a Web
+   * Audio graph once. Building the graph gives us the tone control -- a browser
+   * lowpass costs nothing and can be moved while a clip is playing, where
+   * filtering during synthesis would mean re-rendering the audio to change it. */
+  engine() {
+    if (this.audioEl) return this.audioEl;
+    const a = new Audio();
+    a.addEventListener('ended', () => this.advance());
+    a.addEventListener('error', () => this.advance());
+    this.audioEl = a;
+    try {
+      const Ctx = window.AudioContext || window.webkitAudioContext;
+      this.ctx = new Ctx();
+      this.filter = this.ctx.createBiquadFilter();
+      this.filter.type = 'lowpass';
+      this.filter.frequency.value = this.tone;
+      this.filter.Q.value = 0.7;
+      this.gainNode = this.ctx.createGain();
+      this.gainNode.gain.value = this.volume;
+      this.ctx.createMediaElementSource(a)
+        .connect(this.filter).connect(this.gainNode).connect(this.ctx.destination);
+      a.volume = 1;                       // level is the gain node's job now
+    } catch (_) {
+      // No Web Audio: still plays, just without the tone control.
+      this.ctx = null;
+      a.volume = this.volume;
+    }
+    return a;
+  },
+
+  playing() { return !!this.current && this.audioEl && !this.audioEl.paused; },
+
+  /* Click the control on the reply that is already talking to pause it, click
+   * again to carry on, click a different one to switch. */
+  async toggle(el) {
+    if (this.el === el && this.current) {
+      if (this.audioEl.paused) this.resume(); else this.audioEl.pause();
+      this.paint();
+      return;
+    }
+    await this.start(el);
+  },
+
+  resume() {
+    if (this.ctx && this.ctx.state === 'suspended') this.ctx.resume();
+    this.audioEl.play().catch(() => {});
+  },
+
+  async start(el) {
+    this.stop();
+    const raw = el.querySelector('.content-text')?.dataset.raw || '';
+    if (!raw.trim()) return;
+    const token = this.token;
+    this.el = el;
+    this.paint();
+
+    let sentences = [];
+    try {
+      const resp = await fetch('/api/tts/plan', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ text: raw }),
+      });
+      sentences = (await resp.json()).sentences || [];
+    } catch (_) { /* handled below */ }
+
+    if (token !== this.token) return;          // superseded while planning
+    if (!sentences.length) { this.stop(); return; }
+    this.sentences = sentences;
+    this.produce();
+  },
+
+  /* How many sentences the next clip should cover. One to begin with, plus one
+   * for every clip already in reserve, then extended twice over: until it is
+   * long enough to be worth speaking, and until it is not about to leave a stub
+   * behind. A boundary before "Correct?" puts a pause in the worst place. */
+  nextChunk() {
+    const words = (s) => s.split(/\s+/).filter(Boolean).length;
+    const size = Math.min(1 + this.queue.length, this.MAX_SENTENCES);
+    let end = Math.min(this.cursor + size, this.sentences.length);
+    while (end < this.sentences.length && end - this.cursor < this.HARD_MAX
+           && this.sentences.slice(this.cursor, end).join(' ').length < this.MIN_CHARS) {
+      end += 1;
+    }
+    while (end < this.sentences.length && end - this.cursor < this.HARD_MAX
+           && words(this.sentences[end]) <= this.ORPHAN_WORDS) {
+      end += 1;
+    }
+    return this.sentences.slice(this.cursor, end);
+  },
+
+  async produce() {
+    if (this.producing) return;
+    this.producing = true;
+    const token = this.token;
+    try {
+      while (token === this.token && this.cursor < this.sentences.length) {
+        // Two clips in hand covers the next synthesis with room to spare.
+        // Stopping rather than waiting matters: a paused reply would otherwise
+        // leave this loop awake forever, and advance() starts it again the
+        // moment the reserve is drawn down.
+        if (this.queue.length >= 2) break;
+        const chunk = this.nextChunk();
+        this.cursor += chunk.length;
+        const url = await this.render(chunk.join(' '), token);
+        if (token !== this.token) { if (url) URL.revokeObjectURL(url); return; }
+        if (url) this.queue.push({ url });
+        if (!this.current) this.playNext();
+      }
+    } finally {
+      if (token === this.token) this.producing = false;
+    }
+  },
+
+  async render(text, token) {
+    try {
+      const resp = await fetch('/api/tts/speak', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ text, voice: this.voice, speed: this.speed }),
+      });
+      if (!resp.ok || token !== this.token) return null;
+      return URL.createObjectURL(await resp.blob());
+    } catch (_) { return null; }
+  },
+
+  advance() {
+    this.releaseCurrent();
+    this.playNext();
+    this.paint();
+  },
+
+  releaseCurrent() {
+    if (this.current) { URL.revokeObjectURL(this.current.url); this.current = null; }
+  },
+
+  playNext() {
+    const clip = this.queue.shift();
+    if (!clip) {
+      // Nothing buffered and nothing left to make: the reply is finished.
+      if (this.cursor >= this.sentences.length) this.stop();
+      return;
+    }
+    this.current = clip;
+    const a = this.engine();
+    a.src = clip.url;
+    this.resume();
+    this.paint();
+    // Keep the pipeline turning once playback has drawn down the reserve.
+    if (!this.producing) this.produce();
+  },
+
+  stop() {
+    this.token += 1;
+    if (this.audioEl) { this.audioEl.pause(); this.audioEl.removeAttribute('src'); }
+    this.releaseCurrent();
+    this.queue.forEach((c) => URL.revokeObjectURL(c.url));
+    this.queue = [];
+    this.sentences = [];
+    this.cursor = 0;
+    this.producing = false;
+    const was = this.el;
+    this.el = null;
+    if (was) this.paint(was);
+  },
+
+  setVolume(v) {
+    this.volume = v;
+    if (this.gainNode) this.gainNode.gain.value = v;
+    else if (this.audioEl) this.audioEl.volume = v;
+    document.querySelectorAll('.vol-pop input').forEach((s) => { s.value = String(v); });
+    this.save({ volume: v });
+  },
+
+  setTone(hz) {
+    this.tone = hz;
+    if (this.filter) this.filter.frequency.value = hz;
+    this.save({ tone: hz });
+  },
+
+  save(fields) {
+    const form = new FormData();
+    Object.entries(fields).forEach(([k, v]) => form.append(k, String(v)));
+    fetch('/_settings/tts', { method: 'POST', body: form }).catch(() => {});
+  },
+
+  /* The control reflects three states, and the reply being read is marked so it
+   * can be found again without storing an id anywhere. */
+  paint(target) {
+    const el = target || this.el;
+    document.querySelectorAll('.message.speaking').forEach((m) => {
+      if (m !== this.el) m.classList.remove('speaking');
+    });
+    if (!el) return;
+    const btn = el.querySelector('.play-btn');
+    const active = this.el === el;
+    const playing = active && this.playing();
+    el.classList.toggle('speaking', !!active);
+    if (btn) {
+      btn.textContent = playing ? 'pause' : (active ? 'resume' : 'play');
+      btn.title = playing ? 'Pause' : 'Read this reply aloud';
+    }
+  },
+};
+
+/* Give every assistant reply a play control. Done by scanning rather than at
+ * each creation site, because assistant bubbles are built in three different
+ * places and a reloaded transcript is built by Jinja in a fourth. */
+function attachPlayButtons() {
+  if (!App.ttsAvailable) return;
+  document.querySelectorAll('.message.assistant:not([data-play])').forEach((node) => {
+    const text = node.querySelector('.content-text');
+    if (!text || !text.dataset.raw?.trim()) return;   // reasoning-only bubble
+    node.dataset.play = '1';
+    const actions = el('span', 'msg-actions');
+    actions.appendChild(button('play', 'play-btn', () => Speech.toggle(node)));
+    const vol = el('span', 'vol-pop');
+    const slider = document.createElement('input');
+    slider.type = 'range';
+    slider.min = '0'; slider.max = '1'; slider.step = '0.01';
+    slider.value = String(Speech.volume);
+    slider.setAttribute('orient', 'vertical');       // Firefox
+    slider.title = 'Volume';
+    slider.addEventListener('input', () => Speech.setVolume(parseFloat(slider.value)));
+    vol.appendChild(slider);
+    actions.appendChild(vol);
+    // Time above, control below. The gutter is only as wide as a timestamp
+    // and has to stay that way, because it is mirrored on the left.
+    const side = el('span', 'msg-side stacked');
+    const time = node.querySelector(':scope > .msg-time');
+    side.append(time || el('span', 'msg-time', clockTime()), actions);
+    node.appendChild(side);
+  });
+}
+
+function isTyping(node) {
+  if (!node) return false;
+  if (node.isContentEditable) return true;
+  return ['INPUT', 'TEXTAREA', 'SELECT'].includes(node.tagName);
+}
+
+/* Space reads the newest reply. Pressed again it pauses, and again resumes --
+ * unless the agent has answered since, in which case the newest reply wins and
+ * the old position is forgotten. Two quick presses start it over. */
+const REPLAY_DOUBLE_TAP_MS = 400;
+let lastPlayPress = 0;
+
+function playLatestReply() {
+  const all = document.querySelectorAll('.message.assistant[data-play]');
+  const latest = all[all.length - 1];
+  if (!latest) return;
+  scrollToBottom();
+  const now = performance.now();
+  const doubleTap = now - lastPlayPress < REPLAY_DOUBLE_TAP_MS;
+  lastPlayPress = now;
+  if (doubleTap) { Speech.start(latest); return; }
+  Speech.toggle(latest);
 }

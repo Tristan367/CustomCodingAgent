@@ -373,10 +373,5 @@ async def _perform(page, action: dict):
         raise VisionError(f"action {kind}({selector}) failed: {e}") from e
 
 
-async def capture_in_thread(*args, **kwargs):
-    """Kept for callers that expect a blocking-safe wrapper."""
-    return await capture(*args, **kwargs)
-
-
 async def normalize_in_thread(data: bytes) -> bytes:
     return await asyncio.to_thread(normalize_image, data)

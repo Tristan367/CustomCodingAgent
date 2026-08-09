@@ -95,7 +95,61 @@
             unavailable. Install <code>whisper-cli</code> and <code>ffmpeg</code>, or set
             <code>WHISPER_BIN</code> / <code>WHISPER_MODEL</code>.
             {% endif %}
+            Hold <kbd>Right Ctrl</kbd> to talk.
         </p>
+    </section>
+
+    <section class="panel">
+        <h2>Speech</h2>
+        {% if tts.available %}
+        <div class="form-row settings-row">
+            <label>
+                Voice
+                <select id="tts-voice" onchange="saveTts()">
+                    {% for v in tts.voices %}
+                    <option value="{{ v }}"
+                        {% if v == settings.get('tts_voice', tts.default_voice) %}selected{% endif %}>
+                        {{ v }}
+                    </option>
+                    {% endfor %}
+                </select>
+            </label>
+            <label>
+                <span>Speed <output id="tts-speed-out">{{ settings.get('tts_speed', '1.0') }}</output>&times;</span>
+                <input type="range" id="tts-speed" min="0.5" max="2" step="0.05"
+                       value="{{ settings.get('tts_speed', '1.0') }}"
+                       oninput="document.getElementById('tts-speed-out').value = this.value"
+                       onchange="saveTts()">
+            </label>
+            <label>
+                <span>Volume <output id="tts-volume-out">{{ (settings.get('tts_volume', '0.66') | float * 100) | round | int }}</output>%</span>
+                <input type="range" id="tts-volume" min="0" max="1" step="0.01"
+                       value="{{ settings.get('tts_volume', '0.66') }}"
+                       oninput="document.getElementById('tts-volume-out').value = Math.round(this.value * 100)"
+                       onchange="saveTts()">
+            </label>
+            <label>
+                <span>Tone <output id="tts-tone-out">{{ settings.get('tts_tone', '20000') | int // 1000 }}</output>kHz</span>
+                <input type="range" id="tts-tone" min="2000" max="20000" step="500"
+                       value="{{ settings.get('tts_tone', '20000') }}"
+                       oninput="document.getElementById('tts-tone-out').value = Math.round(this.value/1000)"
+                       onchange="saveTts()">
+            </label>
+            <button type="button" class="btn-secondary" onclick="previewTts(this)">Preview</button>
+        </div>
+        <p class="hint">
+            <code>{{ tts.model }}</code> via Kokoro on the CPU &mdash; the GPU is left alone.
+            Hover a reply for a play button, or press <kbd>Space</kbd> to read the
+            newest one. Press it again to pause, twice quickly to start over.
+            Tone is a low-pass filter for the brighter voices; 20&thinsp;kHz is off.
+        </p>
+        {% else %}
+        <p class="hint">
+            Text-to-speech unavailable. Put <code>kokoro-v1.0.onnx</code> and
+            <code>voices-v1.0.bin</code> in <code>~/models/tts</code>, or set
+            <code>TTS_MODEL</code> / <code>TTS_VOICES</code>.
+        </p>
+        {% endif %}
     </section>
 
     <section class="panel">
@@ -133,6 +187,59 @@ function toggleBrowser() {
 function selectProjectDir(path) {
     document.getElementById('project-dir-input').value = path;
     document.getElementById('file-browser-container').hidden = true;
+}
+
+function saveTts() {
+    const form = new FormData();
+    form.append('voice', document.getElementById('tts-voice').value);
+    form.append('speed', document.getElementById('tts-speed').value);
+    form.append('volume', document.getElementById('tts-volume').value);
+    form.append('tone', document.getElementById('tts-tone').value);
+    fetch('/_settings/tts', { method: 'POST', body: form });
+}
+
+/* Judging a voice from its name is hopeless, so play a line with the current
+   settings. One preview at a time: starting another stops the last. */
+let ttsPreview = null;
+async function previewTts(btn) {
+    if (ttsPreview) { ttsPreview.pause(); ttsPreview = null; }
+    const label = btn.textContent;
+    btn.textContent = 'Loading';
+    btn.disabled = true;
+    try {
+        const resp = await fetch('/api/tts/speak', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+                text: 'The fast grep now reports first, at three point eight times realtime.',
+                voice: document.getElementById('tts-voice').value,
+                speed: parseFloat(document.getElementById('tts-speed').value),
+            }),
+        });
+        if (!resp.ok) throw new Error(await resp.text());
+        const url = URL.createObjectURL(await resp.blob());
+        ttsPreview = new Audio(url);
+        ttsPreview.volume = parseFloat(document.getElementById('tts-volume').value);
+        // Preview through the same low-pass the player uses, or the slider
+        // would be the one control you cannot actually hear.
+        try {
+            const ctx = new (window.AudioContext || window.webkitAudioContext)();
+            const filter = ctx.createBiquadFilter();
+            filter.type = 'lowpass';
+            filter.frequency.value = parseFloat(document.getElementById('tts-tone').value);
+            ctx.createMediaElementSource(ttsPreview).connect(filter).connect(ctx.destination);
+            ttsPreview.addEventListener('ended', () => ctx.close());
+        } catch (_) { /* plays unfiltered */ }
+        ttsPreview.addEventListener('ended', () => URL.revokeObjectURL(url));
+        ttsPreview.play();
+    } catch (e) {
+        btn.textContent = 'Failed';
+        setTimeout(() => { btn.textContent = label; }, 1500);
+        return;
+    } finally {
+        btn.disabled = false;
+        if (btn.textContent === 'Loading') btn.textContent = label;
+    }
 }
 
 </script>

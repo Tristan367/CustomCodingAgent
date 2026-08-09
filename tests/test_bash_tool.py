@@ -71,3 +71,49 @@ def test_timeout_still_applies_to_foreground_commands():
 def test_read_only_classification(command, expected):
     from agent_server.tools.bash import is_read_only
     assert is_read_only(command) is expected
+
+
+# ── Oversized output ────────────────────────────────────────────────────────
+
+def test_overflow_is_written_to_a_file_the_model_can_read(tmp_path, monkeypatch):
+    """Truncation used to discard the tail permanently, so the one line that
+    mattered could vanish with no way to get it back."""
+    from agent_server.tools import base
+
+    monkeypatch.setattr(base, "SPILL_DIR", tmp_path / "spill")
+    text = "".join(f"line {i}\n" for i in range(5000))
+    needle = "line 4999"
+    assert needle in text
+
+    out = base.truncate(text, 200, spill=True)
+
+    assert len(out) <= 200, "the marker must fit inside the limit, not extend it"
+    assert needle not in out
+    written = list((tmp_path / "spill").glob("*.txt"))
+    assert len(written) == 1, written
+    assert written[0].read_text() == text
+    assert str(written[0]) in out, "the model has to be told where the rest went"
+    # Truncating again must not eat the pointer it just wrote.
+    assert str(written[0]) in base.truncate(out, 200, spill=True)
+
+
+def test_output_within_the_limit_is_untouched(tmp_path, monkeypatch):
+    from agent_server.tools import base
+
+    monkeypatch.setattr(base, "SPILL_DIR", tmp_path / "spill")
+    assert base.truncate("short", 200, spill=True) == "short"
+    assert not (tmp_path / "spill").exists(), "no file for output that fits"
+
+
+def test_a_broken_spill_still_returns_truncated_text(tmp_path, monkeypatch):
+    """A full disk must degrade to plain truncation, not break the tool call."""
+    from agent_server.tools import base
+
+    def boom(*a, **k):
+        raise OSError("no space left on device")
+
+    monkeypatch.setattr(base, "SPILL_DIR", tmp_path / "spill")
+    monkeypatch.setattr(base.Path, "mkdir", boom)
+    out = base.truncate("x" * 5000, 200, spill=True)
+    assert len(out) <= 200
+    assert "truncated" in out

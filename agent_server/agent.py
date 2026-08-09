@@ -709,9 +709,14 @@ def _tool_end_event(call: dict, name: str, result: ToolResult, elapsed_ms: int) 
 async def _run_batch(session_id: str, ctx: ToolContext, batch: list[dict]) -> AsyncIterator[dict]:
     """Run a group of independent read-only calls concurrently.
 
-    Results are recorded and reported in call order even though they finish in
-    whatever order they finish, so the transcript reads the same live as it does
-    after a reload. The wall time is the slowest call, not the sum.
+    Each call is reported the instant it finishes rather than in call order, so
+    a fast grep sharing a batch with a slow subagent stops its timer at its own
+    duration instead of inheriting the slowest call in the batch.
+
+    Reporting out of order is safe because it does not move anything. The rows
+    were already placed by the tool_start loop below, in call order, and
+    tool_end is matched back to one of them by id. The database writes stay in
+    call order too, so a reload renders what the stream rendered.
     """
     async def run(call: dict) -> tuple[ToolResult, int]:
         began = time.monotonic()
@@ -731,26 +736,40 @@ async def _run_batch(session_id: str, ctx: ToolContext, batch: list[dict]) -> As
     tasks = [asyncio.create_task(run(call)) for call in batch]
     for task in tasks:
         _track(session_id, task)
+    call_of = dict(zip(tasks, batch))
+
+    outcomes: dict[str, tuple[ToolResult, int]] = {}
+    interrupted = False
+    waiting = set(tasks)
+    while waiting:
+        done, waiting = await asyncio.wait(waiting, return_when=asyncio.FIRST_COMPLETED)
+        for task in done:
+            call = call_of[task]
+            try:
+                result, elapsed_ms = task.result()
+            except asyncio.CancelledError:
+                result, elapsed_ms = ToolResult.error("cancelled by user", "cancelled"), 0
+                # A stop sets the abort flag first. A cancel without it is a
+                # real interruption and still has to reach the caller.
+                interrupted = interrupted or not ctx.abort.is_set()
+            outcomes[call["id"]] = (result, elapsed_ms)
+            yield _tool_end_event(call, tool_call_name(call), result, elapsed_ms)
 
     # Every call must end up with a result, including the cancelled ones.
     # An unanswered tool call is picked up as pending work and re-run on the
     # next message, which is how a stopped batch used to restart itself.
-    for call, task in zip(batch, tasks):
-        try:
-            result, elapsed_ms = await task
-        except asyncio.CancelledError:
-            result, elapsed_ms = ToolResult.error("cancelled by user", "cancelled"), 0
-            if not ctx.abort.is_set():
-                await _record(session_id, call, result, elapsed_ms)
-                raise
+    for call in batch:
+        result, elapsed_ms = outcomes[call["id"]]
         await _record(session_id, call, result, elapsed_ms)
-        yield _tool_end_event(call, tool_call_name(call), result, elapsed_ms)
+
+    if interrupted:
+        raise asyncio.CancelledError
 
 
 async def _record(session_id: str, call: dict, result: ToolResult, duration_ms: int = 0) -> dict:
     from agent_server.providers.base import estimate_tokens
 
-    output = truncate(result.output, MAX_TOOL_RESULT_CHARS)
+    output = truncate(result.output, MAX_TOOL_RESULT_CHARS, spill=True)
     # Taken from the call rather than the diff: unified_diff drops its header.
     args = parse_arguments(call)
     path = args.get("filePath") or args.get("path") or ""

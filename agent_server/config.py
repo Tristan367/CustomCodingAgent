@@ -125,3 +125,41 @@ FFMPEG_BIN = os.getenv("FFMPEG_BIN") or shutil.which("ffmpeg")
 
 def stt_available() -> bool:
     return bool(WHISPER_BIN and WHISPER_MODEL and FFMPEG_BIN)
+
+
+def _find_tts_model() -> str:
+    """Kokoro weights, full precision by preference.
+
+    The int8 build is a third of the size and four times slower on this class of
+    CPU: without AVX512-VNNI, onnxruntime falls back to a slow path and pays
+    quantise/dequantise overhead around every operator. Measured at 0.98x
+    realtime against 3.88x for fp32, which is the difference between streaming
+    comfortably and never getting ahead of playback.
+    """
+    if os.getenv("TTS_MODEL"):
+        return os.getenv("TTS_MODEL", "")
+    candidates = [
+        Path.home() / "models/tts/kokoro-v1.0.onnx",
+        Path.home() / "models/tts/kokoro-v1.0.fp16.onnx",
+        Path.home() / "models/tts/kokoro-v1.0.int8.onnx",
+    ]
+    for c in candidates:
+        if c.exists():
+            return str(c)
+    return ""
+
+
+def _find_tts_voices() -> str:
+    if os.getenv("TTS_VOICES"):
+        return os.getenv("TTS_VOICES", "")
+    path = Path.home() / "models/tts/voices-v1.0.bin"
+    return str(path) if path.exists() else ""
+
+
+TTS_MODEL = _find_tts_model()
+TTS_VOICES = _find_tts_voices()
+TTS_DEFAULT_VOICE = os.getenv("TTS_DEFAULT_VOICE", "af_heart")
+
+
+def tts_available() -> bool:
+    return bool(TTS_MODEL and TTS_VOICES)

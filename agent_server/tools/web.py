@@ -92,7 +92,7 @@ async def webfetch(ctx: ToolContext, *, url: str, **_) -> ToolResult:
         return ToolResult(output=f"(empty response from {url}, HTTP {resp.status_code})", title=title)
 
     return ToolResult(
-        output=truncate(text, MAX_TOOL_RESULT_CHARS, "page"),
+        output=truncate(text, MAX_TOOL_RESULT_CHARS, "page", spill=True),
         title=f"{title} ({len(text):,} chars)",
     )
 

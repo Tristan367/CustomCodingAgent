@@ -235,7 +235,9 @@
         const kind = /^\d/.test(item[2]) ? 'ol' : 'ul';
         while (listStack.length > depth) closeLists(listStack.length - 1);
         while (listStack.length < depth) {
-          html.push(kind === 'ol' ? '<ol>' : '<ul>');
+          // Honour the author's first number, so a list starting at 3 does.
+          const from = kind === 'ol' ? parseInt(item[2], 10) : 1;
+          html.push(kind === 'ul' ? '<ul>' : (from > 1 ? `<ol start="${from}">` : '<ol>'));
           listStack.push(kind);
         }
         html.push('<li>' + inline(item[3]) + '</li>');
@@ -245,7 +247,13 @@
 
       // Blank line
       if (!line.trim()) {
-        closeLists(0);
+        // A blank line between items makes one loose list, not several. Closing
+        // unconditionally started a fresh <ol> per item, so every one of them
+        // rendered as "1."
+        const next = lines.slice(i + 1).find((l) => l.trim());
+        const listContinues = listStack.length && next
+          && /^(\s*)([-*+]|\d+[.)])\s+/.test(next);
+        if (!listContinues) closeLists(0);
         i++;
         continue;
       }

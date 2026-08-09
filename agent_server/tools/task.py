@@ -111,7 +111,7 @@ async def _run(ctx: ToolContext, description: str, prompt: str, title: str) -> T
             messages.append({
                 "role": "tool",
                 "tool_call_id": call["id"],
-                "content": truncate(result.output, MAX_TOOL_RESULT_CHARS // 2),
+                "content": truncate(result.output, MAX_TOOL_RESULT_CHARS // 2, spill=True),
             })
 
     return ToolResult.error(

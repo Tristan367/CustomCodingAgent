@@ -289,9 +289,12 @@ hr { border: 0; border-top: 1px solid var(--border); margin: 6px 0; }
   padding: 14px var(--content-pad) 25vh;
 }
 
+/* The two gutters are deliberately the same width so a message sits centred
+   between them. The role is truncated rather than widened -- most names are
+   four or five letters, and the full name is on the element's title. */
 .message {
   display: grid;
-  grid-template-columns: 74px 1fr auto;
+  grid-template-columns: 50px 1fr 50px;
   gap: 10px;
   padding: 5px 0;
   align-items: start;
@@ -319,6 +322,7 @@ hr { border: 0; border-top: 1px solid var(--border); margin: 6px 0; }
   font-family: var(--mono);
   padding-top: 4px;
   opacity: 0;
+  white-space: nowrap;
   transition: opacity 0.1s ease;
 }
 .message:hover .msg-time { opacity: 1; }
@@ -921,7 +925,7 @@ select { cursor: pointer; }
 
 @media (max-width: 900px) {
   :root { --content-pad: 8px; }
-  .message { grid-template-columns: 58px 1fr auto; }
+  .message { grid-template-columns: 44px 1fr 44px; gap: 8px; }
 }
 
 @media (max-width: 640px) {
@@ -994,7 +998,7 @@ select { cursor: pointer; }
 /* ── Message actions ─────────────────────────────────────────────────────── */
 
 .msg-side { display: flex; align-items: center; gap: 8px; padding-top: 3px; }
-.msg-actions { display: flex; gap: 4px; opacity: 0; transition: opacity 120ms ease; }
+.msg-actions { position: relative; display: flex; gap: 4px; opacity: 0; transition: opacity 120ms ease; }
 .message:hover .msg-actions { opacity: 1; }
 .msg-actions button {
   background: none;
@@ -1297,4 +1301,83 @@ select { cursor: pointer; }
   font-size: 11.5px;
   line-height: 1.5;
   resize: vertical;
+}
+
+/* ── Speech ──────────────────────────────────────────────────────────────── */
+
+/* The right gutter is the width of a timestamp and is mirrored on the left, so
+   the play control stacks under the time rather than beside it. */
+.msg-side.stacked {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 2px;
+}
+.msg-side.stacked .msg-time { padding-top: 4px; }
+
+.play-btn { padding: 0 2px; }
+
+/* The reply being read keeps its control visible; the rest follow the
+   timestamps and appear on hover. */
+.message.speaking .msg-actions { opacity: 1; }
+.message.speaking .play-btn { color: var(--accent); }
+
+/* Volume drops straight down out of the control, so it never widens the gutter
+   and reads the way a fader does. */
+.vol-pop {
+  position: absolute;
+  top: calc(100% + 3px);
+  left: 2px;
+  right: auto;
+  display: flex;
+  height: 0;
+  overflow: hidden;
+  opacity: 0;
+  transition: height 120ms ease, opacity 120ms ease;
+}
+.msg-actions::after {
+  content: '';
+  position: absolute;
+  top: 100%;
+  left: 0;
+  right: 0;
+  height: 4px;
+}
+.msg-actions:hover .vol-pop,
+.vol-pop:focus-within { height: 82px; opacity: 1; }
+
+.vol-pop input[type="range"] {
+  writing-mode: vertical-lr;
+  direction: rtl;                 /* full volume at the top */
+  width: 14px;
+  height: 78px;
+  margin: 2px 0 0;
+  accent-color: var(--accent);
+  cursor: pointer;
+}
+
+@media (max-width: 640px) {
+  /* No hover on a touch screen, so the control is always shown and the slider
+     stays folded away where it cannot be hit by accident. */
+  .msg-actions { opacity: 1; }
+  .vol-pop { display: none; }
+}
+
+/* Settings rows reuse .form-row, but a slider needs its label above it and the
+   Preview button has to sit on the same baseline. */
+.settings-row { flex-wrap: wrap; }
+.settings-row input[type="range"] { width: 100%; accent-color: var(--accent); cursor: pointer; }
+.settings-row output { color: var(--text); font-family: var(--mono); }
+.settings-row .btn-secondary { flex: 0 0 auto; }
+
+kbd {
+  font-family: var(--mono);
+  font-size: 10px;
+  padding: 1px 4px;
+  border: 1px solid var(--border-strong);
+  border-bottom-width: 2px;
+  border-radius: 3px;
+  background: var(--bg-inset);
+  color: var(--text);
 }

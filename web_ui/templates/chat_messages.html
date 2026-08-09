@@ -1,7 +1,7 @@
 <div id="messages">
     {% for c in compactions %}
     <div class="message compaction">
-        <div class="msg-role">summary</div>
+        <div class="msg-role" title="summary">summary</div>
         <div class="msg-content">
             <details class="tool-details">
                 <summary class="tool-summary">
@@ -28,7 +28,7 @@
     {% if m.role == 'tool' %}
     <div class="message tool {% if m.is_error %}tool-error{% endif %}" id="msg-{{ m.id }}"
          data-tool-call-id="{{ m.tool_call_id or '' }}">
-        <div class="msg-role">{{ m.tool_name or 'result' }}</div>
+        <div class="msg-role" title="{{ m.tool_name or 'result' }}">{{ m.tool_name or 'result' }}</div>
         <div class="msg-content">
             {% if m.diff %}
             {# Diffs are the one tool result worth showing unprompted, so this
@@ -66,7 +66,7 @@
        once the raw arguments are hidden, and would render as an empty bubble. #}
     {% if body or attached or m.reasoning_content or m.role != 'assistant' %}
     <div class="message {{ m.role }}" id="msg-{{ m.id }}">
-        <div class="msg-role">{{ m.role }}</div>
+        <div class="msg-role" title="{{ m.role }}">{{ m.role }}</div>
         <div class="msg-content">
             {% if m.reasoning_content %}
             <details class="tool-details reasoning-details">
@@ -101,7 +101,7 @@
        this back into an interactive card once it has loaded. #}
     <div class="message notice notice-pending" id="pending-restore"
          data-pending="{{ pending | tojson | forceescape }}">
-        <div class="msg-role">paused</div>
+        <div class="msg-role" title="paused">paused</div>
         <div class="msg-content">
             <div class="content-text">This run is waiting on you.</div>
         </div>

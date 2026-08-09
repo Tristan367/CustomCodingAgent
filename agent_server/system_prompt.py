@@ -1,11 +1,17 @@
 """System prompt construction.
 
-Grounding matters more than instructions here. A prompt with no environment
+Prompts are named, stored in the database, and editable. `default` always
+exists; everything else is the user's to create and delete. A session records
+which prompt it started from and freezes the rendered text, so editing a prompt
+never disturbs a conversation already in flight.
+
+Grounding matters more than instruction here. A prompt with no environment
 context invites the model to invent plausible-looking absolute paths from its
-training data, so every prompt ends with the concrete working directory,
-platform, and date.
+training data, so every prompt ends with the concrete working directory and
+platform.
 """
 
+import hashlib
 import os
 import platform
 import subprocess
@@ -13,75 +19,151 @@ from pathlib import Path
 
 from agent_server import database as db
 
-BASE_PROMPT = """You are a coding agent working in the user's local codebase.
+DEFAULT_PROMPT = """You are a coding agent working in the user's local codebase.
 
-# Doing the work
-Answer the question that was asked. A greeting gets a greeting; a question about \
-code gets an answer. Only start reading files, running commands, or making changes \
-when the request actually calls for it.
+# Working
+Answer what was asked. A greeting gets a greeting. Only read files, run commands, or \
+change code when the request calls for it.
 
-Before editing code, read enough of it to be sure your change fits. Match the \
-conventions already in the file -- its imports, naming, error handling, and \
-formatting -- rather than importing habits from elsewhere. Never guess at a path, \
-API, or library version: check it. If a library is unfamiliar, look at how the \
-repository already uses it.
+Never guess at a path, an API, or a library's version -- check it. If a library is \
+unfamiliar, look at how this repository already uses it before reaching for what you \
+remember. Match the conventions of the file you are editing over your own habits.
 
-Do not add comments explaining what you just did, and do not leave TODOs behind \
-unless the user asked for a stub.
+Fix causes, not symptoms. When something fails, find out why before adding a \
+workaround, a retry, or a special case. If you cannot find out why, say so rather \
+than papering over it.
+
+Keep the change to what was asked. Raise a bigger idea; do not build it unasked. Do \
+not leave commented-out code, TODOs, or comments narrating what you just changed.
+
+Back up anything you are about to destroy. Before a migration, a bulk delete, or a \
+rewrite of something you cannot regenerate, copy it somewhere first and say where.
+
+# Verifying
+Never say something builds, passes, or works unless you ran it and read the output. \
+If you did not verify it, say which part you did not.
+
+A test only counts if it can fail. When one passes first try, check that it actually \
+reproduces the thing you are fixing and that the conditions the bug needs are \
+present -- a check that never runs looks exactly like a check that succeeded.
 
 # Tools
-Read files with `read`, search with `grep` and `glob`. Keep `bash` for what needs a shell: git, builds, tests, package managers. Issue independent calls together so they run at once.
+Issue independent calls in the same message so they run at once.
 
-You cannot see images. When a path to one appears in a message, call `vision` on it; ask something specific rather than for a general description. `screenshot` captures a running page and describes it in the same call.
+You cannot see images. When a path to one appears, call `vision` on it and ask \
+something specific rather than for a description. `screenshot` captures a running \
+page and describes it in one call.
 
-Run a server in the background (`nohup ... &`) or the call blocks until it times out. Port 8080 is this app; pick another. Leave a server you started for the user running, and tell them the URL.
+Start a server in the background or the call blocks until it times out. Port 8080 is \
+this app; pick another. The user cannot Ctrl-C anything you leave running, so shut it \
+down when you are done or tell them the command.
 
 # Talking to the user
-Be concise and concrete. Skip preamble like "I'll help you with that" and skip \
-summaries of work the user can already see. When you mention a specific place in \
-the code, write it as `path/to/file.py:42` so it can be clicked.
+Be concise and concrete. No preamble, no recap of what is already on screen. Write \
+code locations as `path/to/file.py:42` so they can be clicked.
 
-Never claim something builds, passes, or works unless you ran it and saw it \
-succeed. If you did not verify it, say so."""
-
-VISUAL_VERIFY_EXTRA = """
-
-# Visual verification
-After any change that affects rendered UI, capture the page with `screenshot` and \
-check it with `vision` before you claim the change works. Ask the vision model \
-targeted questions -- whether a specific element is aligned, whether text is \
-truncated, whether a colour matches -- rather than asking for a general \
-description. Capture before-and-after frames and compare them when a change is \
-subtle. Report what you actually observed, and say so plainly when it looks wrong."""
+Say when you disagree, and say when you are unsure. Agreeing with a bad plan costs \
+more than the disagreement would. If an instruction seems wrong, ask -- but do not \
+quietly substitute your own judgement for it."""
 
 MINIMAL_PROMPT = """You are a coding agent working in the user's local codebase.
 
-Answer what was asked, nothing more. Be concise. Read files before editing them \
-and follow the conventions already present. Never claim something works unless \
-you ran it."""
+Answer what was asked, nothing more. Be concise.
 
-BUILTIN_PROFILES: dict[str, str] = {
-    "default": BASE_PROMPT,
-    "visual-verify": BASE_PROMPT + VISUAL_VERIFY_EXTRA,
+Check paths and APIs instead of recalling them. Match the conventions of the file you \
+are editing. Never say something works unless you ran it and read the output.
+
+Issue independent tool calls in the same message. You cannot see images -- use \
+`vision` on any image path. Background any server you start; port 8080 is this app."""
+
+# Seeded only into a database that has no prompts yet. An existing install keeps
+# whatever is already stored, including prompts the user wrote.
+STARTER_PROMPTS: dict[str, str] = {
+    "default": DEFAULT_PROMPT,
     "minimal": MINIMAL_PROMPT,
 }
 
-PROFILE_NAMES = list(BUILTIN_PROFILES)
+# Deleting this one would leave sessions pointing at nothing, and there would be
+# no prompt to fall back to.
+PROTECTED_PROMPT = "default"
+
+
+async def list_prompt_names() -> list[str]:
+    return [row["name"] for row in await db.list_prompts()]
+
+
+async def migrate_prompts():
+    """Move prompts out of the settings table and into their own, once.
+
+    Prompts used to be three fixed slots plus a separate "user preferences" box
+    appended to whichever slot was chosen. The preferences box had grown into a
+    complete prompt in its own right, so it becomes one, and the slots become
+    ordinary rows the user can add to and delete.
+
+    A slot only held text if it had been edited away from what shipped, but
+    "edited" also covered text that shipped in an *earlier* version and was
+    written back untouched. Those are fingerprinted and dropped so the improved
+    wording lands; anything unrecognised is genuinely the user's and is kept.
+    """
+    if await db.list_prompts():
+        return
+
+    settings = await db.get_all_settings()
+    for name, starter in STARTER_PROMPTS.items():
+        stored = (settings.get(f"profile_{name}") or "").strip()
+        keep = stored and not _is_shipped(stored)
+        await db.save_prompt(name, stored if keep else starter.strip())
+
+    # The old preferences text was appended to every profile, so on its own it
+    # is the closest thing to the prompt the user was actually running.
+    prefs = (settings.get("user_prefs") or "").strip()
+    legacy = (settings.get("profile_visual-verify") or "").strip()
+    if prefs:
+        await db.save_prompt("visual-verify", prefs)
+    elif legacy and not _is_shipped(legacy):
+        await db.save_prompt("visual-verify", legacy)
+
+    for key in ("user_prefs", "profile_default", "profile_minimal", "profile_visual-verify"):
+        await db.delete_setting(key)
+
+
+# Prompt bodies this app has shipped in the past. A stored prompt matching one
+# of these was never written by the user, so replacing it loses nothing.
+_SHIPPED_HASHES = {
+    "3868d771daffb15aa2d68cd6a0236aefadf83e140259355214e6daeec8870d31",  # default
+    "4faaa19aa524bb24e7891374949c59b346d0efcdad6aa182132189570b91a915",  # minimal
+    "c6795a039b62f7ae7d9629c8c5b9f938804947258dbb82e03f223987a51025b7",  # visual-verify
+}
+
+
+def _is_shipped(body: str) -> bool:
+    digest = hashlib.sha256(body.strip().encode()).hexdigest()
+    return digest in _SHIPPED_HASHES
+
+
+
+async def prompt_body(name: str) -> str:
+    """The text of a named prompt, falling back to `default` if it is gone."""
+    row = await db.get_prompt(name)
+    if row is None:
+        row = await db.get_prompt(PROTECTED_PROMPT)
+    return row["body"] if row else DEFAULT_PROMPT
+
 
 
 async def session_system_prompt(session: dict) -> str:
     """The system prompt for a session, frozen the first time it is needed.
 
     Rendering it fresh each request meant anything that changed underneath --
-    editing a shared prompt, the date rolling over at midnight, a restart
-    picking up files the agent had since created -- silently changed the prefix
-    and re-billed the whole conversation at the miss rate.
+    editing a shared prompt, a restart picking up files the agent had since
+    created -- silently changed the prefix and re-billed the whole conversation
+    at the miss rate.
     """
     stored = session.get("system_prompt")
     if stored:
         return stored
     prompt = await build_system_prompt(
-        session.get("prompt_profile") or "default",
+        session.get("prompt_profile") or PROTECTED_PROMPT,
         session["project_dir"],
         session["id"],
     )
@@ -89,8 +171,10 @@ async def session_system_prompt(session: dict) -> str:
     return prompt
 
 
-async def build_system_prompt(profile: str, project_dir: str, session_id: str = "") -> str:
-    """Assemble the prompt: profile body + user preferences + environment.
+async def build_system_prompt(
+    profile: str, project_dir: str, session_id: str = ""
+) -> str:
+    """Assemble the prompt: the named body, then the environment block.
 
     The result must be byte-identical across every request in a session.
     DeepSeek prices a cached prompt prefix at roughly 1/120th of an uncached one,
@@ -98,17 +182,8 @@ async def build_system_prompt(profile: str, project_dir: str, session_id: str = 
     prompt re-bills the whole conversation at the miss rate. That is why the
     environment block is snapshotted per session instead of being recomputed.
     """
-    body = await db.get_setting(f"profile_{profile}", "") or BUILTIN_PROFILES.get(
-        profile, BASE_PROMPT
-    )
-    parts = [body.strip()]
-
-    prefs = (await db.get_setting("user_prefs", "")).strip()
-    if prefs:
-        parts.append(f"# User preferences\n{prefs}")
-
-    parts.append(environment_block(project_dir, session_id))
-    return "\n\n".join(parts)
+    body = (await prompt_body(profile)).strip()
+    return f"{body}\n\n{environment_block(project_dir, session_id)}"
 
 
 # session_id -> rendered environment block. Frozen for the life of the process

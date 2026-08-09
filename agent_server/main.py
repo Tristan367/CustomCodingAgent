@@ -35,14 +35,14 @@ from agent_server.providers import list_providers
 from agent_server.providers.deepseek import invalidate_key_cache
 from agent_server.routes import chat, sessions
 from agent_server.system_prompt import (
-    BUILTIN_PROFILES,
     COMPACT_PROMPT_DEFAULT,
-    PROFILE_NAMES,
+    PROTECTED_PROMPT,
     build_system_prompt,
+    list_prompt_names,
+    migrate_prompts,
 )
 from agent_server import permissions
 from agent_server.tools.registry import TOOLS, get_tool
-from agent_server.vision import rig_available
 
 BASE_DIR = Path(__file__).resolve().parent.parent
 TEMPLATE_DIR = BASE_DIR / "web_ui" / "templates"
@@ -68,6 +68,7 @@ async def _warm_vision():
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     await init_db()
+    await migrate_prompts()
     # Background: startup must not wait on a machine that may be off.
     warm = asyncio.create_task(_warm_vision())
     yield
@@ -214,7 +215,7 @@ async def _session_context(session: dict) -> dict:
         "messages": messages,
         "compactions": await db.get_compactions(session["id"]),
         "models": MODELS,
-        "profiles": PROFILE_NAMES,
+        "profiles": await list_prompt_names(),
         "efforts": REASONING_EFFORTS,
         "usage": usage,
         "should_compact": await should_offer_compaction(session["id"]),
@@ -292,7 +293,7 @@ async def _home_context(error: str = "") -> dict:
         "settings": await db.get_all_settings(),
         "providers": list_providers(),
         "models": MODELS,
-        "profiles": PROFILE_NAMES,
+        "profiles": await list_prompt_names(),
         "default_model": DEFAULT_MODEL,
         "error": error,
     }
@@ -442,15 +443,6 @@ async def create_session_form(
             request=request, name="index_content.html",
             context=await _home_context(f"Not a directory: {project_dir}"),
         )
-    if prompt_profile == "visual-verify" and not await rig_available():
-        return templates.TemplateResponse(
-            request=request, name="index_content.html",
-            context=await _home_context(
-                "The vision rig is not reachable, so the visual-verify profile cannot be used. "
-                "Start it, or pick another profile."
-            ),
-        )
-
     session = await db.create_session(
         name=name.strip() or directory.name,
         project_dir=str(directory.resolve()),
@@ -462,63 +454,113 @@ async def create_session_form(
 
 
 @app.get("/prompts")
-async def prompts_page(request: Request):
+async def prompts_page(request: Request, selected: str = ""):
     return templates.TemplateResponse(
-        request=request, name="prompts.html", context=await _prompts_context()
+        request=request, name="prompts.html", context=await _prompts_context(selected)
     )
 
 
 @app.post("/_save_prompts")
 async def save_prompts(request: Request):
+    """Save one prompt's text, plus the compaction prompt."""
     form = await request.form()
-    apply_existing = str(form.get("apply_existing", "")) in ("1", "true", "on")
+    name = str(form.get("name", "")).strip()
+    body = str(form.get("body", "")).strip()
 
-    for profile in PROFILE_NAMES:
-        key = f"profile_{profile}"
-        if key in form:
-            value = str(form[key]).strip()
-            # Blank restores the built-in default.
-            await db.set_setting(key, "" if value == BUILTIN_PROFILES[profile].strip() else value)
-    await db.set_setting("user_prefs", str(form.get("user_prefs", "")).strip())
     compact = str(form.get("compact_prompt", "")).strip()
-    await db.set_setting("compact_prompt", "" if compact == COMPACT_PROMPT_DEFAULT.strip() else compact)
+    await db.set_setting(
+        "compact_prompt", "" if compact == COMPACT_PROMPT_DEFAULT.strip() else compact
+    )
 
     moved = 0
-    if apply_existing:
-        for row in await db.list_sessions():
-            if row.get("prompt_custom"):
-                continue  # has its own prompt; not ours to overwrite
-            fresh = await build_system_prompt(
-                row.get("prompt_profile") or "default", row["project_dir"], row["id"]
-            )
-            if fresh == row.get("system_prompt"):
-                continue
-            if row.get("system_prompt"):
-                # Queue it. Swapping now would invalidate the cached prefix and
-                # re-bill the whole conversation; at the next compaction the
-                # prefix is being rewritten regardless.
-                await db.update_session(row["id"], pending_system_prompt=fresh)
-            else:
-                # Never ran, so nothing is cached and there is nothing to lose.
-                await db.update_session(row["id"], system_prompt=fresh)
-            moved += 1
+    if name and body:
+        await db.save_prompt(name, body)
+        moved = await _propagate(name)
 
     return templates.TemplateResponse(
         request=request,
         name="prompts.html",
-        context=await _prompts_context(saved=True, moved=moved if apply_existing else None),
+        context=await _prompts_context(selected=name, saved=True, moved=moved),
     )
 
 
-async def _prompts_context(saved: bool = False, moved: int | None = None) -> dict:
-    profiles = {
-        name: (await db.get_setting(f"profile_{name}", "") or BUILTIN_PROFILES[name])
-        for name in PROFILE_NAMES
-    }
+@app.post("/_new_prompt")
+async def new_prompt(request: Request):
+    form = await request.form()
+    name = _slug(str(form.get("new_name", "")))
+    if not name:
+        return RedirectResponse("/prompts", status_code=303)
+    if not await db.get_prompt(name):
+        # Start from the default rather than an empty box: a blank system prompt
+        # is a worse starting point than one you can edit down.
+        await db.save_prompt(name, await _default_body())
+    return RedirectResponse(f"/prompts?selected={name}", status_code=303)
+
+
+@app.post("/_delete_prompt")
+async def delete_prompt(request: Request):
+    form = await request.form()
+    name = str(form.get("name", "")).strip()
+    if name and name != PROTECTED_PROMPT:
+        await db.delete_prompt(name)
+        # Sessions pointing at it fall back to the default; their own frozen
+        # text is untouched, so nothing in flight changes.
+        for row in await db.list_sessions():
+            if row.get("prompt_profile") == name:
+                await db.update_session(row["id"], prompt_profile=PROTECTED_PROMPT)
+    return RedirectResponse("/prompts", status_code=303)
+
+
+def _slug(raw: str) -> str:
+    return re.sub(r"[^a-z0-9-]+", "-", raw.strip().lower()).strip("-")[:40]
+
+
+async def _default_body() -> str:
+    row = await db.get_prompt(PROTECTED_PROMPT)
+    return row["body"] if row else ""
+
+
+async def _propagate(name: str) -> int:
+    """Queue the edited prompt onto the sessions that share it.
+
+    Every session using this prompt and not carrying its own gets the new text
+    at its next compaction. Swapping it in now would invalidate the cached
+    prefix and re-bill the whole conversation; at compaction the prefix is being
+    rewritten regardless, so the switch is close to free.
+    """
+    moved = 0
+    for row in await db.list_sessions():
+        if row.get("prompt_custom"):
+            continue  # has its own prompt; not ours to overwrite
+        if (row.get("prompt_profile") or PROTECTED_PROMPT) != name:
+            continue
+        fresh = await build_system_prompt(name, row["project_dir"], row["id"])
+        if fresh == row.get("system_prompt"):
+            continue
+        if row.get("system_prompt"):
+            await db.update_session(row["id"], pending_system_prompt=fresh)
+        else:
+            # Never ran, so nothing is cached and there is nothing to lose.
+            await db.update_session(row["id"], system_prompt=fresh)
+        moved += 1
+    return moved
+
+
+async def _prompts_context(
+    selected: str = "", saved: bool = False, moved: int = 0
+) -> dict:
+    prompts = await db.list_prompts()
+    names = [p["name"] for p in prompts]
+    if selected not in names:
+        selected = names[0] if names else PROTECTED_PROMPT
+    bodies = {p["name"]: p["body"] for p in prompts}
     schemas = [t.schema() for t in TOOLS.values()]
     return {
-        "profiles": profiles,
-        "user_prefs": await db.get_setting("user_prefs", ""),
+        "prompts": names,
+        "bodies": bodies,
+        "selected": selected,
+        "body": bodies.get(selected, ""),
+        "protected": PROTECTED_PROMPT,
         "compact_prompt": await db.get_setting("compact_prompt", "") or COMPACT_PROMPT_DEFAULT,
         "tools": [
             {
@@ -531,6 +573,7 @@ async def _prompts_context(saved: bool = False, moved: int | None = None) -> dic
         ],
         "tools_tokens": len(json.dumps(schemas)) // 4,
         "saved": saved,
+        "moved": moved,
         "sound_enabled": await _sound_enabled(),
     }
 

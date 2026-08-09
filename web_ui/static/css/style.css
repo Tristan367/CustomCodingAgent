@@ -886,6 +886,13 @@ select { cursor: pointer; }
 .prompt-editor { margin-bottom: 6px; }
 .prompt-textarea { width: 100%; font-family: var(--mono); font-size: 12px; line-height: 1.55; resize: vertical; }
 
+.prompt-bar { display: flex; gap: 8px; align-items: center; margin-bottom: 8px; }
+.prompt-bar select { flex: 0 0 220px; }
+.prompt-bar .btn-danger { margin-left: auto; }
+.btn-danger { background: var(--bg-inset); border: 1px solid var(--border-strong); color: var(--danger); }
+.btn-danger:hover:not(:disabled) { background: var(--danger); color: var(--bg); border-color: var(--danger); }
+.btn-danger:disabled { opacity: .5; cursor: not-allowed; color: var(--text-dim); border-color: var(--border); }
+
 .tools-table { width: 100%; border-collapse: collapse; font-size: 12px; margin-top: 10px; }
 .tools-table th, .tools-table td { border-bottom: 1px solid var(--border); padding: 6px 8px; text-align: left; vertical-align: top; }
 .tools-table th { color: var(--text-dim); font-weight: 600; font-size: 11px; text-transform: uppercase; }

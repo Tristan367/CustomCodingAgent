@@ -69,6 +69,12 @@ CREATE TABLE IF NOT EXISTS session_write_dirs (
     PRIMARY KEY (session_id, path)
 );
 
+CREATE TABLE IF NOT EXISTS prompts (
+    name TEXT PRIMARY KEY,
+    body TEXT NOT NULL,
+    updated_at TEXT NOT NULL
+);
+
 CREATE TABLE IF NOT EXISTS settings (
     key TEXT PRIMARY KEY,
     value TEXT NOT NULL,
@@ -564,3 +570,35 @@ async def set_setting(key: str, value: str):
 async def get_all_settings() -> dict[str, str]:
     rows = await _fetchall("SELECT key, value FROM settings")
     return {r["key"]: r["value"] for r in rows}
+
+
+async def delete_setting(key: str):
+    await _execute("DELETE FROM settings WHERE key = ?", (key,))
+
+
+# ── Prompts ─────────────────────────────────────────────────────────────────
+
+
+async def list_prompts() -> list[dict]:
+    return await _fetchall("SELECT * FROM prompts ORDER BY name = 'default' DESC, name")
+
+
+async def get_prompt(name: str) -> dict | None:
+    return await _fetchone("SELECT * FROM prompts WHERE name = ?", (name,))
+
+
+async def save_prompt(name: str, body: str):
+    # Textareas submit CRLF per the HTML spec; storing that would make an
+    # untouched round-trip through the editor look like an edit.
+    body = body.replace("\r\n", "\n").strip()
+    await _execute(
+        "INSERT INTO prompts (name, body, updated_at) VALUES (?,?,?)"
+        " ON CONFLICT(name) DO UPDATE SET body = excluded.body,"
+        " updated_at = excluded.updated_at",
+        (name, body, _now()),
+    )
+
+
+async def delete_prompt(name: str):
+    await _execute("DELETE FROM prompts WHERE name = ?", (name,))
+

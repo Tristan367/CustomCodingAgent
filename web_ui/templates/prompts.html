@@ -5,54 +5,92 @@
     {% if saved %}
     <div class="success-banner">
         Saved.
-        {%- if moved is not none %}
-{{ moved }} existing session{{ '' if moved == 1 else 's' }} will pick it up at their next compaction.
+        {%- if moved %}
+        {{ moved }} session{{ '' if moved == 1 else 's' }} using it will pick it up at their next compaction.
         {%- else %}
-        New sessions will use it; existing ones keep the prompt they started with.
+        New sessions will use it.
         {%- endif %}
     </div>
     {% endif %}
     <p class="hint">
-        Changes apply to the next message in any session. Text already in a conversation's
-        context is unaffected until it is compacted. Clearing a profile restores its built-in default.
+        Each prompt is a complete system prompt; a session uses one. Editing a prompt
+        reaches every session using it at that session's next compaction, which is when
+        its prefix is rebuilt anyway. Sessions with a prompt of their own are left alone.
     </p>
 
+    <form method="POST" action="/_save_prompts" class="stack" id="prompt-form">
+        <div class="prompt-bar">
+            <select id="prompt-picker" name="name" aria-label="Prompt">
+                {% for p in prompts %}
+                <option value="{{ p }}" {% if p == selected %}selected{% endif %}>{{ p }}</option>
+                {% endfor %}
+            </select>
+            <button type="submit" class="btn-primary">Save</button>
+            <button type="button" class="btn-secondary" onclick="newPrompt()">New</button>
+            <button type="button" class="btn-danger" onclick="deletePrompt()"
+                    id="delete-prompt" {% if selected == protected %}disabled
+                    title="The default prompt cannot be deleted"{% endif %}>Delete</button>
+        </div>
+        <textarea name="body" id="prompt-body" rows="26" class="prompt-textarea"
+                  spellcheck="false">{{ body }}</textarea>
+    </form>
+
     <form method="POST" action="/_save_prompts" class="stack">
-        {% for name, text in profiles.items() %}
-        <div class="prompt-editor">
-            <h3>{{ name }}</h3>
-            <textarea name="profile_{{ name }}" rows="14" class="prompt-textarea" spellcheck="false">{{ text }}</textarea>
-        </div>
-        {% endfor %}
-
-        <div class="prompt-editor">
-            <h3>User preferences <span class="hint">appended to every profile</span></h3>
-            <textarea name="user_prefs" rows="6" class="prompt-textarea" spellcheck="false"
-                      placeholder="e.g. Prefer TypeScript. Two-space indent. Always add error handling.">{{ user_prefs }}</textarea>
-        </div>
-
+        <input type="hidden" name="name" value="">
         <div class="prompt-editor">
             <h3>Compaction prompt <span class="hint">used when summarising a long conversation</span></h3>
             <textarea name="compact_prompt" rows="10" class="prompt-textarea" spellcheck="false">{{ compact_prompt }}</textarea>
         </div>
-
-        {# A session's prompt is frozen when it starts, so editing here does not
-           disturb a conversation in progress -- and re-billing one at the
-           cache-miss rate is the reason that matters. #}
-        <label class="checkbox-label">
-            <input type="checkbox" name="apply_existing" value="1">
-            Also apply to existing sessions
-            <span class="hint">
-                Queued until each one next compacts, which is when its prefix is
-                rebuilt anyway, so the switch costs nothing. Sessions with their
-                own prompt are left alone.
-            </span>
-        </label>
-
-        <button type="submit" class="btn-primary">Save prompts</button>
+        <button type="submit" class="btn-primary">Save compaction prompt</button>
     </form>
 
-    <h2>Tools</h2>
+    <form method="POST" action="/_new_prompt" id="new-prompt-form" hidden>
+        <input name="new_name" id="new-prompt-name">
+    </form>
+    <form method="POST" action="/_delete_prompt" id="delete-prompt-form" hidden>
+        <input name="name" id="delete-prompt-name">
+    </form>
+
+    <script>
+        const PROMPT_BODIES = {{ bodies | tojson }};
+        const PROTECTED_PROMPT = {{ protected | tojson }};
+        const picker = document.getElementById('prompt-picker');
+        const bodyBox = document.getElementById('prompt-body');
+        let lastSaved = bodyBox.value;
+
+        picker.addEventListener('change', () => {
+            if (bodyBox.value !== lastSaved &&
+                !confirm('Discard unsaved changes to this prompt?')) {
+                picker.value = pickerPrevious;
+                return;
+            }
+            bodyBox.value = PROMPT_BODIES[picker.value] ?? '';
+            lastSaved = bodyBox.value;
+            pickerPrevious = picker.value;
+            const del = document.getElementById('delete-prompt');
+            del.disabled = picker.value === PROTECTED_PROMPT;
+            del.title = del.disabled ? 'The default prompt cannot be deleted' : '';
+        });
+        let pickerPrevious = picker.value;
+
+        function newPrompt() {
+            const name = prompt('Name for the new prompt:');
+            if (!name) return;
+            document.getElementById('new-prompt-name').value = name;
+            document.getElementById('new-prompt-form').submit();
+        }
+
+        function deletePrompt() {
+            if (picker.value === PROTECTED_PROMPT) return;
+            if (!confirm(`Delete the "${picker.value}" prompt? Sessions using it fall back to the default.`)) return;
+            document.getElementById('delete-prompt-name').value = picker.value;
+            document.getElementById('delete-prompt-form').submit();
+        }
+
+        document.getElementById('prompt-form').addEventListener('submit', () => { lastSaved = bodyBox.value; });
+    </script>
+
+<h2>Tools</h2>
     <p class="hint">
         Every tool schema is sent with each request, costing roughly
         <strong>{{ '{:,}'.format(tools_tokens) }} tokens</strong> per call before your

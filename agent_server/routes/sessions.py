@@ -7,17 +7,17 @@ from agent_server import database as db
 from agent_server.config import MODELS_BY_ID, REASONING_EFFORTS
 from agent_server.models import SessionCreate, SessionUpdate
 from agent_server.providers import list_providers
-from agent_server.system_prompt import PROFILE_NAMES
+from agent_server.system_prompt import list_prompt_names
 
 router = APIRouter(prefix="/api/sessions", tags=["sessions"])
 
 
-def _validate(body: SessionCreate | SessionUpdate):
+async def _validate(body: SessionCreate | SessionUpdate):
     if body.provider and body.provider not in list_providers():
         raise HTTPException(400, f"Unknown provider: {body.provider}")
     if body.model and body.model not in MODELS_BY_ID:
         raise HTTPException(400, f"Unknown model: {body.model}")
-    if body.prompt_profile and body.prompt_profile not in PROFILE_NAMES:
+    if body.prompt_profile and body.prompt_profile not in await list_prompt_names():
         raise HTTPException(400, f"Unknown prompt profile: {body.prompt_profile}")
     if body.thinking_effort and body.thinking_effort not in REASONING_EFFORTS:
         raise HTTPException(400, f"Unknown thinking effort: {body.thinking_effort}")
@@ -25,7 +25,7 @@ def _validate(body: SessionCreate | SessionUpdate):
 
 @router.post("")
 async def create_session(body: SessionCreate):
-    _validate(body)
+    await _validate(body)
     return await db.create_session(
         name=body.name.strip() or "Untitled",
         project_dir=body.project_dir,
@@ -53,7 +53,7 @@ async def get_session(session_id: str):
 async def update_session(session_id: str, body: SessionUpdate):
     if await db.get_session(session_id) is None:
         raise HTTPException(404, "Session not found")
-    _validate(body)
+    await _validate(body)
     updates = {k: v for k, v in body.model_dump(exclude_unset=True).items() if v is not None}
     # An empty thinking_effort means "fall back to the default".
     if "thinking_effort" in updates and not updates["thinking_effort"]:

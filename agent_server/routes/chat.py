@@ -211,7 +211,7 @@ async def seen(session_id: str):
 
 @router.get("/usage")
 async def total_usage():
-    return await db.get_total_cost()
+    return await db.get_month_usage()
 
 
 # ── Write permissions ───────────────────────────────────────────────────────

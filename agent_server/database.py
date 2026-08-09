@@ -77,6 +77,16 @@ CREATE TABLE IF NOT EXISTS prompts (
     PRIMARY KEY (kind, name)
 );
 
+CREATE TABLE IF NOT EXISTS usage_monthly (
+    month TEXT PRIMARY KEY,
+    cost REAL NOT NULL DEFAULT 0,
+    input INTEGER NOT NULL DEFAULT 0,
+    cached INTEGER NOT NULL DEFAULT 0,
+    output INTEGER NOT NULL DEFAULT 0,
+    reasoning INTEGER NOT NULL DEFAULT 0,
+    requests INTEGER NOT NULL DEFAULT 0
+);
+
 CREATE TABLE IF NOT EXISTS settings (
     key TEXT PRIMARY KEY,
     value TEXT NOT NULL,
@@ -345,6 +355,8 @@ async def add_message(
         ),
     )
     await touch_session(session_id)
+    if usage:
+        await _record_month(session_id, usage)
     row = await _fetchone("SELECT * FROM messages WHERE id = ?", (msg_id,))
     assert row is not None
     return row
@@ -462,8 +474,15 @@ async def get_session_usage(session_id: str) -> dict:
 
     session = await get_session(session_id)
     pricing = MODELS_BY_ID.get((session or {}).get("model", ""), {})
+    # Spend is counted from the last reset, while the context measurement below
+    # still reads every row. Deleting the usage records to clear the figure
+    # would take the measured context with them and drop the ring back to an
+    # estimate, so the reset is a cutoff rather than a delete.
+    since = await get_setting("usage_reset_at", "")
     rows = await _fetchall(
-        "SELECT usage FROM messages WHERE session_id = ? AND usage IS NOT NULL", (session_id,)
+        "SELECT usage FROM messages WHERE session_id = ? AND usage IS NOT NULL"
+        " AND created_at > ?",
+        (session_id, since),
     )
 
     totals = {"input": 0, "cached": 0, "output": 0, "reasoning": 0, "cost": 0.0, "requests": 0}
@@ -534,28 +553,69 @@ async def get_session_usage(session_id: str) -> dict:
     return totals
 
 
-async def get_total_cost() -> dict:
-    """Cumulative spend across every session, priced per that session's model."""
+def current_month() -> str:
+    return datetime.now().strftime("%Y-%m")
+
+
+async def _record_month(session_id: str, usage: dict):
+    """Add one request to this month's running total.
+
+    Spend used to be recomputed by scanning every usage record ever written,
+    which meant it could not be reset without deleting the per-message figures
+    the context ring is measured from, and it only ever grew. A rollup is a
+    handful of numbers, so the history it replaces does not need keeping.
+    """
     from agent_server.config import MODELS_BY_ID
 
-    rows = await _fetchall(
-        "SELECT s.model AS model, m.usage AS usage FROM messages m"
-        " JOIN sessions s ON s.id = m.session_id WHERE m.usage IS NOT NULL"
-    )
-    total = {"cost": 0.0, "input": 0, "output": 0, "cached": 0, "requests": 0}
-    for row in rows:
-        u, cost = _price(row["usage"], MODELS_BY_ID.get(row["model"], {}))
-        if not u:
-            continue
-        total["requests"] += 1
-        total["input"] += u.get("prompt_tokens", 0) or 0
-        total["cached"] += u.get("cached_tokens", 0) or 0
-        total["output"] += u.get("completion_tokens", 0) or 0
-        total["cost"] += cost
+    session = await get_session(session_id)
+    _, cost = _price(json.dumps(usage), MODELS_BY_ID.get((session or {}).get("model", ""), {}))
+    month = current_month()
+    async with _write_lock:
+        db = await connect()
+        # Only the month in progress is kept; last month is not something we
+        # can act on, and it would accumulate forever.
+        await db.execute("DELETE FROM usage_monthly WHERE month != ?", (month,))
+        await db.execute(
+            "INSERT INTO usage_monthly (month, cost, input, cached, output, reasoning, requests)"
+            " VALUES (?,?,?,?,?,?,1)"
+            " ON CONFLICT(month) DO UPDATE SET"
+            "  cost = cost + excluded.cost,"
+            "  input = input + excluded.input,"
+            "  cached = cached + excluded.cached,"
+            "  output = output + excluded.output,"
+            "  reasoning = reasoning + excluded.reasoning,"
+            "  requests = requests + 1",
+            (
+                month,
+                cost,
+                usage.get("prompt_tokens", 0) or 0,
+                usage.get("cached_tokens", 0) or 0,
+                usage.get("completion_tokens", 0) or 0,
+                usage.get("reasoning_tokens", 0) or 0,
+            ),
+        )
+        await db.commit()
+
+
+async def get_month_usage() -> dict:
+    """Spend for the month in progress."""
+    month = current_month()
+    row = await _fetchone("SELECT * FROM usage_monthly WHERE month = ?", (month,))
+    total = dict(row) if row else {
+        "month": month, "cost": 0.0, "input": 0, "cached": 0,
+        "output": 0, "reasoning": 0, "requests": 0,
+    }
     total["cache_hit_rate"] = (
         round(100 * total["cached"] / total["input"], 1) if total["input"] else 0
     )
+    total["label"] = datetime.strptime(total["month"], "%Y-%m").strftime("%B %Y")
     return total
+
+
+async def reset_usage():
+    """Zero the counters without touching what they were counted from."""
+    await _execute("DELETE FROM usage_monthly")
+    await set_setting("usage_reset_at", _now())
 
 
 # ── Compactions ─────────────────────────────────────────────────────────────

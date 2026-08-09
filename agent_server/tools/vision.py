@@ -26,9 +26,14 @@ async def vision(
     *,
     prompt: str | None = None,
     paths: list[str] | str | None = None,
+    url: str | None = None,
+    selector: str | None = None,
+    full_page: bool = False,
+    width: int = 1280,
+    height: int = 900,
     **_,
 ) -> ToolResult:
-    """Analyse local image files. Capturing a page is `screenshot`'s job."""
+    """Analyse local image files and/or a freshly captured web page."""
     images: list[bytes] = []
     labels: list[str] = []
     title_bits: list[str] = []
@@ -37,9 +42,9 @@ async def vision(
         paths = [paths]
     paths = [p for p in (paths or []) if p]
 
-    if not paths:
+    if not paths and not url:
         return ToolResult.error(
-            "give `paths`: the image files to look at. To capture a page, use `screenshot`.",
+            "give either `paths` (image files to look at) or `url` (a page to capture)",
             "vision",
         )
     if len(paths) > MAX_IMAGES:
@@ -53,6 +58,18 @@ async def vision(
             return ToolResult.error(str(e), "vision")
         labels.append(path.name)
         title_bits.append(f"{path.name} ({engine.describe_image_file(path)})")
+
+    if url:
+        try:
+            shots = await engine.capture(
+                url, selector=selector, full_page=full_page, width=width, height=height
+            )
+        except Exception as e:  # noqa: BLE001
+            return ToolResult.error(f"could not capture {url}: {e}", "vision")
+        for saved, data in shots:
+            images.append(data)
+            labels.append(Path(saved).name)
+        title_bits.append(url)
 
     try:
         answer = await engine.analyze(images, prompt or DEFAULT_PROMPT, labels)
@@ -80,6 +97,7 @@ async def screenshot(
     interval_ms: int = 500,
     actions: list[dict] | None = None,
     prompt: str | None = None,
+    analyze: bool = True,
     **_,
 ) -> ToolResult:
     """Capture a page (optionally a timed sequence) and optionally analyse it."""
@@ -106,9 +124,13 @@ async def screenshot(
     body = f"Captured {len(shots)} screenshot{'s' if len(shots) != 1 else ''} of {url}:\n{listing}"
     title = f"screenshot {url[:60]} ({len(shots)} frame{'s' if len(shots) != 1 else ''})"
 
-    # Returning paths and asking the model to call `vision` itself cost a whole
-    # extra round trip to learn what it had just captured, which is the only
-    # reason to take a screenshot at all.
+    if not analyze:
+        body += "\n\nNot analysed. Pass these paths to `vision` when you want them read."
+        return ToolResult(output=body, title=title)
+
+    # Analysing is the default. Returning paths and asking the model to call
+    # `vision` itself cost a whole extra round trip to learn what it had just
+    # captured, which is the only reason to take a screenshot at all.
     question = prompt or (
         DEFAULT_SEQUENCE_PROMPT if len(shots) > 1 else DEFAULT_PROMPT
     )

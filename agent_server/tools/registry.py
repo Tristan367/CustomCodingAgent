@@ -193,11 +193,12 @@ register(Tool(
     name="vision",
     description=(
         "Look at images with a vision model and get a description back. Pass `paths` "
-        "for image files on disk: screenshots, photos, diagrams, anything the user "
-        "attached. Give several paths to compare them -- each is labelled by "
-        "filename, so you can ask what changed between them. Always include a "
-        "`prompt` saying what you need to know. To capture a web page, use "
-        "`screenshot`."
+        "for image files on disk (screenshots, photos, diagrams, anything the user "
+        "attached), and/or `url` to capture a web page and include it alongside them "
+        "-- that is how you check a live page against a mockup in one look. Each "
+        "image is labelled by filename, so you can ask what changed between them. "
+        "Always include a `prompt` saying what you need to know. For sequences, "
+        "interactions, or capture options beyond these, use `screenshot`."
     ),
     parameters={
         "type": "object",
@@ -212,8 +213,13 @@ register(Tool(
                 "items": {"type": "string"},
                 "description": "Image files to look at, in order (max 6)",
             },
+            "url": {"type": "string", "description": "Page to capture and include"},
+            "selector": {"type": "string", "description": "CSS selector to crop the capture to"},
+            "full_page": {"type": "boolean", "description": "Capture the whole scrollable page"},
+            "width": {"type": "integer", "description": "Viewport width (default 1280)"},
+            "height": {"type": "integer", "description": "Viewport height (default 900)"},
         },
-        "required": ["prompt", "paths"],
+        "required": ["prompt"],
     },
     handler=vision,
     vision_only=True,
@@ -227,11 +233,21 @@ register(Tool(
         "loading states, or anything that changes over time. `actions` lets you click, "
         "fill, hover, or scroll before capturing so you can reach a specific state. "
         "Pass `prompt` to ask something specific about what was captured -- a "
-        "targeted question is answered far faster than an open one."
+        "targeted question is answered far faster than an open one. Set "
+        "`analyze: false` to only save the files -- use that when you want the "
+        "frames without paying for a description, or intend to ask about them "
+        "later with `vision`."
     ),
     parameters={
         "type": "object",
         "properties": {
+            "analyze": {
+                "type": "boolean",
+                "description": (
+                    "Defaults to true: the capture is described in the same call. "
+                    "Set false to only save the files."
+                ),
+            },
             "url": {"type": "string", "description": "Page to capture (http, https, or file://)"},
             "selector": {"type": "string", "description": "CSS selector to crop to"},
             "full_page": {"type": "boolean", "description": "Whole scrollable page"},

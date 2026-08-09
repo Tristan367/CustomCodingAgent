@@ -8,14 +8,13 @@ from typing import Any, Awaitable, Callable, Iterable, Literal
 from agent_server.tools.base import ToolContext, ToolResult
 from agent_server.tools.bash import is_read_only, run_bash
 from agent_server.tools.file_ops import edit_file, read_file, write_file
-from agent_server.tools.question import ask_question
 from agent_server.tools.search import glob_search, grep_search
 from agent_server.tools.task import run_task
 from agent_server.tools.vision import screenshot, vision
 from agent_server.tools.web import webfetch
 
 Handler = Callable[..., Awaitable[ToolResult]]
-PauseKind = Literal["permission", "question"]
+PauseKind = Literal["permission"]
 
 
 @dataclass(frozen=True)
@@ -170,41 +169,6 @@ register(Tool(
 ))
 
 register(Tool(
-    name="question",
-    description=(
-        "Ask the user a question and wait for their answer. Use when a decision "
-        "is genuinely ambiguous and guessing wrong would waste significant work. "
-        "Set multiple=true to let them choose several options at once; leave it "
-        "off and the first click answers immediately. Markdown is rendered in "
-        "the question and in every option."
-    ),
-    parameters={
-        "type": "object",
-        "properties": {
-            "question": {
-                "type": "string",
-                "description": "The question to ask. Markdown is rendered.",
-            },
-            "options": {
-                "type": "array",
-                "items": {"type": "string"},
-                "description": "Optional suggested answers. Markdown is rendered.",
-            },
-            "multiple": {
-                "type": "boolean",
-                "description": (
-                    "Allow several options to be chosen at once. The answer comes "
-                    "back as the chosen options separated by semicolons."
-                ),
-            },
-        },
-        "required": ["question"],
-    },
-    handler=ask_question,
-    pause="question",
-))
-
-register(Tool(
     name="task",
     description=(
         "Delegate open-ended research to a read-only subagent that works autonomously and "
@@ -229,10 +193,11 @@ register(Tool(
     name="vision",
     description=(
         "Look at images with a vision model and get a description back. Pass `paths` "
-        "for image files on disk (screenshots, photos, diagrams, anything the user "
-        "attached), and/or `url` to capture a web page first. Give several paths to "
-        "compare images -- each is labelled by filename, so you can ask what changed "
-        "between them. Always include a `prompt` saying what you need to know."
+        "for image files on disk: screenshots, photos, diagrams, anything the user "
+        "attached. Give several paths to compare them -- each is labelled by "
+        "filename, so you can ask what changed between them. Always include a "
+        "`prompt` saying what you need to know. To capture a web page, use "
+        "`screenshot`."
     ),
     parameters={
         "type": "object",
@@ -247,13 +212,8 @@ register(Tool(
                 "items": {"type": "string"},
                 "description": "Image files to look at, in order (max 6)",
             },
-            "url": {"type": "string", "description": "Page to capture and include"},
-            "selector": {"type": "string", "description": "CSS selector to crop the capture to"},
-            "full_page": {"type": "boolean", "description": "Capture the whole scrollable page"},
-            "width": {"type": "integer", "description": "Viewport width (default 1280)"},
-            "height": {"type": "integer", "description": "Viewport height (default 900)"},
         },
-        "required": ["prompt"],
+        "required": ["prompt", "paths"],
     },
     handler=vision,
     vision_only=True,
@@ -267,19 +227,11 @@ register(Tool(
         "loading states, or anything that changes over time. `actions` lets you click, "
         "fill, hover, or scroll before capturing so you can reach a specific state. "
         "Pass `prompt` to ask something specific about what was captured -- a "
-        "targeted question is answered far faster than an open one. Set "
-        "`analyze: false` to only save the files and look at them later."
+        "targeted question is answered far faster than an open one."
     ),
     parameters={
         "type": "object",
         "properties": {
-                "analyze": {
-                    "type": "boolean",
-                    "description": (
-                        "Defaults to true: the capture is described in the same "
-                        "call. Set false to only save the files."
-                    ),
-                },
             "url": {"type": "string", "description": "Page to capture (http, https, or file://)"},
             "selector": {"type": "string", "description": "CSS selector to crop to"},
             "full_page": {"type": "boolean", "description": "Whole scrollable page"},

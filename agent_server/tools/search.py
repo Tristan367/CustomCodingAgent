@@ -75,12 +75,40 @@ async def grep_search(
     )
 
 
+def _expand_braces(pattern: str) -> list[str]:
+    """Turn `*.{js,css}` into `*.js` and `*.css`.
+
+    fnmatch has no brace expansion, so a pattern using one matched nothing and
+    came back as "No files matching" -- indistinguishable from a correct
+    pattern over an empty tree, and the model would move on believing the files
+    were not there.
+    """
+    start = pattern.find("{")
+    if start == -1:
+        return [pattern]
+    depth = 0
+    for i in range(start, len(pattern)):
+        if pattern[i] == "{":
+            depth += 1
+        elif pattern[i] == "}":
+            depth -= 1
+            if depth == 0:
+                head, body, tail = pattern[:start], pattern[start + 1:i], pattern[i + 1:]
+                out = []
+                for choice in body.split(","):
+                    out.extend(_expand_braces(head + choice + tail))
+                return out
+    return [pattern]  # unbalanced; leave it alone and let it match literally
+
+
 async def glob_search(ctx: ToolContext, *, pattern: str, path: str | None = None, **_) -> ToolResult:
     search_dir = ctx.resolve(path)
     title = f"glob '{pattern}'"
 
     if not search_dir.is_dir():
         return ToolResult.error(f"directory not found: {search_dir}", title)
+
+    patterns = _expand_braces(pattern)
 
     def _walk() -> list[tuple[float, str]]:
         results: list[tuple[float, str]] = []
@@ -89,7 +117,7 @@ async def glob_search(ctx: ToolContext, *, pattern: str, path: str | None = None
             for name in files:
                 full = Path(root) / name
                 rel = str(full.relative_to(search_dir))
-                if fnmatch.fnmatch(rel, pattern) or fnmatch.fnmatch(name, pattern):
+                if any(fnmatch.fnmatch(rel, p) or fnmatch.fnmatch(name, p) for p in patterns):
                     try:
                         results.append((full.stat().st_mtime, rel))
                     except OSError:

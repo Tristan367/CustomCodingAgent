@@ -103,7 +103,6 @@
             <tr>
                 <td><code>{{ t.name }}</code></td>
                 <td>{% if t.pause == 'permission' %}<span class="chip chip-warn">asks first</span>
-                    {%- elif t.pause == 'question' %}<span class="chip">interactive</span>
                     {%- else %}<span class="chip">automatic</span>{% endif %}</td>
                 <td class="num">{{ t.tokens }}</td>
                 <td>{{ t.description }}</td>

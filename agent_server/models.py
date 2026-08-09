@@ -33,7 +33,7 @@ class ChatRequest(BaseModel):
 class ResolveRequest(BaseModel):
     """Answer to a paused tool call."""
     tool_call_id: str
-    action: Literal["approve", "reject", "answer"]
+    action: Literal["approve", "reject"]
     value: str = ""
     # once      this call only
     # session   also auto-approve shell for the rest of this server process

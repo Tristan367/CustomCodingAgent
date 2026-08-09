@@ -42,7 +42,7 @@ from agent_server.system_prompt import (
     migrate_prompts,
 )
 from agent_server import permissions
-from agent_server.tools.registry import TOOLS, get_tool
+from agent_server.tools.registry import TOOLS
 
 BASE_DIR = Path(__file__).resolve().parent.parent
 TEMPLATE_DIR = BASE_DIR / "web_ui" / "templates"
@@ -226,49 +226,18 @@ async def _session_context(session: dict) -> dict:
         "sound_enabled": await _sound_enabled(),
         "threshold_steps": THRESHOLD_STEPS,
         "allowed_dirs": await permissions.list_allowed(session["id"]),
-        "questions": _question_map(messages),
     }
-
-
-def _question_map(messages: list[dict]) -> dict[str, dict]:
-    """tool_call_id -> the question that was asked.
-
-    A question's text lives in the assistant turn's tool_calls, and the answer
-    in the tool result. Without pairing them back up the transcript shows a
-    list of answers to invisible questions.
-    """
-    out: dict[str, dict] = {}
-    for row in messages:
-        for call in normalize_tool_calls(row.get("tool_calls")):
-            if call["function"]["name"] != "question":
-                continue
-            args = parse_arguments(call)
-            out[call["id"]] = {
-                "question": args.get("question", ""),
-                "options": args.get("options") or [],
-                "multiple": bool(args.get("multiple")),
-            }
-    return out
 
 
 async def _pending_prompt(session: dict, messages: list[dict]) -> dict | None:
     """Describe a tool call still waiting on the user, so a page reload can
-    re-offer the approval or question instead of stranding the session."""
+    re-offer the approval instead of stranding the session."""
     _, pending = pending_tool_calls(messages)
     if not pending:
         return None
     call = pending[0]
     name = tool_call_name(call)
     args = parse_arguments(call)
-    tool = get_tool(name)
-    if tool is not None and tool.pause == "question":
-        return {
-            "type": "question",
-            "tool_call_id": call["id"],
-            "question": args.get("question", ""),
-            "options": args.get("options") or [],
-            "multiple": bool(args.get("multiple")),
-        }
     shell_auto = bool(session.get("bash_auto_approve")) or agent.runtime_auto_approve(session["id"])
     prompt = await permissions.check(
         name, args, session["id"], session["project_dir"], shell_auto

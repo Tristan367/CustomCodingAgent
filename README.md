@@ -47,7 +47,6 @@ agent_server/
   permissions.py    what the agent may do without asking
   vision.py         image normalisation, browser capture, Ollama client
   tools/            read, edit, write, bash, grep, glob, webfetch,
-                    question, task, vision, screenshot
   routes/           HTTP surface
 web_ui/             Jinja templates, CSS, and ~4 files of vanilla JS
 ```

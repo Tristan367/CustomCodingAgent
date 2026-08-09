@@ -124,16 +124,6 @@ async function onSubmit(event) {
   const attachments = pendingImages.slice();
   if (!message && !attachments.length) return;
 
-  // A message sent while a question is open is the answer to it. The server
-  // records it that way; reflect that here so the card does not sit there
-  // looking unanswered until the page is reloaded.
-  const openQuestion = App.els.messages.querySelector('.question-card:not(.resolved)');
-  if (openQuestion && !App.streaming) {
-    openQuestion.querySelector('.question-body')?.remove();
-    openQuestion.classList.add('resolved');
-    openQuestion.appendChild(el('div', 'question-answer', md.render(message)));
-  }
-
   // Typing while it works: hand the message to the running turn instead of
   // starting a second one. The agent picks it up at the next turn boundary,
   // so it keeps going and sees the message on its next request.
@@ -423,10 +413,6 @@ function handleEvent(event, stream) {
 
     case 'permission':
       appendPermissionCard(event);
-      break;
-
-    case 'question':
-      appendQuestionCard(event);
       break;
 
     case 'compaction_required':
@@ -931,81 +917,6 @@ function shortPath(path) {
   return parts.length > 2 ? `.../${parts.slice(-2).join('/')}` : path;
 }
 
-/* One option per row, whatever their length, so a set of options always reads
-   as a list rather than reflowing into a line. Markdown is rendered in both the
-   question and the options. */
-function appendQuestionCard(event) {
-  const multiple = !!event.multiple;
-  const node = el('div', 'message question-card');
-  node.dataset.toolCallId = event.tool_call_id;
-  node.appendChild(el('div', 'question-head', md.render(event.question)));
-
-  const form = el('div', 'question-options');
-  const input = document.createElement('textarea');
-  input.className = 'question-input';
-  input.rows = 1;
-  input.placeholder = multiple
-    ? 'Or type your own answer...'
-    : 'Type an answer, or answer in the message box below...';
-
-  function finish(answer) {
-    if (!answer) return;
-    node.querySelector('.question-body')?.remove();
-    node.classList.add('resolved');
-    node.appendChild(el('div', 'question-answer', md.render(answer)));
-    resolveToolCall(event.tool_call_id, 'answer', answer);
-  }
-
-  const options = event.options || [];
-  const inputs = [];
-  options.forEach((option, index) => {
-    const id = `q-${event.tool_call_id}-${index}`;
-    const row = el('label', 'question-option');
-    row.htmlFor = id;
-    const control = document.createElement('input');
-    control.type = multiple ? 'checkbox' : 'radio';
-    control.name = `q-${event.tool_call_id}`;
-    control.id = id;
-    control.value = option;
-    inputs.push(control);
-    const text = el('span', 'question-option-text', md.render(option));
-    row.append(control, text);
-    // Single choice commits immediately; multiple waits for Submit.
-    if (!multiple) control.addEventListener('change', () => finish(option));
-    form.appendChild(row);
-  });
-
-  function submitTyped() {
-    finish(input.value.trim());
-  }
-
-  function submitChosen() {
-    const chosen = inputs.filter((c) => c.checked).map((c) => c.value);
-    const typed = input.value.trim();
-    if (typed) chosen.push(typed);
-    finish(chosen.join('; '));
-  }
-
-  input.addEventListener('keydown', (e) => {
-    if (e.key === 'Enter' && !e.shiftKey) {
-      e.preventDefault();
-      multiple ? submitChosen() : submitTyped();
-    }
-  });
-  input.addEventListener('input', () => autosize(input));
-
-  const body = el('div', 'question-body');
-  if (options.length) body.appendChild(form);
-  const row = el('div', 'question-entry');
-  row.append(input, button(multiple ? 'Submit' : 'Send',
-    'btn-approve', multiple ? submitChosen : submitTyped));
-  body.appendChild(row);
-  node.appendChild(body);
-
-  App.els.messages.appendChild(node);
-  autoscroll();
-  input.focus();
-}
 
 /* A paused run survives a page reload: re-render the card it stopped on. */
 function restorePending() {
@@ -1023,7 +934,6 @@ function restorePending() {
   App.els.messages = App.els.messages || document.getElementById('messages');
   App.els.scroller = App.els.scroller || document.getElementById('chat-container');
   if (event.type === 'permission') appendPermissionCard(event);
-  else if (event.type === 'question') appendQuestionCard(event);
 }
 
 /* ── Compaction ──────────────────────────────────────────────────────────── */

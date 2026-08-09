@@ -7,7 +7,7 @@ Responsibilities, in order of how badly they used to break:
    with a system prompt and nothing else and hallucinated an entire task.
 2. Drive the provider/tool cycle, persisting each step so the transcript in the
    database always matches what was actually sent.
-3. Pause cleanly for tool calls that need the user (shell approval, questions)
+3. Pause cleanly for tool calls that need the user (shell approval)
    without ever leaving an assistant `tool_calls` message unanswered.
 4. Emit a single, well-defined event stream for the UI.
 """
@@ -30,7 +30,6 @@ from agent_server.conversation import (
 from agent_server.providers import Provider, get_provider
 from agent_server.system_prompt import get_compact_prompt, session_system_prompt
 from agent_server.tools.base import ToolContext, ToolResult, truncate
-from agent_server.tools.question import format_prompt
 from agent_server import permissions
 from agent_server.tools.registry import execute_tool, get_tool, tool_schemas
 
@@ -52,7 +51,7 @@ _compaction_snoozed: set[str] = set()
 
 # ── Session status, for the tab-bar indicators ──────────────────────────────
 # "running"  the agent is working
-# "waiting"  paused on a permission prompt, question, or compaction confirm
+# "waiting"  paused on a permission prompt or a compaction confirm
 # "idle"     nothing in flight
 _status: dict[str, str] = {}
 # Sessions that finished or started waiting since the user last looked at them.
@@ -341,7 +340,7 @@ async def run(session_id: str) -> AsyncIterator[dict]:
             yield {"type": "turn_start", "user_message_id": last_user["id"]}
 
         async for event in _loop(session, provider, ctx, abort):
-            if event["type"] in ("permission", "question", "compaction_required"):
+            if event["type"] in ("permission", "compaction_required"):
                 outcome = "waiting"
             elif event["type"] == "error":
                 outcome = "error"
@@ -376,7 +375,7 @@ async def _loop(
     # message whose tool_calls have no matching results, which the API rejects.
     async for event in _drain_pending(session, ctx):
         yield event
-        if event["type"] in ("permission", "question"):
+        if event["type"] == "permission":
             return
 
     # Frozen when the session first ran, so the cached prefix survives anything
@@ -537,7 +536,7 @@ async def _loop(
         paused = False
         async for event in _drain_pending(session, ctx):
             yield event
-            if event["type"] in ("permission", "question"):
+            if event["type"] == "permission":
                 paused = True
         if paused:
             return
@@ -546,7 +545,7 @@ async def _loop(
 async def _drain_pending(session: dict, ctx: ToolContext) -> AsyncIterator[dict]:
     """Execute every unanswered tool call on the latest assistant turn.
 
-    Yields a `permission` or `question` event and stops as soon as one needs the
+    Yields a `permission` event and stops as soon as one needs the
     user. The remaining calls stay pending in the database and are picked up on
     the next call, so multi-tool rounds resume correctly.
     """
@@ -585,19 +584,6 @@ async def _drain_pending(session: dict, ctx: ToolContext) -> AsyncIterator[dict]
         name = tool_call_name(call)
         args = parse_arguments(call)
         tool = get_tool(name)
-
-        if tool is not None and tool.pause == "question":
-            yield {
-                "type": "question",
-                "tool_call_id": call["id"],
-                "question": args.get("question", ""),
-                "options": args.get("options") or [],
-                "multiple": bool(args.get("multiple")),
-                "prompt": format_prompt(
-                    args.get("question", ""), args.get("options"), bool(args.get("multiple"))
-                ),
-            }
-            return
 
         if call["id"] not in _approved_calls:
             prompt = await permissions.check(
@@ -713,29 +699,6 @@ async def _record(session_id: str, call: dict, result: ToolResult, duration_ms: 
     )
 
 
-async def pending_question(session_id: str) -> dict | None:
-    """The question tool call waiting on the user, if there is one."""
-    rows = await db.get_messages(session_id)
-    _, pending = pending_tool_calls(rows)
-    for call in pending:
-        if tool_call_name(call) == "question":
-            return call
-    return None
-
-
-async def answer_pending_question(session_id: str, text: str) -> bool:
-    """Treat an ordinary chat message as the answer to an open question.
-
-    Without this the question stays unanswered, so the next run finds it still
-    pending and asks it again: the user sees their message, then a duplicate of
-    the question below it, while the original card sits there unresolved.
-    """
-    call = await pending_question(session_id)
-    if call is None:
-        return False
-    return await resolve_pending(session_id, call["id"], "answer", text)
-
-
 async def resolve_pending(
     session_id: str,
     tool_call_id: str,
@@ -781,8 +744,6 @@ async def resolve_pending(
             is_error=True,
             title=f"{name} (rejected)",
         )
-    elif action == "answer":
-        result = ToolResult(output=value or "(no answer given)", title="answered")
     else:
         return False
 

@@ -7,10 +7,13 @@ import pytest
 from agent_server import database as db
 from agent_server.system_prompt import (
     _SHIPPED_HASHES,
+    COMPACTION,
     DEFAULT_PROMPT,
     MINIMAL_PROMPT,
     PROTECTED_PROMPT,
+    SYSTEM,
     build_system_prompt,
+    get_compact_prompt,
     list_prompt_names,
     migrate_prompts,
     prompt_body,
@@ -136,3 +139,52 @@ async def test_refresh_does_not_touch_prompts_the_user_created(fresh):
     await db.save_prompt("deepseek-minimal", "Mine.")
     await migrate_prompts()
     assert await prompt_body("deepseek-minimal") == "Mine."
+
+
+async def test_summarising_prompts_are_their_own_kind(fresh):
+    """Both kinds need a 'default', so the key is (kind, name), not name."""
+    await migrate_prompts()
+    await db.save_prompt("default", "SYSTEM TEXT", SYSTEM)
+    await db.save_prompt("default", "SUMMARY TEXT", COMPACTION)
+    assert await prompt_body("default", SYSTEM) == "SYSTEM TEXT"
+    assert await prompt_body("default", COMPACTION) == "SUMMARY TEXT"
+
+
+async def test_migration_moves_the_shared_compact_setting_into_a_prompt(fresh):
+    await db.set_setting("compact_prompt", "My summariser.")
+    await migrate_prompts()
+    assert await prompt_body("default", COMPACTION) == "My summariser."
+    assert await db.get_setting("compact_prompt", "") == ""
+
+
+async def test_a_session_summarises_with_its_own_prompt(fresh, tmp_path):
+    await migrate_prompts()
+    await db.save_prompt("terse", "Five bullets.", COMPACTION)
+    s = await db.create_session(
+        name="s", project_dir=str(tmp_path), compact_profile="terse"
+    )
+    assert await get_compact_prompt(await db.get_session(s["id"])) == "Five bullets."
+
+
+async def test_a_session_falls_back_when_its_summariser_is_deleted(fresh, tmp_path):
+    await migrate_prompts()
+    await db.save_prompt("terse", "Five bullets.", COMPACTION)
+    s = await db.create_session(
+        name="s", project_dir=str(tmp_path), compact_profile="terse"
+    )
+    await db.delete_prompt("terse", COMPACTION)
+    body = await get_compact_prompt(await db.get_session(s["id"]))
+    assert body == await prompt_body(PROTECTED_PROMPT, COMPACTION)
+
+
+async def test_the_two_kinds_are_chosen_independently(fresh, tmp_path):
+    await migrate_prompts()
+    await db.save_prompt("strict", "Be strict.", SYSTEM)
+    await db.save_prompt("terse", "Five bullets.", COMPACTION)
+    s = await db.create_session(
+        name="s", project_dir=str(tmp_path),
+        prompt_profile="strict", compact_profile="terse",
+    )
+    row = await db.get_session(s["id"])
+    assert (await build_system_prompt(row["prompt_profile"], str(tmp_path))).startswith("Be strict.")
+    assert await get_compact_prompt(row) == "Five bullets."

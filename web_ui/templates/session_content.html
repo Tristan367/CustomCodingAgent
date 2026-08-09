@@ -83,12 +83,17 @@
             <textarea id="compact-extra" rows="3"
                       placeholder="e.g. don't forget the deployment steps and the API key rotation plan"></textarea>
         </label>
+        {# The preset picker sits in the open: switching summariser is a decision
+           made at this moment. Editing the text is the rarer case, so it stays
+           folded away. A preset sticks to the session; an edit is for this run. #}
+        <label class="field-label compact-preset-row" id="compact-preset-row" hidden>
+            Summarising prompt
+            <select id="compact-preset" onchange="switchCompactPreset(this.value)"></select>
+        </label>
         <details class="tool-details" id="compact-prompt-box">
             <summary class="tool-summary">
-                <span class="tool-label">Summariser prompt &mdash; edit for this compaction only</span>
+                <span class="tool-label">Edit the prompt for this compaction only</span>
             </summary>
-            {# Changes here apply to this run and are not saved, so the prompt on
-               the Prompts page stays as it is. #}
             <textarea id="compact-prompt" rows="12" spellcheck="false"></textarea>
             <button type="button" class="btn-ghost" onclick="resetCompactPrompt()">Reset to saved prompt</button>
         </details>

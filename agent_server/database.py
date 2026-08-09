@@ -70,9 +70,11 @@ CREATE TABLE IF NOT EXISTS session_write_dirs (
 );
 
 CREATE TABLE IF NOT EXISTS prompts (
-    name TEXT PRIMARY KEY,
+    kind TEXT NOT NULL DEFAULT 'system',
+    name TEXT NOT NULL,
     body TEXT NOT NULL,
-    updated_at TEXT NOT NULL
+    updated_at TEXT NOT NULL,
+    PRIMARY KEY (kind, name)
 );
 
 CREATE TABLE IF NOT EXISTS settings (
@@ -101,6 +103,10 @@ MIGRATIONS: list[tuple[str, str, str]] = [
     # shared prompt renders to cannot tell a customised session from one that
     # simply predates an earlier edit.
     ("sessions", "prompt_custom", "INTEGER DEFAULT 0"),
+    # Which summarising prompt this session compacts with. Independent of the
+    # system prompt: the instructions for writing a summary have nothing to do
+    # with the instructions for doing the work.
+    ("sessions", "compact_profile", "TEXT DEFAULT 'default'"),
     # A new shared prompt waiting to be adopted. Applied at the next compaction
     # rather than immediately: compaction rewrites the conversation anyway, so
     # the prefix is already a miss at that point and the swap is close to free.
@@ -149,7 +155,29 @@ async def init_db():
         existing = {r[1] for r in await cur.fetchall()}
         if column not in existing:
             await db.execute(f"ALTER TABLE {table} ADD COLUMN {column} {decl}")
+    await _rekey_prompts(db)
     await db.commit()
+
+
+async def _rekey_prompts(db):
+    """Give prompts a (kind, name) key so both kinds can have a 'default'.
+
+    The table shipped keyed on name alone, when system prompts were the only
+    kind. Summarising prompts need their own 'default', and SQLite cannot alter
+    a primary key, so the table is rebuilt once.
+    """
+    cur = await db.execute("PRAGMA table_info(prompts)")
+    cols = {r[1] for r in await cur.fetchall()}
+    if "kind" in cols:
+        return
+    await db.execute("ALTER TABLE prompts RENAME TO prompts_old")
+    await db.executescript(SCHEMA)
+    await db.execute(
+        "INSERT INTO prompts (kind, name, body, updated_at)"
+        " SELECT 'system', name, body, updated_at FROM prompts_old"
+    )
+    await db.execute("DROP TABLE prompts_old")
+
 
 
 async def _fetchone(sql: str, params: tuple = ()) -> dict | None:
@@ -177,7 +205,7 @@ async def _execute(sql: str, params: tuple = ()) -> int:
 
 SESSION_FIELDS = {
     "name", "project_dir", "provider", "model", "thinking_effort",
-    "prompt_profile", "bash_auto_approve", "is_archived", "compact_threshold",
+    "prompt_profile", "compact_profile", "bash_auto_approve", "is_archived", "compact_threshold",
     "auto_compact", "system_prompt", "prompt_custom", "pending_system_prompt",
 }
 
@@ -188,14 +216,17 @@ async def create_session(
     provider: str = "deepseek",
     model: str = "deepseek-v4-pro",
     prompt_profile: str = "default",
+    compact_profile: str = "default",
     thinking_effort: str | None = None,
 ) -> dict:
     sid = uuid.uuid4().hex[:8]
     now = _now()
     await _execute(
         "INSERT INTO sessions (id, name, project_dir, provider, model, prompt_profile,"
-        " thinking_effort, created_at, last_active_at) VALUES (?,?,?,?,?,?,?,?,?)",
-        (sid, name, project_dir, provider, model, prompt_profile, thinking_effort, now, now),
+        " compact_profile, thinking_effort, created_at, last_active_at)"
+        " VALUES (?,?,?,?,?,?,?,?,?,?)",
+        (sid, name, project_dir, provider, model, prompt_profile, compact_profile,
+         thinking_effort, now, now),
     )
     session = await get_session(sid)
     assert session is not None
@@ -579,26 +610,33 @@ async def delete_setting(key: str):
 # ── Prompts ─────────────────────────────────────────────────────────────────
 
 
-async def list_prompts() -> list[dict]:
-    return await _fetchall("SELECT * FROM prompts ORDER BY name = 'default' DESC, name")
+async def list_prompts(kind: str = "") -> list[dict]:
+    sql = "SELECT * FROM prompts"
+    params: tuple = ()
+    if kind:
+        sql += " WHERE kind = ?"
+        params = (kind,)
+    return await _fetchall(sql + " ORDER BY kind, name = 'default' DESC, name", params)
 
 
-async def get_prompt(name: str) -> dict | None:
-    return await _fetchone("SELECT * FROM prompts WHERE name = ?", (name,))
+async def get_prompt(name: str, kind: str = "system") -> dict | None:
+    return await _fetchone(
+        "SELECT * FROM prompts WHERE kind = ? AND name = ?", (kind, name)
+    )
 
 
-async def save_prompt(name: str, body: str):
+async def save_prompt(name: str, body: str, kind: str = "system"):
     # Textareas submit CRLF per the HTML spec; storing that would make an
     # untouched round-trip through the editor look like an edit.
     body = body.replace("\r\n", "\n").strip()
     await _execute(
-        "INSERT INTO prompts (name, body, updated_at) VALUES (?,?,?)"
-        " ON CONFLICT(name) DO UPDATE SET body = excluded.body,"
+        "INSERT INTO prompts (kind, name, body, updated_at) VALUES (?,?,?,?)"
+        " ON CONFLICT(kind, name) DO UPDATE SET body = excluded.body,"
         " updated_at = excluded.updated_at",
-        (name, body, _now()),
+        (kind, name, body, _now()),
     )
 
 
-async def delete_prompt(name: str):
-    await _execute("DELETE FROM prompts WHERE name = ?", (name,))
+async def delete_prompt(name: str, kind: str = "system"):
+    await _execute("DELETE FROM prompts WHERE kind = ? AND name = ?", (kind, name))
 

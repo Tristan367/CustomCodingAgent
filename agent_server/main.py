@@ -35,8 +35,9 @@ from agent_server.providers import list_providers
 from agent_server.providers.deepseek import invalidate_key_cache
 from agent_server.routes import chat, sessions
 from agent_server.system_prompt import (
-    COMPACT_PROMPT_DEFAULT,
+    COMPACTION,
     PROTECTED_PROMPT,
+    SYSTEM,
     build_system_prompt,
     list_prompt_names,
     migrate_prompts,
@@ -216,6 +217,7 @@ async def _session_context(session: dict) -> dict:
         "compactions": await db.get_compactions(session["id"]),
         "models": MODELS,
         "profiles": await list_prompt_names(),
+        "compact_profiles": await list_prompt_names(COMPACTION),
         "efforts": REASONING_EFFORTS,
         "usage": usage,
         "should_compact": await should_offer_compaction(session["id"]),
@@ -263,6 +265,7 @@ async def _home_context(error: str = "") -> dict:
         "providers": list_providers(),
         "models": MODELS,
         "profiles": await list_prompt_names(),
+        "compact_profiles": await list_prompt_names(COMPACTION),
         "default_model": DEFAULT_MODEL,
         "error": error,
     }
@@ -404,6 +407,7 @@ async def create_session_form(
     project_dir: str = Form(...),
     model: str = Form(DEFAULT_MODEL),
     prompt_profile: str = Form("default"),
+    compact_profile: str = Form("default"),
     thinking_effort: str = Form(""),
 ):
     directory = Path(project_dir).expanduser()
@@ -417,7 +421,37 @@ async def create_session_form(
         project_dir=str(directory.resolve()),
         model=model,
         prompt_profile=prompt_profile,
+        compact_profile=compact_profile,
         thinking_effort=thinking_effort or None,
+    )
+    return RedirectResponse(f"/sessions/{session['id']}", status_code=303)
+
+
+@app.post("/_quick_chat")
+async def quick_chat(request: Request):
+    """A throwaway session for a passing question.
+
+    Everything is defaulted so there is nothing to fill in. The working
+    directory is a fresh dated folder rather than the home directory or /tmp:
+    the system prompt snapshots a listing of it, and pointing that at a busy
+    directory buries the prompt in filenames that have nothing to do with the
+    question being asked.
+    """
+    stamp = datetime.now().strftime("%-m-%-d-%Y")
+    root = Path.home() / ".codeagent" / "scratch"
+    label, scratch, n = stamp, root / stamp, 2
+    while scratch.exists():
+        label = f"{stamp} ({n})"
+        scratch = root / f"{stamp}-{n}"
+        n += 1
+    scratch.mkdir(parents=True)
+
+    session = await db.create_session(
+        name=f"temp session {label}",
+        project_dir=str(scratch),
+        model=DEFAULT_MODEL,
+        prompt_profile=PROTECTED_PROMPT,
+        compact_profile=PROTECTED_PROMPT,
     )
     return RedirectResponse(f"/sessions/{session['id']}", status_code=303)
 
@@ -431,62 +465,60 @@ async def prompts_page(request: Request, selected: str = ""):
 
 @app.post("/_save_prompts")
 async def save_prompts(request: Request):
-    """Save one prompt's text, plus the compaction prompt."""
+    """Save one prompt's text."""
     form = await request.form()
-    name = str(form.get("name", "")).strip()
+    kind, _, name = str(form.get("name", "")).partition(":")
+    name = name.strip()
     body = str(form.get("body", "")).strip()
 
-    compact = str(form.get("compact_prompt", "")).strip()
-    await db.set_setting(
-        "compact_prompt", "" if compact == COMPACT_PROMPT_DEFAULT.strip() else compact
-    )
-
     moved = 0
-    if name and body:
-        await db.save_prompt(name, body)
-        moved = await _propagate(name)
+    if name and body and kind in (SYSTEM, COMPACTION):
+        await db.save_prompt(name, body, kind)
+        # A summarising prompt is only read at compaction time, so an edit is
+        # live for every session using it -- nothing to queue.
+        if kind == SYSTEM:
+            moved = await _propagate(name)
 
     return templates.TemplateResponse(
         request=request,
         name="prompts.html",
-        context=await _prompts_context(selected=name, saved=True, moved=moved),
+        context=await _prompts_context(selected=f"{kind}:{name}", saved=True, moved=moved),
     )
 
 
 @app.post("/_new_prompt")
 async def new_prompt(request: Request):
     form = await request.form()
+    kind = str(form.get("kind", SYSTEM))
     name = _slug(str(form.get("new_name", "")))
-    if not name:
+    if not name or kind not in (SYSTEM, COMPACTION):
         return RedirectResponse("/prompts", status_code=303)
-    if not await db.get_prompt(name):
-        # Start from the default rather than an empty box: a blank system prompt
-        # is a worse starting point than one you can edit down.
-        await db.save_prompt(name, await _default_body())
-    return RedirectResponse(f"/prompts?selected={name}", status_code=303)
+    if not await db.get_prompt(name, kind):
+        # Start from the default rather than an empty box: a blank prompt is a
+        # worse starting point than one you can edit down.
+        row = await db.get_prompt(PROTECTED_PROMPT, kind)
+        await db.save_prompt(name, row["body"] if row else "", kind)
+    return RedirectResponse(f"/prompts?selected={kind}:{name}", status_code=303)
 
 
 @app.post("/_delete_prompt")
 async def delete_prompt(request: Request):
     form = await request.form()
-    name = str(form.get("name", "")).strip()
-    if name and name != PROTECTED_PROMPT:
-        await db.delete_prompt(name)
-        # Sessions pointing at it fall back to the default; their own frozen
-        # text is untouched, so nothing in flight changes.
+    kind, _, name = str(form.get("name", "")).partition(":")
+    name = name.strip()
+    if name and name != PROTECTED_PROMPT and kind in (SYSTEM, COMPACTION):
+        await db.delete_prompt(name, kind)
+        # Sessions pointing at it fall back to the default. A system prompt's
+        # frozen text is untouched, so nothing in flight changes.
+        field = "prompt_profile" if kind == SYSTEM else "compact_profile"
         for row in await db.list_sessions():
-            if row.get("prompt_profile") == name:
-                await db.update_session(row["id"], prompt_profile=PROTECTED_PROMPT)
+            if row.get(field) == name:
+                await db.update_session(row["id"], **{field: PROTECTED_PROMPT})
     return RedirectResponse("/prompts", status_code=303)
 
 
 def _slug(raw: str) -> str:
     return re.sub(r"[^a-z0-9-]+", "-", raw.strip().lower()).strip("-")[:40]
-
-
-async def _default_body() -> str:
-    row = await db.get_prompt(PROTECTED_PROMPT)
-    return row["body"] if row else ""
 
 
 async def _propagate(name: str) -> int:
@@ -518,19 +550,24 @@ async def _propagate(name: str) -> int:
 async def _prompts_context(
     selected: str = "", saved: bool = False, moved: int = 0
 ) -> dict:
+    """Both kinds share one editor; a key is "kind:name" so they cannot collide."""
     prompts = await db.list_prompts()
-    names = [p["name"] for p in prompts]
-    if selected not in names:
-        selected = names[0] if names else PROTECTED_PROMPT
-    bodies = {p["name"]: p["body"] for p in prompts}
+    bodies = {f"{p['kind']}:{p['name']}": p["body"] for p in prompts}
+    groups = {
+        "System prompts": [f"{SYSTEM}:{p['name']}" for p in prompts if p["kind"] == SYSTEM],
+        "Summarising prompts": [
+            f"{COMPACTION}:{p['name']}" for p in prompts if p["kind"] == COMPACTION
+        ],
+    }
+    if selected not in bodies:
+        selected = f"{SYSTEM}:{PROTECTED_PROMPT}"
     schemas = [t.schema() for t in TOOLS.values()]
     return {
-        "prompts": names,
+        "groups": groups,
         "bodies": bodies,
         "selected": selected,
         "body": bodies.get(selected, ""),
         "protected": PROTECTED_PROMPT,
-        "compact_prompt": await db.get_setting("compact_prompt", "") or COMPACT_PROMPT_DEFAULT,
         "tools": [
             {
                 "name": t.name,

@@ -55,3 +55,7 @@ class MessageResponse(BaseModel):
     token_count: Optional[int] = None
     created_at: str
     is_compacted: int = 0
+
+
+class CompactProfileRequest(BaseModel):
+    name: str

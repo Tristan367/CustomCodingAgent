@@ -856,6 +856,14 @@ select { cursor: pointer; }
 .prompt-editor { margin-bottom: 6px; }
 .prompt-textarea { width: 100%; font-family: var(--mono); font-size: 12px; line-height: 1.55; resize: vertical; }
 
+.quick-row { display: flex; align-items: center; justify-content: space-between; gap: 20px; }
+.quick-row h2 { margin-bottom: 4px; }
+.quick-row .hint { margin: 0; max-width: 52ch; }
+.quick-row form { flex: 0 0 auto; }
+
+.compact-preset-row { display: block; margin-bottom: 10px; }
+.compact-preset-row select { display: block; width: 100%; margin-top: 4px; }
+
 .prompt-bar { display: flex; gap: 8px; align-items: center; margin-bottom: 8px; }
 .prompt-bar select { flex: 0 0 220px; }
 .prompt-bar .btn-danger { margin-left: auto; }

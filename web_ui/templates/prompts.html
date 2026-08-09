@@ -13,39 +13,40 @@
     </div>
     {% endif %}
     <p class="hint">
-        Each prompt is a complete system prompt; a session uses one. Editing a prompt
-        reaches every session using it at that session's next compaction, which is when
-        its prefix is rebuilt anyway. Sessions with a prompt of their own are left alone.
+        A <strong>system prompt</strong> tells the agent how to work; a
+        <strong>summarising prompt</strong> is used when a long conversation is compacted.
+        A session picks one of each, independently. Editing a system prompt reaches the
+        sessions using it at their next compaction, which is when the prefix is rebuilt
+        anyway; sessions with a prompt of their own are left alone.
     </p>
 
     <form method="POST" action="/_save_prompts" class="stack" id="prompt-form">
         <div class="prompt-bar">
             <select id="prompt-picker" name="name" aria-label="Prompt">
-                {% for p in prompts %}
-                <option value="{{ p }}" {% if p == selected %}selected{% endif %}>{{ p }}</option>
+                {% for label, keys in groups.items() %}
+                {% if keys %}
+                <optgroup label="{{ label }}">
+                    {% for key in keys %}
+                    <option value="{{ key }}" {% if key == selected %}selected{% endif %}>
+                        {{ key.split(':')[1] }}
+                    </option>
+                    {% endfor %}
+                </optgroup>
+                {% endif %}
                 {% endfor %}
             </select>
             <button type="submit" class="btn-primary">Save</button>
             <button type="button" class="btn-secondary" onclick="newPrompt()">New</button>
             <button type="button" class="btn-danger" onclick="deletePrompt()"
-                    id="delete-prompt" {% if selected == protected %}disabled
-                    title="The default prompt cannot be deleted"{% endif %}>Delete</button>
+                    id="delete-prompt">Delete</button>
         </div>
         <textarea name="body" id="prompt-body" rows="26" class="prompt-textarea"
                   spellcheck="false">{{ body }}</textarea>
     </form>
 
-    <form method="POST" action="/_save_prompts" class="stack">
-        <input type="hidden" name="name" value="">
-        <div class="prompt-editor">
-            <h3>Compaction prompt <span class="hint">used when summarising a long conversation</span></h3>
-            <textarea name="compact_prompt" rows="10" class="prompt-textarea" spellcheck="false">{{ compact_prompt }}</textarea>
-        </div>
-        <button type="submit" class="btn-primary">Save compaction prompt</button>
-    </form>
-
     <form method="POST" action="/_new_prompt" id="new-prompt-form" hidden>
         <input name="new_name" id="new-prompt-name">
+        <input name="kind" id="new-prompt-kind">
     </form>
     <form method="POST" action="/_delete_prompt" id="delete-prompt-form" hidden>
         <input name="name" id="delete-prompt-name">
@@ -57,6 +58,18 @@
         const picker = document.getElementById('prompt-picker');
         const bodyBox = document.getElementById('prompt-body');
         let lastSaved = bodyBox.value;
+        let pickerPrevious = picker.value;
+
+        const kindOf = (key) => key.split(':')[0];
+        const nameOf = (key) => key.split(':')[1];
+
+        function syncDelete() {
+            const del = document.getElementById('delete-prompt');
+            del.disabled = nameOf(picker.value) === PROTECTED_PROMPT;
+            del.title = del.disabled
+                ? 'The default cannot be deleted -- sessions fall back to it'
+                : '';
+        }
 
         picker.addEventListener('change', () => {
             if (bodyBox.value !== lastSaved &&
@@ -67,27 +80,30 @@
             bodyBox.value = PROMPT_BODIES[picker.value] ?? '';
             lastSaved = bodyBox.value;
             pickerPrevious = picker.value;
-            const del = document.getElementById('delete-prompt');
-            del.disabled = picker.value === PROTECTED_PROMPT;
-            del.title = del.disabled ? 'The default prompt cannot be deleted' : '';
+            syncDelete();
         });
-        let pickerPrevious = picker.value;
 
+        /* New prompts are of whichever kind is on screen, seeded from that
+           kind's default -- a blank box is a worse start than one to edit down. */
         function newPrompt() {
-            const name = prompt('Name for the new prompt:');
+            const kind = kindOf(picker.value);
+            const label = kind === 'compaction' ? 'summarising prompt' : 'system prompt';
+            const name = prompt(`Name for the new ${label}:`);
             if (!name) return;
             document.getElementById('new-prompt-name').value = name;
+            document.getElementById('new-prompt-kind').value = kind;
             document.getElementById('new-prompt-form').submit();
         }
 
         function deletePrompt() {
-            if (picker.value === PROTECTED_PROMPT) return;
-            if (!confirm(`Delete the "${picker.value}" prompt? Sessions using it fall back to the default.`)) return;
+            if (nameOf(picker.value) === PROTECTED_PROMPT) return;
+            if (!confirm(`Delete "${nameOf(picker.value)}"? Sessions using it fall back to the default.`)) return;
             document.getElementById('delete-prompt-name').value = picker.value;
             document.getElementById('delete-prompt-form').submit();
         }
 
         document.getElementById('prompt-form').addEventListener('submit', () => { lastSaved = bodyBox.value; });
+        syncDelete();
     </script>
 
 <h2>Tools</h2>

@@ -62,7 +62,12 @@ code locations as `path/to/file.py:42` so they can be clicked.
 
 Say when you disagree, and say when you are unsure. Agreeing with a bad plan costs \
 more than the disagreement would. If an instruction seems wrong, ask -- but do not \
-quietly substitute your own judgement for it."""
+quietly substitute your own judgement for it.
+
+Some messages are dictated, so a word that makes no sense in context may be a \
+homophone of the intended one -- "sea sharp" for "C#", "clip board" for \
+"clipboard". Read through the sound rather than the spelling. If the meaning is \
+genuinely unclear, ask instead of guessing."""
 
 MINIMAL_PROMPT = """You are a coding agent working in the user's local codebase.
 
@@ -73,6 +78,19 @@ are editing. Never say something works unless you ran it and read the output.
 
 Issue independent tool calls in the same message. You cannot see images -- use \
 `vision` on any image path. Background any server you start; port 8080 is this app."""
+
+COMPACT_PROMPT_DEFAULT = """Summarise this conversation so another engineer could \
+pick the work up cold.
+
+Preserve: what the user asked for, decisions made and why, every file created or \
+modified with its path, key code and APIs discovered, commands that were run and \
+what they returned, errors hit and how they were resolved, and what still remains \
+to be done.
+
+Drop: tool output that no longer matters, exploration that led nowhere, and \
+pleasantries. Write plain prose and be specific -- names, paths, and line numbers, \
+not vague descriptions."""
+
 
 # Seeded only into a database that has no prompts yet. An existing install keeps
 # whatever is already stored, including prompts the user wrote.
@@ -86,8 +104,12 @@ STARTER_PROMPTS: dict[str, str] = {
 PROTECTED_PROMPT = "default"
 
 
-async def list_prompt_names() -> list[str]:
-    return [row["name"] for row in await db.list_prompts()]
+SYSTEM = "system"
+COMPACTION = "compaction"
+
+
+async def list_prompt_names(kind: str = SYSTEM) -> list[str]:
+    return [row["name"] for row in await db.list_prompts(kind)]
 
 
 async def migrate_prompts():
@@ -108,6 +130,15 @@ async def migrate_prompts():
         return
 
     settings = await db.get_all_settings()
+
+    # The summarising prompt was a single setting shared by every session.
+    # It becomes the default of its own kind, so sessions can differ.
+    saved_compact = (settings.get("compact_prompt") or "").strip()
+    await db.save_prompt(
+        PROTECTED_PROMPT, saved_compact or COMPACT_PROMPT_DEFAULT.strip(), COMPACTION
+    )
+    await db.delete_setting("compact_prompt")
+
     for name, starter in STARTER_PROMPTS.items():
         stored = (settings.get(f"profile_{name}") or "").strip()
         keep = stored and not _is_shipped(stored)
@@ -144,6 +175,10 @@ async def _refresh_untouched_builtins():
     still matching something this app shipped was not written by the user and is
     safe to move forward; anything else is theirs and is left alone.
     """
+    row = await db.get_prompt(PROTECTED_PROMPT, COMPACTION)
+    if row is None:
+        await db.save_prompt(PROTECTED_PROMPT, COMPACT_PROMPT_DEFAULT.strip(), COMPACTION)
+
     for name, starter in STARTER_PROMPTS.items():
         row = await db.get_prompt(name)
         if row is None:
@@ -159,12 +194,14 @@ def _is_shipped(body: str) -> bool:
 
 
 
-async def prompt_body(name: str) -> str:
+async def prompt_body(name: str, kind: str = SYSTEM) -> str:
     """The text of a named prompt, falling back to `default` if it is gone."""
-    row = await db.get_prompt(name)
+    row = await db.get_prompt(name, kind)
     if row is None:
-        row = await db.get_prompt(PROTECTED_PROMPT)
-    return row["body"] if row else DEFAULT_PROMPT
+        row = await db.get_prompt(PROTECTED_PROMPT, kind)
+    if row:
+        return row["body"]
+    return COMPACT_PROMPT_DEFAULT if kind == COMPACTION else DEFAULT_PROMPT
 
 
 
@@ -272,18 +309,7 @@ def _top_level(project_dir: str, limit: int = 40) -> str:
     return ", ".join(shown) + suffix
 
 
-COMPACT_PROMPT_DEFAULT = """Summarise this conversation so another engineer could \
-pick the work up cold.
-
-Preserve: what the user asked for, decisions made and why, every file created or \
-modified with its path, key code and APIs discovered, commands that were run and \
-what they returned, errors hit and how they were resolved, and what still remains \
-to be done.
-
-Drop: tool output that no longer matters, exploration that led nowhere, and \
-pleasantries. Write plain prose and be specific -- names, paths, and line numbers, \
-not vague descriptions."""
-
-
-async def get_compact_prompt() -> str:
-    return await db.get_setting("compact_prompt", "") or COMPACT_PROMPT_DEFAULT
+async def get_compact_prompt(session: dict | None = None) -> str:
+    """The summarising prompt for a session, or the default when none is given."""
+    name = (session or {}).get("compact_profile") or PROTECTED_PROMPT
+    return await prompt_body(name, COMPACTION)

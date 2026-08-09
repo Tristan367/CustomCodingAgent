@@ -13,9 +13,15 @@ from agent_server import permissions
 from agent_server import stt as stt_service
 from agent_server.compaction import compact_session_events, should_offer_compaction
 from agent_server.config import MIN_COMPACT_THRESHOLD, MODELS_BY_ID, UPLOAD_DIR
-from agent_server.models import ChatRequest, ResolveRequest
+from agent_server.models import ChatRequest, CompactProfileRequest, ResolveRequest
 from agent_server import vision as vision_engine
-from agent_server.system_prompt import get_compact_prompt
+from agent_server.system_prompt import (
+    COMPACTION,
+    PROTECTED_PROMPT,
+    get_compact_prompt,
+    list_prompt_names,
+    prompt_body,
+)
 
 router = APIRouter(prefix="/api", tags=["chat"])
 
@@ -264,10 +270,29 @@ async def set_auto_approve(session_id: str, payload: dict = Body(default={})):
     return {"ok": True, "enabled": enabled}
 
 
-@router.get("/compact-prompt")
-async def compact_prompt():
-    """The prompt the summariser will use, so it can be seen and adjusted."""
-    return {"prompt": await get_compact_prompt()}
+@router.get("/sessions/{session_id}/compact-prompt")
+async def compact_prompt(session_id: str):
+    """The summarising prompt this session uses, plus the presets to switch to."""
+    session = await _require_session(session_id)
+    return {
+        "prompt": await get_compact_prompt(session),
+        "selected": session.get("compact_profile") or PROTECTED_PROMPT,
+        "presets": await list_prompt_names(COMPACTION),
+    }
+
+
+@router.post("/sessions/{session_id}/compact-profile")
+async def set_compact_profile(session_id: str, body: CompactProfileRequest):
+    """Switch which summarising prompt this session uses, and keep it switched.
+
+    Editing the text in the modal is for one run; choosing a preset is a
+    setting, so it holds until it is changed again.
+    """
+    await _require_session(session_id)
+    if body.name not in await list_prompt_names(COMPACTION):
+        raise HTTPException(400, f"Unknown summarising prompt: {body.name}")
+    await db.update_session(session_id, compact_profile=body.name)
+    return {"ok": True, "prompt": await prompt_body(body.name, COMPACTION)}
 
 
 @router.post("/sessions/{session_id}/compact")

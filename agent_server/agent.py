@@ -421,7 +421,7 @@ async def _loop(
                     "threshold": usage["threshold"],
                     "max_context": usage["max_context"],
                     "cost": round(usage["cost"], 4),
-                    "instructions": await get_compact_prompt(),
+                    "instructions": await get_compact_prompt(session),
                 }
                 return
 

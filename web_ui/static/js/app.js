@@ -998,6 +998,24 @@ async function confirmCompaction() {
   if (!resume) refreshMeta();
 }
 
+/* A preset is a setting on the session, not a one-off: it holds until it is
+   changed again. The text box below stays per-run. */
+async function switchCompactPreset(name) {
+  const box = document.getElementById('compact-prompt');
+  const body = new FormData();
+  const resp = await fetch(`/api/sessions/${App.sessionId}/compact-profile`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ name }),
+  }).then((r) => r.json()).catch(() => null);
+  if (!resp || !resp.ok) {
+    appendNotice('error', 'Could not switch the summarising prompt.');
+    return;
+  }
+  box.dataset.saved = resp.prompt || '';
+  box.value = resp.prompt || '';
+}
+
 function resetCompactPrompt() {
   const box = document.getElementById('compact-prompt');
   if (box) box.value = box.dataset.saved || '';
@@ -1015,14 +1033,23 @@ async function saveAutoCompact(enabled) {
 async function loadCompactPrompt(known) {
   const box = document.getElementById('compact-prompt');
   if (!box) return;
-  let text = known;
-  if (!text) {
-    text = await fetch('/api/compact-prompt')
-      .then((r) => r.json()).then((d) => d.prompt)
-      .catch(() => '');
+  const data = await fetch(`/api/sessions/${App.sessionId}/compact-prompt`)
+    .then((r) => r.json())
+    .catch(() => ({ prompt: '', presets: [], selected: 'default' }));
+  const text = known || data.prompt || '';
+
+  const picker = document.getElementById('compact-preset');
+  if (picker) {
+    picker.innerHTML = '';
+    (data.presets || []).forEach((name) => {
+      picker.appendChild(new Option(name, name, false, name === data.selected));
+    });
+    // Nothing to switch between until a second one exists.
+    const row = document.getElementById('compact-preset-row');
+    if (row) row.hidden = (data.presets || []).length < 2;
   }
-  box.dataset.saved = text || '';
-  box.value = text || '';
+  box.dataset.saved = text;
+  box.value = text;
   const auto = document.getElementById('compact-auto');
   const meta = document.getElementById('session-meta');
   if (auto && meta) auto.checked = meta.dataset.autoCompact === '1';

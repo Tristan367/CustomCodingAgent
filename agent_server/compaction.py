@@ -167,7 +167,7 @@ async def compact_session_events(
         if not provider.has_credentials():
             yield fail("No API key configured.")
             return
-        instructions = prompt_override.strip() or await get_compact_prompt()
+        instructions = prompt_override.strip() or await get_compact_prompt(session)
         if extra_instructions.strip():
             instructions += f"\n\nAdditional instructions for this summary:\n{extra_instructions.strip()}"
         summary = ""

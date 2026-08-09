@@ -16,6 +16,22 @@
         </p>
     </section>
 
+    <section class="panel quick-panel">
+        <div class="quick-row">
+            <div>
+                <h2>Quick chat</h2>
+                <p class="hint">
+                    A throwaway session for a question, with the defaults and a scratch
+                    directory. It is an ordinary session -- it stays in the list, and you
+                    can reopen or rename it like any other.
+                </p>
+            </div>
+            <form method="POST" action="/_quick_chat">
+                <button type="submit" class="btn-primary">Start quick chat</button>
+            </form>
+        </div>
+    </section>
+
     <section class="panel">
         <h2>New session</h2>
         <form method="POST" action="/_create_session" class="stack">
@@ -39,6 +55,13 @@
                 <label>Prompt
                     <select name="prompt_profile">
                         {% for p in profiles %}
+                        <option value="{{ p }}" {% if p == 'default' %}selected{% endif %}>{{ p }}</option>
+                        {% endfor %}
+                    </select>
+                </label>
+                <label>Summariser
+                    <select name="compact_profile">
+                        {% for p in compact_profiles %}
                         <option value="{{ p }}" {% if p == 'default' %}selected{% endif %}>{{ p }}</option>
                         {% endfor %}
                     </select>

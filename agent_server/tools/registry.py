@@ -87,12 +87,12 @@ def unregister_custom(names: set[str]):
 register(Tool(
     name="read",
     description=(
-        "Read a file or directory from the filesystem. Returns contents with each line "
-        "prefixed as `N|hhhh|` where N is the 1-indexed line number and hhhh is a 4-char "
-        "hash of that line's content. Use these hashes with `edit` (hashStart/hashEnd) "
-        "to anchor changes precisely without retyping the text you want to replace. "
-        "Prefer absolute paths. Use offset/limit for large files. You must read a file "
-        "before you edit it."
+        "Read a file or directory from the filesystem. Prints a `[path#tag]` header, "
+        "then lines as `N: text` with N the 1-indexed line number. Pass that tag and "
+        "the line numbers to `edit` to change lines without retyping them. The tag "
+        "fingerprints the whole file, so it proves nothing moved underneath you.\n"
+        "Only lines shown here may be edited; use offset/limit to reach the rest. "
+        "Prefer absolute paths. You must read a file before you edit it."
     ),
     parameters={
         "type": "object",
@@ -110,23 +110,28 @@ register(Tool(
 register(Tool(
     name="edit",
     description=(
-        "Apply changes to an existing file. Prefer the hashline mode: call `read` first, "
-        "then for the lines you want to replace pass their line numbers as startLine/endLine "
-        "AND their hashes as hashStart/hashEnd, with the replacement in newText. "
-        "`read` prints both: a line shown as `42|a3f9| return x` is startLine 42, hashStart a3f9. "
-        "The line number says which lines you mean; the hash proves the file has not changed "
-        "underneath you. Blank lines and lines like `}` all share a hash, so a hash without a "
-        "line number is rejected as ambiguous. If the file has genuinely changed, read it again. "
+        "Apply changes to an existing file. Prefer the tagged-line mode: call `read` "
+        "first, then pass the tag it printed plus startLine/endLine, with the "
+        "replacement in newText.\n"
+        "`read` prints a header like `[src/app.py#a3f9]` above the lines, and lines "
+        "as `42: return x`. So startLine 42, tag a3f9.\n"
+        "The tag fingerprints the whole file, so it changes whenever anything in the "
+        "file changes. That is the point: if your tag is stale the file moved under "
+        "you and your line numbers may name different code. NEVER invent, guess or "
+        "adjust a tag -- copy the one you were given.\n"
+        "You can only edit lines `read` actually displayed. Re-read with an offset to "
+        "reach lines you have not seen.\n"
+        "Each successful edit returns the file's new tag, so consecutive edits need "
+        "no re-read.\n"
         "Fallback: oldString/newString for exact text replacement."
     ),
     parameters={
         "type": "object",
         "properties": {
             "filePath": {"type": "string", "description": "Path to the file"},
-            "startLine": {"type": "integer", "description": "1-indexed first line to replace, from `read`"},
+            "tag": {"type": "string", "description": "4-char tag from the [path#tag] header of your `read`"},
+            "startLine": {"type": "integer", "description": "1-indexed first line to replace"},
             "endLine": {"type": "integer", "description": "1-indexed last line to replace (omit for a single line)"},
-            "hashStart": {"type": "string", "description": "4-char hash shown against startLine"},
-            "hashEnd": {"type": "string", "description": "4-char hash shown against endLine"},
             "newText": {"type": "string", "description": "Replacement lines (omit to delete the range)"},
             "oldString": {"type": "string", "description": "Exact text to replace (fallback)"},
             "newString": {"type": "string", "description": "Replacement text for oldString mode"},

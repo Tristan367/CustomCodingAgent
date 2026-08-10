@@ -8,11 +8,12 @@ from typing import Any, Literal
 
 from agent_server.tools.base import ToolContext, ToolResult
 from agent_server.tools.bash import run_bash
+from agent_server.tools.browser import browser as browser_tool
 from agent_server.tools.file_ops import edit_file, read_file, write_file
 from agent_server.tools.search import glob_search, grep_search
 from agent_server.tools.skill import load_skill
 from agent_server.tools.task import run_task
-from agent_server.tools.vision import screenshot, vision
+from agent_server.tools.vision import capture, vision
 from agent_server.tools.web import webfetch, websearch
 
 Handler = Callable[..., Awaitable[ToolResult]]
@@ -301,110 +302,18 @@ register(Tool(
     parallel_safe=True,
 ))
 
-# ── Playwright browser tools ────────────────────────────────────────────────
-
-from agent_server.tools.browser import (
-    browser_click,
-    browser_fill,
-    browser_goto,
-    browser_screenshot,
-    browser_steps,
-)
-
-register(Tool(
-    name="browser-goto",
-    description="Navigate to a URL in a headless browser and describe the page via screenshot analysis.",
-    parameters={
-        "type": "object",
-        "properties": {
-            "url": {"type": "string", "description": "Full URL to navigate to"},
-        },
-        "required": ["url"],
-    },
-    handler=browser_goto,
-    vision_only=True,
-))
-register(Tool(
-    name="browser-click",
-    description="Click a CSS selector in the browser and describe what changed.",
-    parameters={
-        "type": "object",
-        "properties": {
-            "selector": {"type": "string", "description": "CSS selector of the element to click"},
-        },
-        "required": ["selector"],
-    },
-    handler=browser_click,
-    vision_only=True,
-))
-register(Tool(
-    name="browser-fill",
-    description="Type text into a form field and describe the result.",
-    parameters={
-        "type": "object",
-        "properties": {
-            "selector": {"type": "string", "description": "CSS selector of the input field"},
-            "text": {"type": "string", "description": "Text to type into the field"},
-        },
-        "required": ["selector", "text"],
-    },
-    handler=browser_fill,
-    vision_only=True,
-))
-register(Tool(
-    name="browser-screenshot",
-    description="Capture and describe the current browser page.",
-    parameters={
-        "type": "object",
-        "properties": {},
-    },
-    handler=browser_screenshot,
-    vision_only=True,
-))
-
-register(Tool(
-    name="browser-steps",
-    description=(
-        "Run a sequence of browser actions (up to 8), taking a screenshot after each. "
-        "Actions: goto(url), click(selector), fill(selector, text), wait(ms). "
-        "Each step gets its own screenshot analysis. Use for multi-page workflows "
-        "like form submissions, login flows, or checkout processes."
-    ),
-    parameters={
-        "type": "object",
-        "properties": {
-            "steps": {
-                "type": "array",
-                "description": "Ordered list of actions",
-                "items": {
-                    "type": "object",
-                    "properties": {
-                        "action": {"type": "string", "enum": ["goto", "click", "fill", "wait"]},
-                        "url": {"type": "string"},
-                        "selector": {"type": "string"},
-                        "text": {"type": "string"},
-                        "ms": {"type": "integer"},
-                    },
-                    "required": ["action"],
-                },
-            },
-        },
-        "required": ["steps"],
-    },
-    handler=browser_steps,
-    vision_only=True,
-))
-
 register(Tool(
     name="vision",
     description=(
-        "Look at images with a vision model and get a description back. Pass `paths` "
-        "for image files on disk (screenshots, photos, diagrams, anything the user "
-        "attached), and/or `url` to capture a web page and include it alongside them "
-        "-- that is how you check a live page against a mockup in one look. Each "
-        "image is labelled by filename, so you can ask what changed between them. "
-        "Always include a `prompt` saying what you need to know. For sequences, "
-        "interactions, or capture options beyond these, use `screenshot`."
+        "Look at images and get a description back. You cannot see images yourself; "
+        "this is the only way. Pass `paths` for image files on disk -- screenshots, "
+        "photos, diagrams, anything the user attached or the `browser` tool saved. "
+        "Each image is labelled by its filename, so passing two and asking what "
+        "differs is how a before/after comparison works. Always say what you need "
+        "to know in `prompt`: a specific question is answered far faster, and far "
+        "better, than 'describe this'. To capture a web page first, use `browser` "
+        "with a `shoot` step; to capture something that is not a web page, use "
+        "`capture`."
     ),
     parameters={
         "type": "object",
@@ -419,13 +328,8 @@ register(Tool(
                 "items": {"type": "string"},
                 "description": "Image files to look at, in order (max 6)",
             },
-            "url": {"type": "string", "description": "Page to capture and include"},
-            "selector": {"type": "string", "description": "CSS selector to crop the capture to"},
-            "full_page": {"type": "boolean", "description": "Capture the whole scrollable page"},
-            "width": {"type": "integer", "description": "Viewport width (default 1280)"},
-            "height": {"type": "integer", "description": "Viewport height (default 900)"},
         },
-        "required": ["prompt"],
+        "required": ["prompt", "paths"],
     },
     handler=vision,
     parallel_safe=True,
@@ -433,59 +337,161 @@ register(Tool(
 ))
 
 register(Tool(
-    name="screenshot",
+    name="capture",
     description=(
-        "Capture a web page and have it described back to you. Use `count` and "
-        "`interval_ms` to record a sequence, which is how you inspect animations, "
-        "loading states, or anything that changes over time. `actions` lets you click, "
-        "fill, hover, or scroll before capturing so you can reach a specific state. "
-        "Pass `prompt` to ask something specific about what was captured -- a "
-        "targeted question is answered far faster than an open one. Set "
-        "`analyze: false` to only save the files -- use that when you want the "
-        "frames without paying for a description, or intend to ask about them "
-        "later with `vision`."
+        "Screenshot the desktop -- for anything that is not a web page: a native "
+        "game, a desktop app, an emulator, a terminal. Use `browser` for web pages; "
+        "it can interact with them, and this cannot.\n"
+        "Pass `prompt` to have the capture described in the same call, or omit it to "
+        "just save the frames and ask about them later with `vision`. `count` with "
+        "`interval_ms` records a burst, which is how you inspect an animation or "
+        "watch something change. `region` is 'x,y,w,h' if you only want part of the "
+        "screen.\n"
+        "This needs a screen-capture tool installed; if none is found the error says "
+        "which to install for this machine."
     ),
     parameters={
         "type": "object",
         "properties": {
-            "analyze": {
-                "type": "boolean",
-                "description": (
-                    "Defaults to true: the capture is described in the same call. "
-                    "Set false to only save the files."
-                ),
+            "prompt": {
+                "type": "string",
+                "description": "What to find out. Omit to save the frames without describing them.",
             },
-            "url": {"type": "string", "description": "Page to capture (http, https, or file://)"},
-            "selector": {"type": "string", "description": "CSS selector to crop to"},
-            "full_page": {"type": "boolean", "description": "Whole scrollable page"},
-            "width": {"type": "integer", "description": "Viewport width (default 1280)"},
-            "height": {"type": "integer", "description": "Viewport height (default 900)"},
-            "wait_for": {"type": "string", "description": "Wait for this selector before capturing"},
-            "delay_ms": {"type": "integer", "description": "Extra pause before the first frame"},
-            "count": {"type": "integer", "description": "Number of frames, 1-12 (default 1)"},
-            "interval_ms": {"type": "integer", "description": "Gap between frames (default 500)"},
-            "actions": {
+            "region": {"type": "string", "description": "'x,y,w,h' to capture part of the screen"},
+            "count": {"type": "integer", "description": "Number of frames, 1-24 (default 1)"},
+            "interval_ms": {"type": "integer", "description": "Gap between frames (default 400)"},
+        },
+        "required": [],
+    },
+    handler=capture,
+    parallel_safe=True,
+    vision_only=True,
+))
+
+register(Tool(
+    name="browser",
+    description=(
+        "Drive a real browser to build, inspect and TEST a web UI. Give it a list of "
+        "`steps`; each is reported with its outcome. The browser is kept between calls "
+        "in this session, so a login persists and a long flow can be split across "
+        "several calls.\n"
+        "\n"
+        "Start with `snapshot`. It returns the page's accessibility tree, which tells "
+        "you exactly what is on the page and what to address it as -- do not guess CSS "
+        "selectors. `at` accepts Playwright locators, and the robust ones come straight "
+        "off the snapshot:\n"
+        "  role=button[name=\"Sign in\"]   text=Save   label=Email   placeholder=Search\n"
+        "  #id   .class   css=div > p        (CSS also works, but breaks more easily)\n"
+        "\n"
+        "Actions: goto(url) click fill(text) press(key) hover select(value) check "
+        "uncheck upload(paths) scroll(to) wait(ms|at|until) back forward reload "
+        "resize(width,height) snapshot eval(js) shoot record expect.\n"
+        "\n"
+        "`expect` is an assertion and fails the call if it does not hold -- use it "
+        "instead of claiming something works. One of: visible, hidden, text, url, "
+        "count, console_clean.\n"
+        "\n"
+        "`shoot` saves a screenshot and returns its path; add `ask` to have it "
+        "described in the same call. `record` takes a burst of frames, which is how "
+        "you inspect an animation or a loading state. Console errors, page exceptions "
+        "and failed requests are always captured and reported against the step that "
+        "caused them -- check them before concluding a click did nothing.\n"
+        "\n"
+        "On failure it stops and reports the console, the accessibility tree and a "
+        "screenshot, so you should not need a second call to find out why.\n"
+        "\n"
+        "Example: [{\"action\":\"goto\",\"url\":\"http://localhost:3000\"},"
+        "{\"action\":\"snapshot\"},"
+        "{\"action\":\"fill\",\"at\":\"label=Email\",\"text\":\"a@b.c\"},"
+        "{\"action\":\"click\",\"at\":\"text=Sign in\"},"
+        "{\"action\":\"expect\",\"visible\":\"text=Dashboard\"},"
+        "{\"action\":\"expect\",\"console_clean\":true},"
+        "{\"action\":\"shoot\",\"ask\":\"is the sidebar aligned with the header?\"}]\n"
+        "\n"
+        "For a permanent regression test, write a Playwright spec file and run it with "
+        "`bash`. This tool is for exploring and verifying as you work."
+    ),
+    parameters={
+        "type": "object",
+        "properties": {
+            "steps": {
                 "type": "array",
-                "description": "Steps to run before capturing",
+                "description": "Ordered actions to run.",
                 "items": {
                     "type": "object",
                     "properties": {
-                        "type": {
+                        "action": {
                             "type": "string",
-                            "enum": ["click", "fill", "press", "hover", "scroll", "wait"],
+                            "enum": [
+                                "goto", "click", "fill", "press", "hover", "select",
+                                "check", "uncheck", "upload", "scroll", "wait",
+                                "back", "forward", "reload", "resize",
+                                "snapshot", "eval", "shoot", "record", "expect",
+                            ],
                         },
-                        "selector": {"type": "string"},
-                        "value": {"type": "string"},
+                        "at": {
+                            "type": "string",
+                            "description": "What to act on. Prefer role=/text=/label= over CSS.",
+                        },
+                        "url": {"type": "string", "description": "For goto, or expect url"},
+                        "text": {"type": "string", "description": "For fill, or expect text"},
+                        "key": {"type": "string", "description": "For press, e.g. Enter"},
+                        "value": {"type": "string", "description": "For select"},
+                        "js": {"type": "string", "description": "For eval"},
+                        "ask": {
+                            "type": "string",
+                            "description": "On shoot/record: have the frames described, "
+                                           "answering this question.",
+                        },
+                        "compare": {
+                            "type": "array", "items": {"type": "string"},
+                            "description": "On shoot/record with `ask`: image files to put "
+                                           "beside the new frames, so one question spans "
+                                           "both. This is how you check a page against a "
+                                           "mockup, or against an earlier capture.",
+                        },
+                        "visible": {"type": "string", "description": "expect: must be visible"},
+                        "hidden": {"type": "string", "description": "expect: must be gone"},
+                        "count": {
+                            "type": "integer",
+                            "description": "expect: how many `at` should match; "
+                                           "on record: how many frames",
+                        },
+                        "console_clean": {
+                            "type": "boolean",
+                            "description": "expect: no console errors or failed requests",
+                        },
+                        "full_page": {"type": "boolean", "description": "shoot: whole scrollable page"},
+                        "paths": {
+                            "type": "array", "items": {"type": "string"},
+                            "description": "For upload",
+                        },
+                        "ms": {"type": "integer", "description": "For wait"},
+                        "interval_ms": {"type": "integer", "description": "For record"},
+                        "to": {"type": "string", "description": "For scroll: top, bottom, or pixels"},
+                        "state": {"type": "string", "description": "For wait on `at`: visible|hidden|attached"},
+                        "until": {"type": "string", "description": "For wait: load|domcontentloaded|networkidle"},
+                        "width": {"type": "integer"},
+                        "height": {"type": "integer"},
+                        "timeout_ms": {"type": "integer", "description": "Override the 10s default"},
                     },
-                    "required": ["type"],
+                    "required": ["action"],
                 },
             },
-            "prompt": {"type": "string", "description": "If set, describe the capture immediately"},
+            "width": {"type": "integer", "description": "Viewport width (default 1280)"},
+            "height": {"type": "integer", "description": "Viewport height (default 900)"},
+            "stop_on_error": {
+                "type": "boolean",
+                "description": "Stop at the first failed step. Default true.",
+            },
+            "reset": {
+                "type": "boolean",
+                "description": "Throw away cookies and history and start a clean browser first.",
+            },
         },
-        "required": ["url"],
+        "required": ["steps"],
     },
-    handler=screenshot,
-    parallel_safe=True,
+    handler=browser_tool,
     vision_only=True,
 ))
 

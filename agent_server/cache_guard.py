@@ -49,7 +49,7 @@ def fingerprint(tools: list[dict], messages: list[dict]) -> list[str]:
 
 def break_index(previous: list[str], current: list[str]) -> int:
     """First position where the two prefixes diverge, or -1 if one contains the other."""
-    for i, (a, b) in enumerate(zip(previous, current)):
+    for i, (a, b) in enumerate(zip(previous, current, strict=False)):
         if a != b:
             return i
     return -1

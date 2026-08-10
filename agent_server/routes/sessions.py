@@ -74,9 +74,8 @@ async def update_session(session_id: str, body: SessionUpdate):
     # Switching model switches provider with it. The settings form only sends a
     # model, so without this a session moved to Claude kept asking DeepSeek for
     # it -- the same mismatch the creation form used to produce.
-    if updates.get("model") and "provider" not in updates:
-        if updates["model"] in MODELS_BY_ID:
-            updates["provider"] = provider_for_model(updates["model"])
+    if updates.get("model") in MODELS_BY_ID and "provider" not in updates:
+        updates["provider"] = provider_for_model(updates["model"])
     # An empty thinking_effort means "fall back to the default".
     if "thinking_effort" in updates and not updates["thinking_effort"]:
         updates["thinking_effort"] = None

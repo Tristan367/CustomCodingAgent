@@ -184,6 +184,10 @@ class _Run:
 
 _runs: dict[str, _Run] = {}
 
+# Fire-and-forget tasks, held so the garbage collector cannot cancel one
+# mid-flight. asyncio only keeps a weak reference to a running task.
+_background: set[asyncio.Task] = set()
+
 # A finished run is kept briefly so a client that reconnects a moment later can
 # still collect the tail of the turn. Without this the buffers -- which hold
 # every event of every turn, tool output included -- were never released.
@@ -249,7 +253,11 @@ async def _drive(session_id: str, handle: _Run):
     finally:
         _publish(handle, {"type": "stream_end"})
         handle.done.set()
-        asyncio.create_task(_retire(session_id, handle))
+        # Held: asyncio keeps only a weak reference, so a bare create_task
+        # can be collected mid-sleep and the buffer never released.
+        task = asyncio.create_task(_retire(session_id, handle))
+        _background.add(task)
+        task.add_done_callback(_background.discard)
 
 
 async def _retire(session_id: str, handle: _Run):
@@ -263,11 +271,19 @@ async def _retire(session_id: str, handle: _Run):
 
 def forget_session(session_id: str):
     """Drop everything held in memory for a session that no longer exists."""
+    from agent_server import browser
     from agent_server.system_prompt import clear_env_cache
     from agent_server.tools.file_ops import clear_read_cache
 
     clear_env_cache(session_id)
     clear_read_cache(session_id)
+    # Its Chromium context holds ~100MB and a copy of whatever the session was
+    # logged into. Closing is async and this is not; the session is going away
+    # regardless, so it is scheduled when there is a loop to schedule it on.
+    try:
+        _background.add(asyncio.ensure_future(browser.close_session(session_id)))
+    except RuntimeError:
+        pass  # no running loop, e.g. under a synchronous test
     run = _runs.pop(session_id, None)
     if run is not None and run.task is not None and not run.task.done():
         run.task.cancel()
@@ -896,7 +912,7 @@ async def _run_batch(
     tasks = [asyncio.create_task(run(call)) for call in batch]
     for task in tasks:
         _track(session_id, task)
-    call_of = dict(zip(tasks, batch))
+    call_of = dict(zip(tasks, batch, strict=True))
 
     outcomes: dict[str, tuple[ToolResult, int]] = {}
     interrupted = False

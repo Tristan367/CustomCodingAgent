@@ -6,6 +6,7 @@ assistant turns followed by all the results at the end, which the API rejects
 outright, so multi-round tool use on Anthropic could never work.
 """
 
+import itertools
 import json
 
 import pytest
@@ -64,7 +65,7 @@ def test_no_two_turns_of_the_same_role():
     ])
     roles = [m["role"] for m in converted]
     assert roles == ["user", "assistant"], roles
-    assert not any(a == b for a, b in zip(roles, roles[1:], strict=False))
+    assert not any(a == b for a, b in itertools.pairwise(roles))
     # Merged, not dropped.
     assert [b["text"] for b in converted[0]["content"]] == ["one", "two"]
     assert [b["text"] for b in converted[1]["content"]] == ["a", "b"]

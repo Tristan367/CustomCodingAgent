@@ -3,7 +3,6 @@
 import asyncio
 import html
 import json
-import os
 import re
 from contextlib import asynccontextmanager
 from datetime import UTC, datetime
@@ -39,6 +38,7 @@ from agent_server.providers import (
     get_provider,
     get_provider_settings_fields,
     list_providers,
+    load_custom_endpoint_providers,
 )
 from agent_server.routes import chat, sessions, tts
 from agent_server.stt import availability as stt_availability
@@ -73,11 +73,28 @@ async def _warm_vision():
         pass
 
 
+async def _reap_browsers():
+    """Close browser contexts nobody has used lately.
+
+    A Chromium context is about 100MB and holds whatever the session was
+    logged into, so leaving one per session open indefinitely is neither free
+    nor especially private.
+    """
+    from agent_server import browser
+
+    while True:
+        await asyncio.sleep(120)
+        try:
+            await browser.reap_idle()
+        except Exception:
+            pass
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     await init_db()
     await migrate_prompts()
-    from agent_server.providers import credentials, load_custom_endpoint_providers
+    from agent_server.providers import credentials
     from agent_server.tools.custom import load_custom_tools
 
     # Fill the key cache from the async connection, so no provider has to open
@@ -89,10 +106,12 @@ async def lifespan(app: FastAPI):
     await load_custom_endpoint_providers()
     # Background: startup must not wait on a machine that may be off.
     warm = asyncio.create_task(_warm_vision())
+    reaper = asyncio.create_task(_reap_browsers())
 
     yield
 
     warm.cancel()
+    reaper.cancel()
     from agent_server import vision
     from agent_server.tools import browser
 
@@ -194,7 +213,7 @@ def difflines(diff: str) -> list[tuple[str, str]]:
     for line in (diff or "").rstrip("\n").split("\n"):
         if line.startswith("@@"):
             cls = "diff-hunk"
-        elif line.startswith("+++") or line.startswith("---"):
+        elif line.startswith(("+++", "---")):
             cls = "diff-meta"
         elif line.startswith("+"):
             cls = "diff-add"
@@ -363,10 +382,11 @@ async def _home_context(error: str = "", clone_id: str = "") -> dict:
             is_pw = f.get("kind") == "password"
             preview = ""
             if raw and is_pw:
-                l = len(raw)
-                a = max(0, l // 4)
-                b = max(0, l - l // 4)
-                preview = raw[:a] + "\u2026" + raw[b:]
+                # Shows the first and last quarter so a key is recognisable.
+                # Half of it reaches the page either way, which is more than
+                # identification needs -- worth revisiting.
+                edge = max(0, len(raw) // 4)
+                preview = raw[:edge] + "\u2026" + raw[len(raw) - edge:]
             f_list.append(dict(f, value=("\u2022" * 12), has_value=bool(raw) and is_pw, preview=preview))
         provider_settings.append({"name": ps["name"], "fields": f_list})
 
@@ -1191,7 +1211,7 @@ async def save_custom_endpoint(request: Request):
         existing = await db.get_custom_endpoint(name)
         api_key = existing["api_key"] if existing else ""
     await db.save_custom_endpoint(name, base_url, api_key)
-    _reload_custom_endpoint_providers()
+    await load_custom_endpoint_providers()
     return templates.TemplateResponse(
         request=request, name="index_content.html", context=await _home_context(),
     )
@@ -1203,7 +1223,7 @@ async def delete_custom_endpoint(request: Request):
     name = str(form.get("name", "")).strip()
     if name:
         await db.delete_custom_endpoint(name)
-        _reload_custom_endpoint_providers()
+        await load_custom_endpoint_providers()
     return templates.TemplateResponse(
         request=request, name="index_content.html", context=await _home_context(),
     )
@@ -1217,35 +1237,8 @@ async def new_custom_endpoint(request: Request):
         return RedirectResponse("/", status_code=303)
     if not await db.get_custom_endpoint(name):
         await db.save_custom_endpoint(name, "", "")
-    _reload_custom_endpoint_providers()
+    await load_custom_endpoint_providers()
     return RedirectResponse("/", status_code=303)
-
-
-def _reload_custom_endpoint_providers():
-    """Add/remove custom endpoint providers without a server restart."""
-    import asyncio
-
-    from agent_server.providers import _providers
-    from agent_server.providers.custom_openai import CustomOpenAIProvider
-
-    # Remove old custom endpoint providers
-    for key in list(_providers):
-        if key.startswith("custom:"):
-            del _providers[key]
-
-    # Load from DB
-    async def _load():
-        for row in await db.list_custom_endpoints():
-            if row["base_url"]:
-                p = CustomOpenAIProvider(row["name"], row["base_url"])
-                _providers[f"custom:{row['name']}"] = p
-
-    try:
-        loop = asyncio.get_running_loop()
-    except RuntimeError:
-        asyncio.run(_load())
-    else:
-        loop.create_task(_load())
 
 
 async def _propagate(name: str) -> int:

@@ -1,166 +1,449 @@
-"""Playwright browser tooling for UI testing.
+"""The `browser` tool: run a sequence of actions against a page and report.
 
-Tools:
-- browser-goto:  navigate to a URL and capture a screenshot
-- browser-click: click a CSS selector and capture what changed
-- browser-fill:  type text into a field and capture after
-- browser-screenshot: capture the current page without acting
+One tool instead of eight. A flow is a flow -- go to the page, fill the form,
+click submit, check what happened -- and doing that as four separate tool calls
+costs four model round trips and four full-context re-reads to learn what the
+first one did.
 
-All share one long-lived browser context to avoid cold starts.
+Every step is reported with its outcome, whatever the model asked for is
+checked rather than described, and when something fails the things needed to
+diagnose it (console, accessibility tree, screenshot) are gathered without
+being asked.
 """
 
-import asyncio
-from typing import Any
+import json
+from pathlib import Path
 
+from agent_server import browser as engine
+from agent_server.browser import locate as _locate
 from agent_server.tools.base import ToolContext, ToolResult
 
-_BROWSER: Any = None
-_PAGE: Any = None
-_PW: Any = None
-_LOCK = asyncio.Lock()
+MAX_STEPS = 24
+MAX_ANALYSES = 4
+
+# Actions that name a target element.
+_TARGETED = {"click", "fill", "press", "hover", "select", "check", "uncheck", "upload"}
 
 
-async def _ensure_browser():
-    global _BROWSER, _PAGE, _PW
-    if _BROWSER is None:
-        from playwright.async_api import async_playwright
-        _PW = await async_playwright().start()
+async def browser(
+    ctx: ToolContext,
+    *,
+    steps: list | None = None,
+    width: int = 0,
+    height: int = 0,
+    stop_on_error: bool = True,
+    reset: bool = False,
+    **_,
+) -> ToolResult:
+    if reset:
+        await engine.close_session(ctx.session_id)
+    if not steps:
+        return ToolResult.error(
+            "`steps` is empty. Give at least one, e.g. "
+            '[{"action": "goto", "url": "http://localhost:3000"}, {"action": "snapshot"}]',
+            "browser",
+        )
+    if isinstance(steps, str):
         try:
-            _BROWSER = await _PW.chromium.launch(headless=True)
-            _PAGE = await _BROWSER.new_page(viewport={"width": 1080, "height": 1920})
-        except Exception:
-            if _BROWSER:
-                try:
-                    await _BROWSER.close()
-                except Exception:
-                    pass
-                _BROWSER = None
-            await _PW.stop()
-            _PW = None
-            raise
+            steps = json.loads(steps)
+        except json.JSONDecodeError:
+            return ToolResult.error("`steps` must be a list of objects, not a string", "browser")
+    if not isinstance(steps, list):
+        return ToolResult.error("`steps` must be a list of objects", "browser")
+    if len(steps) > MAX_STEPS:
+        return ToolResult.error(
+            f"{len(steps)} steps is more than the {MAX_STEPS} allowed in one call. "
+            "Split the flow -- the browser keeps its state between calls.",
+            "browser",
+        )
+
+    try:
+        session = await engine.get_session(ctx.session_id, width, height)
+    except engine.BrowserError as e:
+        return ToolResult.error(str(e), "browser")
+
+    async with session.lock:
+        return await _run(ctx, session, steps, stop_on_error)
+
+
+async def _run(ctx, session, steps, stop_on_error) -> ToolResult:
+    import time
+
+    lines: list[str] = []
+    frames: list[str] = []
+    analyses: list[str] = []
+    failed_at = 0
+    analysed = 0
+
+    for number, step in enumerate(steps, 1):
+        if ctx.abort.is_set():
+            lines.append(f"{number:>2}. (stopped by user)")
+            break
+        if not isinstance(step, dict):
+            lines.append(f"{number:>2}. invalid step: expected an object, got {type(step).__name__}")
+            failed_at = number
+            break
+
+        action = str(step.get("action") or "").strip().lower()
+        label = _label(action, step)
+        began = time.monotonic()
+
+        try:
+            detail = await _perform(ctx, session, action, step)
+            ok = True
+        except engine.BrowserError as e:
+            detail, ok = str(e), False
+        except Exception as e:
+            detail, ok = engine._brief(e), False
+
+        elapsed = int((time.monotonic() - began) * 1000)
+        status = "ok" if ok else "FAILED"
+        lines.append(f"{number:>2}. {label:<52} {status:>6}  {elapsed:>5}ms")
+
+        if isinstance(detail, dict):
+            if detail.get("frame"):
+                frames.append(detail["frame"])
+                lines.append(f"      -> {detail['frame']}")
+            if detail.get("frames"):
+                frames.extend(detail["frames"])
+                for path in detail["frames"]:
+                    lines.append(f"      -> {path}")
+            if detail.get("text"):
+                lines.append(_indent(detail["text"]))
+            if detail.get("ask") and analysed < MAX_ANALYSES:
+                analysed += 1
+                answer = await _describe(detail["ask"], detail.get("images", []))
+                analyses.append(f"[step {number}] {answer}")
+        elif detail:
+            lines.append(_indent(str(detail)))
+
+        # Console output is attributed to the step that provoked it.
+        for entry in session.fresh():
+            lines.append(f"      | {entry.render()}")
+
+        if not ok:
+            failed_at = number
+            if stop_on_error:
+                break
+
+    report = await _report(ctx, session, lines, frames, analyses, failed_at, len(steps))
+    title = _title(session, steps, failed_at)
+    return ToolResult(output=report, is_error=bool(failed_at), title=title)
+
+
+# ── Actions ─────────────────────────────────────────────────────────────────
+
+async def _perform(ctx, session, action: str, step: dict):
+    page = session.page
+    at = str(step.get("at") or "")
+
+    if action in _TARGETED and not at:
+        raise engine.BrowserError(f"`{action}` needs `at` (what to act on)")
+    target = _locate(page, at) if at else None
+    timeout = int(step.get("timeout_ms") or 10_000)
+
+    if action == "goto":
+        url = str(step.get("url") or "")
+        if not url:
+            raise engine.BrowserError("`goto` needs `url`")
+        await page.goto(url, wait_until=step.get("wait") or "load", timeout=30_000)
+        return {"text": f"at {page.url}"}
+
+    if action == "click":
+        await target.click(timeout=timeout, button=step.get("button") or "left",
+                           click_count=int(step.get("count") or 1))
+        return ""
+
+    if action == "fill":
+        await target.fill(str(step.get("text") or ""), timeout=timeout)
+        return ""
+
+    if action == "press":
+        key = str(step.get("key") or step.get("text") or "Enter")
+        await (target.press(key, timeout=timeout) if target else page.keyboard.press(key))
+        return ""
+
+    if action == "hover":
+        await target.hover(timeout=timeout)
+        return ""
+
+    if action == "select":
+        value = step.get("value")
+        await target.select_option(value if isinstance(value, list) else str(value or ""),
+                                   timeout=timeout)
+        return ""
+
+    if action in ("check", "uncheck"):
+        await (target.check(timeout=timeout) if action == "check"
+               else target.uncheck(timeout=timeout))
+        return ""
+
+    if action == "upload":
+        paths = step.get("paths") or ([step["path"]] if step.get("path") else [])
+        resolved = [str(ctx.resolve(p)) for p in paths]
+        missing = [p for p in resolved if not Path(p).exists()]
+        if missing:
+            raise engine.BrowserError(f"file not found: {', '.join(missing)}")
+        await target.set_input_files(resolved, timeout=timeout)
+        return {"text": f"uploaded {len(resolved)} file(s)"}
+
+    if action == "scroll":
+        to = step.get("to", "bottom")
+        if target is not None:
+            await target.scroll_into_view_if_needed(timeout=timeout)
+        elif to == "top":
+            await page.evaluate("window.scrollTo(0, 0)")
+        elif to == "bottom":
+            await page.evaluate("window.scrollTo(0, document.body.scrollHeight)")
+        else:
+            await page.evaluate(f"window.scrollBy(0, {int(to)})")
+        return ""
+
+    if action == "wait":
+        if at:
+            state = step.get("state") or "visible"
+            await target.first.wait_for(state=state, timeout=timeout)
+            return {"text": f"{at} is {state}"}
+        if step.get("until"):
+            await page.wait_for_load_state(step["until"], timeout=timeout)
+            return {"text": f"load state {step['until']}"}
+        await page.wait_for_timeout(min(int(step.get("ms") or 500), 15_000))
+        return ""
+
+    if action in ("back", "forward", "reload"):
+        await getattr(page, "go_back" if action == "back"
+                      else "go_forward" if action == "forward" else "reload")()
+        return {"text": f"at {page.url}"}
+
+    if action == "resize":
+        await page.set_viewport_size({
+            "width": int(step.get("width") or engine.DEFAULT_VIEWPORT[0]),
+            "height": int(step.get("height") or engine.DEFAULT_VIEWPORT[1]),
+        })
+        return ""
+
+    if action == "snapshot":
+        tree = await engine.snapshot(session, at)
+        return {"text": _cap(tree, 6000)}
+
+    if action == "eval":
+        js = str(step.get("js") or "")
+        if not js:
+            raise engine.BrowserError("`eval` needs `js`")
+        value = await page.evaluate(js)
+        return {"text": _cap(json.dumps(value, default=str, indent=2, ensure_ascii=False), 3000)}
+
+    if action == "shoot":
+        path, data = await engine.capture(
+            session, ctx.session_id, at=at, full_page=bool(step.get("full_page"))
+        )
+        out = {"frame": path}
+        if step.get("ask"):
+            out["ask"] = str(step["ask"])
+            # `compare` puts existing files alongside the fresh capture in one
+            # question, which is how a live page is checked against a mockup
+            # without a second round trip to fetch what was just saved.
+            out["images"] = _with_comparisons(ctx, [(path, data)], step.get("compare"))
+        return out
+
+    if action == "record":
+        count = max(2, min(int(step.get("count") or 4), engine.MAX_FRAMES))
+        interval = max(0, min(int(step.get("interval_ms") or 400), 5_000))
+        shots = []
+        for index in range(count):
+            if index:
+                await session.page.wait_for_timeout(interval)
+            shots.append(await engine.capture(session, ctx.session_id, at=at))
+        out = {"frames": [p for p, _ in shots]}
+        if step.get("ask"):
+            out["ask"] = str(step["ask"])
+            out["images"] = _with_comparisons(ctx, shots, step.get("compare"))
+        return out
+
+    if action == "expect":
+        return await _expect(session, step, at, timeout)
+
+    known = ("goto click fill press hover select check uncheck upload scroll wait "
+             "back forward reload resize snapshot eval shoot record expect")
+    raise engine.BrowserError(f"unknown action '{action}'. Available: {known}")
+
+
+def _with_comparisons(ctx, shots, compare) -> list[tuple[str, bytes]]:
+    """Prepend files from disk so one question spans them and the new frames."""
+    if not compare:
+        return shots
+    from agent_server import vision
+
+    if isinstance(compare, str):
+        compare = [compare]
+    reference = []
+    for raw in compare[:4]:
+        path = ctx.resolve(raw)
+        try:
+            reference.append((str(path), vision.load_image(path)))
+        except vision.VisionError as e:
+            raise engine.BrowserError(f"compare: {e}") from e
+    return reference + shots
+
+
+async def _expect(session, step: dict, at: str, timeout: int):
+    """An assertion. This is what makes the tool a test rather than a look.
+
+    A model cannot narrate its way past a failed assertion, which is the only
+    thing that makes "verify before you claim it works" enforceable.
+    """
+    page = session.page
+
+    if step.get("visible") or (at and "visible" not in step and _bare(step)):
+        selector = str(step.get("visible") or at)
+        await _locate(page, selector).first.wait_for(state="visible", timeout=timeout)
+        return {"text": f"{selector} is visible"}
+
+    if step.get("hidden"):
+        selector = str(step["hidden"])
+        await _locate(page, selector).first.wait_for(state="hidden", timeout=timeout)
+        return {"text": f"{selector} is hidden"}
+
+    if "text" in step:
+        wanted = str(step["text"])
+        scope = _locate(page, at) if at else page.locator("body")
+        body = await scope.inner_text(timeout=timeout)
+        if wanted not in body:
+            raise engine.BrowserError(
+                f"expected the text {wanted!r} but it is not on the page. "
+                f"Visible text begins: {_cap(body.strip(), 300)!r}"
+            )
+        return {"text": f"found {wanted!r}"}
+
+    if "url" in step:
+        wanted = str(step["url"])
+        if wanted not in page.url:
+            raise engine.BrowserError(f"expected a URL containing {wanted!r}, but it is {page.url}")
+        return {"text": f"url is {page.url}"}
+
+    if "count" in step:
+        wanted = int(step["count"])
+        found = await _locate(page, at).count()
+        if found != wanted:
+            raise engine.BrowserError(f"expected {wanted} of {at}, found {found}")
+        return {"text": f"{found} matched"}
+
+    if step.get("console_clean"):
+        problems = session.errors()
+        if problems:
+            listed = "\n".join(f"  {p.render()}" for p in problems[:10])
+            raise engine.BrowserError(
+                f"the console reported {len(problems)} problem(s):\n{listed}"
+            )
+        return {"text": "console is clean"}
+
+    raise engine.BrowserError(
+        "`expect` needs one of: visible, hidden, text, url, count, console_clean"
+    )
+
+
+def _bare(step: dict) -> bool:
+    return not any(k in step for k in ("hidden", "text", "url", "count", "console_clean"))
+
+
+# ── Reporting ───────────────────────────────────────────────────────────────
+
+async def _report(ctx, session, lines, frames, analyses, failed_at, total) -> str:
+    parts = ["\n".join(lines)]
+
+    if analyses:
+        parts.append("\n\n".join(analyses))
+
+    if failed_at:
+        # Gathered without being asked, because a failure the model has to make
+        # three more calls to understand is a failure reported badly.
+        parts.append(await _diagnostics(ctx, session, frames))
+
+    parts.append(f"Page: {session.page.url}")
+    if not failed_at:
+        parts.append(f"{total} step(s) completed.")
+    return "\n\n".join(p for p in parts if p)
+
+
+async def _diagnostics(ctx, session, frames) -> str:
+    chunks = ["--- diagnostics for the failed step ---"]
+
+    problems = session.errors()
+    if problems:
+        chunks.append("Console problems:\n" + "\n".join(
+            f"  {p.render()}" for p in problems[-10:]
+        ))
+
+    try:
+        tree = await engine.snapshot(session)
+        chunks.append("Accessibility tree:\n" + _indent(_cap(tree, 3000)))
+    except engine.BrowserError:
+        pass
+
+    try:
+        path, _ = await engine.capture(session, ctx.session_id)
+        frames.append(path)
+        chunks.append(f"Screenshot at failure: {path}")
+    except engine.BrowserError:
+        pass
+
+    return "\n\n".join(chunks)
+
+
+async def _describe(question: str, images: list[tuple[str, bytes]]) -> str:
+    if not images:
+        return "(nothing captured to look at)"
+    from agent_server import vision
+
+    try:
+        return await vision.analyze(
+            [data for _, data in images[:6]],
+            question,
+            [Path(p).name for p, _ in images[:6]],
+        )
+    except Exception as e:
+        return (
+            f"(could not look at it: {e}) "
+            f"The frames were still saved: {', '.join(p for p, _ in images)}"
+        )
+
+
+def _label(action: str, step: dict) -> str:
+    at = step.get("at") or ""
+    if action == "goto":
+        return f"goto {step.get('url', '')}"
+    if action == "fill":
+        return f"fill {at} = {str(step.get('text', ''))[:24]!r}"
+    if action == "expect":
+        for key in ("visible", "hidden", "text", "url", "count", "console_clean"):
+            if key in step:
+                return f"expect {key} {str(step[key])[:34]}"
+        return f"expect visible {at[:34]}"
+    if action == "eval":
+        return f"eval {str(step.get('js', ''))[:40]}"
+    if action == "record":
+        return f"record {step.get('count', 4)} frames"
+    return f"{action} {at}"[:52]
+
+
+def _title(session, steps, failed_at) -> str:
+    actions = ", ".join(dict.fromkeys(
+        str(s.get("action", "?")) for s in steps if isinstance(s, dict)
+    ))
+    outcome = f" (failed at step {failed_at})" if failed_at else ""
+    return f"browser: {actions[:60]}{outcome}"
+
+
+def _indent(text: str, prefix: str = "      ") -> str:
+    return "\n".join(prefix + line for line in str(text).splitlines())
+
+
+def _cap(text: str, limit: int) -> str:
+    text = text or ""
+    if len(text) <= limit:
+        return text
+    return text[:limit] + f"\n... (+{len(text) - limit:,} more characters)"
 
 
 async def close_browser():
-    global _BROWSER, _PAGE, _PW
-    if _BROWSER:
-        try:
-            await _BROWSER.close()
-        except Exception:
-            pass
-        _BROWSER = None
-        _PAGE = None
-    if _PW:
-        try:
-            await _PW.stop()
-        except Exception:
-            pass
-        _PW = None
-
-
-async def browser_goto(ctx: ToolContext, url: str, **_) -> ToolResult:
-    async with _LOCK:
-        try:
-            await _ensure_browser()
-            await _PAGE.goto(url, wait_until="load", timeout=30000)
-            img = await _PAGE.screenshot()
-            result = await _analyze(img, f"Describe what is visible on this page at {url}. What are the main elements?")
-            return ToolResult(output=result, title=f"browser: {url[:60]}")
-        except Exception as e:
-            return ToolResult.error(f"browser-goto failed: {e}", "browser-goto")
-
-
-async def browser_click(ctx: ToolContext, selector: str, **_) -> ToolResult:
-    async with _LOCK:
-        try:
-            await _ensure_browser()
-            await _PAGE.click(selector, timeout=10000)
-            await asyncio.sleep(0.5)
-            img = await _PAGE.screenshot()
-            result = await _analyze(img, f"After clicking '{selector}', what changed on the page? Describe the new state.")
-            return ToolResult(output=result, title=f"browser: click {selector}")
-        except Exception as e:
-            return ToolResult.error(f"browser-click failed: {e}", "browser-click")
-
-
-async def browser_fill(ctx: ToolContext, selector: str, text: str, **_) -> ToolResult:
-    async with _LOCK:
-        try:
-            await _ensure_browser()
-            await _PAGE.fill(selector, text, timeout=10000)
-            await asyncio.sleep(0.3)
-            img = await _PAGE.screenshot()
-            result = await _analyze(img, f"After typing '{text}' into '{selector}', what does the page show now?")
-            return ToolResult(output=result, title=f"browser: fill {selector}")
-        except Exception as e:
-            return ToolResult.error(f"browser-fill failed: {e}", "browser-fill")
-
-
-async def browser_screenshot(ctx: ToolContext, **_) -> ToolResult:
-    async with _LOCK:
-        try:
-            await _ensure_browser()
-            img = await _PAGE.screenshot()
-            result = await _analyze(img, "Describe the current state of the page.")
-            return ToolResult(output=result, title="browser: screenshot")
-        except Exception as e:
-            return ToolResult.error(f"browser-screenshot failed: {e}", "browser-screenshot")
-
-
-async def browser_steps(ctx: ToolContext, steps: list[dict], **_) -> ToolResult:
-    """Execute a sequence of browser actions, screenshot at each step."""
-    if not steps:
-        return ToolResult.error("steps list is empty", "browser-steps")
-    if len(steps) > 8:
-        steps = steps[:8]
-
-    async with _LOCK:
-        try:
-            await _ensure_browser()
-            reports: list[str] = []
-            for i, step in enumerate(steps):
-                action = step.get("action", "")
-                if action == "goto":
-                    url = step.get("url", "")
-                    if not url:
-                        return ToolResult.error(f"step {i + 1}: missing url for goto", "browser-steps")
-                    await _PAGE.goto(url, timeout=30000)
-                    await asyncio.sleep(1)
-                elif action == "click":
-                    sel = step.get("selector", "")
-                    if not sel:
-                        return ToolResult.error(f"step {i + 1}: missing selector for click", "browser-steps")
-                    await _PAGE.click(sel, timeout=10000)
-                    await asyncio.sleep(0.5)
-                elif action == "fill":
-                    sel = step.get("selector", "")
-                    txt = step.get("text", "")
-                    if not sel:
-                        return ToolResult.error(f"step {i + 1}: missing selector for fill", "browser-steps")
-                    await _PAGE.fill(sel, txt, timeout=10000)
-                    await asyncio.sleep(0.3)
-                elif action == "wait":
-                    ms = min(step.get("ms", 1000), 5000)
-                    await asyncio.sleep(ms / 1000)
-                else:
-                    return ToolResult.error(f"step {i + 1}: unknown action '{action}'", "browser-steps")
-
-                img = await _PAGE.screenshot()
-                analysis = await _analyze(img, f"Step {i + 1}/{len(steps)} ({action}): what changed?")
-                reports.append(f"[Step {i + 1}] {action}: {analysis}")
-
-            combined = "\n\n".join(reports)
-            return ToolResult(
-                output=combined,
-                title=f"browser: {len(steps)} steps",
-            )
-        except Exception as e:
-            return ToolResult.error(f"browser-steps failed: {e}", "browser-steps")
-
-
-async def _analyze(img: bytes, prompt: str) -> str:
-    try:
-        from agent_server.vision import analyze, normalize_image
-        decoded = normalize_image(img)
-        return await analyze([decoded], prompt)
-    except Exception as e:
-        return f"(vision not available: {e})\n[raw screenshot captured but not analyzed]"
+    await engine.close_all()

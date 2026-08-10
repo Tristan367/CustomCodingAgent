@@ -24,7 +24,7 @@ async def _watch(session_id: str, project_dir: str):
 
     try:
         async for changes in awatch(str(path)):
-            for change_type, changed_path in changes:
+            for change_type, _changed_path in changes:
                 if change_type not in (Change.deleted, Change.modified):
                     continue
                 if path.exists():

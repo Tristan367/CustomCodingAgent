@@ -45,7 +45,7 @@ def test_the_built_in_names_are_discovered_not_listed():
     """The hardcoded list had gone stale -- it was missing websearch, explore,
     skill and every browser tool, all of which were therefore shadowable."""
     for name in ("read", "edit", "write", "bash", "grep", "glob", "webfetch",
-                 "websearch", "task", "explore", "skill", "vision", "screenshot"):
+                 "websearch", "task", "explore", "skill", "vision", "browser"):
         assert name in BUILT_IN_NAMES, name
 
 
@@ -57,10 +57,10 @@ def test_a_custom_tool_cannot_take_a_built_in_name():
 
 
 def test_unregistering_never_removes_a_built_in():
-    custom.unregister_custom({"read", "vision", "screenshot"})
+    custom.unregister_custom({"read", "vision", "browser"})
     assert "read" in TOOLS
     assert "vision" in TOOLS
-    assert "screenshot" in TOOLS
+    assert "browser" in TOOLS
 
 
 async def test_the_seeded_shadow_tools_are_removed_on_startup(clean_db):

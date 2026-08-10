@@ -35,12 +35,6 @@ from agent_server.config import (
     VISION_TIMEOUT,
 )
 
-CAPTURE_DIR = Path("/tmp/codeagent_captures")
-CAPTURE_DIR.mkdir(parents=True, exist_ok=True)
-
-MAX_SEQUENCE_FRAMES = 12
-DEFAULT_VIEWPORT = (1280, 900)
-
 
 class VisionError(RuntimeError):
     pass
@@ -287,93 +281,6 @@ async def close_client():
     _http = None
 
 
-# ── Browser capture ─────────────────────────────────────────────────────────
-
-async def capture(
-    url: str,
-    *,
-    selector: str | None = None,
-    full_page: bool = False,
-    width: int = DEFAULT_VIEWPORT[0],
-    height: int = DEFAULT_VIEWPORT[1],
-    wait_for: str | None = None,
-    delay_ms: int = 0,
-    count: int = 1,
-    interval_ms: int = 500,
-    actions: list[dict] | None = None,
-) -> list[tuple[str, bytes]]:
-    """Screenshot a page, optionally as a timed sequence.
-
-    Returns ``[(saved_path, png_bytes), ...]``. A sequence is useful for
-    animations, loading states, and anything that changes over time.
-    """
-    from playwright.async_api import async_playwright
-
-    count = max(1, min(int(count or 1), MAX_SEQUENCE_FRAMES))
-    interval_ms = max(0, min(int(interval_ms or 0), 10_000))
-    shots: list[tuple[str, bytes]] = []
-    stamp = f"{int(time.time())}_{abs(hash(url)) % 10000:04d}"
-
-    async with async_playwright() as p:
-        browser = await p.chromium.launch(
-            headless=True, args=["--no-sandbox", "--disable-dev-shm-usage"]
-        )
-        try:
-            page = await browser.new_page(viewport={"width": width, "height": height})
-            await page.goto(url, wait_until="networkidle", timeout=30_000)
-
-            if wait_for:
-                await page.wait_for_selector(wait_for, timeout=15_000)
-            for action in actions or []:
-                await _perform(page, action)
-            if delay_ms:
-                await page.wait_for_timeout(min(delay_ms, 15_000))
-
-            target = page
-            if selector:
-                element = await page.wait_for_selector(selector, timeout=15_000)
-                if element is None:
-                    raise VisionError(f"selector not found: {selector}")
-                target = element
-
-            for i in range(count):
-                if i:
-                    await page.wait_for_timeout(interval_ms)
-                kwargs = {"full_page": full_page} if target is page else {}
-                data = await target.screenshot(**kwargs)
-                name = f"{stamp}_{i:02d}.png" if count > 1 else f"{stamp}.png"
-                path = CAPTURE_DIR / name
-                path.write_bytes(data)
-                shots.append((str(path), data))
-        finally:
-            await browser.close()
-
-    return shots
-
-
-async def _perform(page, action: dict):
-    """Run one pre-capture interaction step."""
-    kind = (action.get("type") or "").lower()
-    selector = action.get("selector") or ""
-    value = action.get("value") or ""
-    try:
-        if kind == "click":
-            await page.click(selector, timeout=10_000)
-        elif kind == "fill":
-            await page.fill(selector, value, timeout=10_000)
-        elif kind == "press":
-            await page.press(selector or "body", value or "Enter", timeout=10_000)
-        elif kind == "hover":
-            await page.hover(selector, timeout=10_000)
-        elif kind == "scroll":
-            await page.evaluate(f"window.scrollBy(0, {int(value or 400)})")
-        elif kind == "wait":
-            await page.wait_for_timeout(min(int(value or 500), 15_000))
-        else:
-            raise VisionError(f"unknown action type: {kind}")
-    except Exception as e:
-        raise VisionError(f"action {kind}({selector}) failed: {e}") from e
-
-
 async def normalize_in_thread(data: bytes) -> bytes:
+    """Decode and re-encode off the event loop. A 48MP upload takes a while."""
     return await asyncio.to_thread(normalize_image, data)

@@ -12,7 +12,7 @@ SKILL_DIRS = [
 
 async def load_skill(ctx: ToolContext, *, name: str = "", **_) -> ToolResult:
     """List skills or load a specific one by name.
-    
+
     Without `name`: list available skills.
     With `name`: return the skill's Markdown content.
     """
@@ -81,7 +81,8 @@ def _load(name: str) -> tuple[str | None, str]:
 def _first_para(p: Path) -> str:
     try:
         text = p.read_text()
-        lines = [l.strip() for l in text.splitlines() if l.strip() and not l.strip().startswith("#")]
+        stripped = (line.strip() for line in text.splitlines())
+        lines = [line for line in stripped if line and not line.startswith("#")]
         if lines:
             return lines[0][:80]
     except Exception:

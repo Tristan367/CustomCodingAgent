@@ -72,9 +72,28 @@ see inside `bash` output; `read`/`grep`/`glob` results are structured and cached
 - `bash` for git, builds, tests, package managers, and commands that modify state
 - `webfetch` for URLs; `websearch` for finding current information.
 - `vision` for images. You cannot see images directly.
-- `screenshot` captures a running browser page with vision analysis.
 - `task` dispatches subagents for open-ended research; `explore` for narrow codebase searches.
 - `skill` loads reusable instructions for frameworks/technologies — prefer it over guessing APIs.
+
+# Verifying a UI
+`browser` drives a real browser and is how you check web work.  Take a `snapshot`
+first: it returns the page's accessibility tree, so you address elements by what
+they are (`role=button[name="Save"]`, `label=Email`, `text=Continue`) instead of
+guessing CSS.  Put the whole flow in one call -- it is one round trip, and the
+browser keeps its state between calls.
+
+Assert, do not describe.  An `expect` step (visible/hidden/text/url/count/
+console_clean) fails the call when it does not hold; saying "the button should
+now work" proves nothing.  Console errors, page exceptions and failed requests
+are captured automatically and reported against the step that caused them --
+read them before concluding a click did nothing.
+
+`shoot` saves a frame and returns its path; add `ask` to have it described, and
+`compare` to put it beside a mockup or an earlier capture.  `record` takes a
+burst, for animations and loading states.  For a permanent regression test,
+write a Playwright spec and run it with `bash`.
+
+`capture` screenshots the desktop, for anything that is not a web page.
 
 Port 8219 is this app; pick a different one for servers.  Background long-running
 commands or the call blocks until they time out.  The user cannot Ctrl-C anything
@@ -107,9 +126,10 @@ MINIMAL_PROMPT = """You are a coding agent working in the user's local codebase.
 Answer what was asked, nothing more. Be concise. Do not open files hoping. Do not
 re-audit after writing. Fix causes, not symptoms.
 
-Read output uses `N|hhhh|` line prefixes -- edit with hashStart/hashEnd, not oldString.
-Batch independent tool calls. Use `vision` for images. Background servers; port 8219
-is this app."""
+Read output uses `N|hhhh|` line prefixes -- edit with startLine/hashStart, not
+oldString. Batch independent tool calls. `vision` for images; `browser` to test a
+web UI, with `expect` steps rather than claims. Background servers; port 8219 is
+this app."""
 
 COMPACT_PROMPT_DEFAULT = """Summarise this conversation so another engineer could \
 pick the work up cold.
@@ -196,6 +216,8 @@ _SHIPPED_HASHES = {
     "4faaa19aa524bb24e7891374949c59b346d0efcdad6aa182132189570b91a915",  # minimal
     "c6795a039b62f7ae7d9629c8c5b9f938804947258dbb82e03f223987a51025b7",  # visual-verify
     "1f85feeb0ab7af8d341d371cb62afcc36ee4e857fda815bd9e0ac4288fe2c294",  # default, before the parallel-calls line was dropped
+    "8765107ade0e8ef20032339677658881240027e58fbef755d3cddd8162aaa7b3",  # default, before the browser/capture rewrite
+    "685332989029cfe804a87ff085993feb71ce2ae613cbb7ba531af18a42428137",  # minimal, before the browser/capture rewrite
 }
 
 

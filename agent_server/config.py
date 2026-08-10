@@ -2,6 +2,7 @@
 
 import os
 import shutil
+import tempfile
 from pathlib import Path
 
 from dotenv import load_dotenv
@@ -15,8 +16,16 @@ DATA_DIR = Path(os.getenv("CODEAGENT_DATA_DIR") or BASE_DIR / "data")
 DATA_DIR.mkdir(parents=True, exist_ok=True)
 DB_PATH = Path(os.getenv("CODEAGENT_DB") or DATA_DIR / "agent.db")
 
-UPLOAD_DIR = Path(os.getenv("UPLOAD_DIR", "/tmp/codeagent_uploads"))
+# tempfile.gettempdir() rather than "/tmp": the screen-capture backends are
+# chosen per platform, so the app claims to run on Windows, where /tmp is not
+# a path.
+_TMP = Path(tempfile.gettempdir())
+UPLOAD_DIR = Path(os.getenv("UPLOAD_DIR") or _TMP / "codeagent_uploads")
 UPLOAD_DIR.mkdir(parents=True, exist_ok=True)
+
+# Frames written by `browser` and `capture`, read back by `vision`.
+CAPTURE_DIR = Path(os.getenv("CODEAGENT_CAPTURE_DIR") or _TMP / "codeagent_captures")
+CAPTURE_DIR.mkdir(parents=True, exist_ok=True)
 
 # ── Models ──────────────────────────────────────────────────────────────────
 # Context/limits per https://api-docs.deepseek.com/quick_start/pricing

@@ -266,3 +266,64 @@ async def test_string_mode_still_works(workspace):
     )
     assert not result.is_error, result.output
     assert "def tres():" in path.read_text()
+
+
+# ── truncation and token estimation ──────────────────────────────────────────
+
+def test_truncation_says_what_to_do_not_just_what_happened():
+    """Told only that output was cut, a model re-runs the call and pays twice."""
+    from agent_server.tools.base import truncate
+
+    out = truncate("x" * 5000, 300, "grep", spill=True)
+    assert len(out) <= 300
+    assert "tool-output" in out, "the spill path must be named"
+    assert "explore" in out and "grep" in out
+    assert "Do not re-run" in out
+
+
+def test_truncation_without_a_spill_promises_no_file():
+    from agent_server.tools.base import truncate
+
+    out = truncate("x" * 5000, 300, "grep", spill=False)
+    assert "tool-output" not in out
+
+
+def test_the_token_estimate_learns_from_real_usage():
+    """chars/4 is 25% low on code, and compaction depends on it."""
+    from agent_server.providers import base
+
+    base._ratios.clear()
+    messages = [{"role": "user", "content": "def f(x):\n    return x * 2\n" * 40}]
+    chars = base.message_chars(messages)
+
+    assert base.estimate_tokens(messages, "m") == int(chars / 4.0)
+
+    real = int(chars / 3.0)  # what the provider actually billed
+    for _ in range(8):
+        base.observe_usage("m", chars, real)
+
+    assert abs(base.estimate_tokens(messages, "m") - real) < real * 0.05
+    base._ratios.clear()
+
+
+def test_a_nonsense_measurement_is_ignored():
+    """One odd turn must not move the estimate for every later one."""
+    from agent_server.providers import base
+
+    base._ratios.clear()
+    base.observe_usage("m", 1000, 0)        # no tokens reported
+    base.observe_usage("m", 0, 1000)        # no characters
+    base.observe_usage("m", 1000, 1)        # 1000 chars/token: not a tokenizer
+    assert base.chars_per_token("m") == 4.0
+    base._ratios.clear()
+
+
+def test_each_model_is_calibrated_separately():
+    from agent_server.providers import base
+
+    base._ratios.clear()
+    for _ in range(8):
+        base.observe_usage("dense", 3000, 1000)
+    assert base.chars_per_token("dense") < 3.5
+    assert base.chars_per_token("untouched") == 4.0
+    base._ratios.clear()

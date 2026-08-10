@@ -6,6 +6,8 @@ import time
 from dataclasses import dataclass, field
 from pathlib import Path
 
+from agent_server.config import DATA_DIR
+
 
 @dataclass
 class ToolContext:
@@ -95,15 +97,34 @@ def truncate(text: str, limit: int, note: str = "output", spill: bool = False) -
     if len(text) <= limit:
         return text
     path = _spill(text) if spill else None
-    where = (
-        f"; the full {len(text):,} characters are at {path} -- read it for the rest"
-        if path else ""
-    )
+    if path:
+        # Say what to do, not just what happened. Told only that output was
+        # truncated, a model re-runs the tool with a narrower argument and pays
+        # for the whole thing twice; told where the rest is, it can `grep` the
+        # file or hand it to `explore` and keep the bulk out of context.
+        where = (
+            f". The full {len(text):,} characters are at {path} -- "
+            f"`grep` it, `read` it with offset/limit, or give the path to "
+            f"`explore`. Do not re-run this call hoping for less output"
+        )
+    else:
+        where = ""
     marker = f"\n\n... [{note} truncated at {limit:,} characters{where}]"
+    # The result must never exceed `limit`, or a second pass -- and every tool
+    # result goes through at least two -- trims the marker off the end and
+    # loses the pointer it just wrote. When the advice does not fit, keep the
+    # path and drop the prose; when even that does not fit, keep the fact.
+    if len(marker) >= limit:
+        marker = f"\n\n... [truncated; full output at {path}]" if path else "\n\n... [truncated]"
+    if len(marker) >= limit:
+        marker = "..."
     return text[: max(0, limit - len(marker))] + marker
 
 
-SPILL_DIR = Path.home() / ".codeagent" / "tool-output"
+# Under the data directory with everything else. It was a second, older
+# location left behind when the database moved, so spilled output survived a
+# clean-up of the data directory and nothing pointed at it.
+SPILL_DIR = DATA_DIR / "tool-output"
 SPILL_MAX_AGE = 2 * 24 * 60 * 60
 
 

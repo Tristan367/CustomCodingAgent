@@ -121,9 +121,39 @@ class Provider(ABC):
         return [{"key": self.settings_key, "label": "API Key", "kind": "password"}]
 
 
-def estimate_tokens(messages: list[dict]) -> int:
-    """Rough character-based estimate, used only for UI display and compaction
-    triggers. Real accounting comes from the provider's `usage` event."""
+# Characters per token, learned from real usage. 4.0 is the usual rule of
+# thumb and the starting point; every provider response reports exactly how
+# many tokens its prompt came to, so there is no reason to keep guessing after
+# the first one. Code and JSON run denser than prose -- nearer 3 -- and the
+# error compounds: an estimate 25% low pushes compaction past the real context
+# limit, which is a hard failure rather than a cosmetic one.
+_DEFAULT_RATIO = 4.0
+_ratios: dict[str, float] = {}
+
+
+def observe_usage(model: str, prompt_chars: int, prompt_tokens: int) -> None:
+    """Fold one real measurement into the ratio for this model.
+
+    Exponential moving average, so a single odd turn -- a huge image, an empty
+    prompt -- cannot swing the estimate, but a genuine shift settles in.
+    """
+    if prompt_tokens <= 0 or prompt_chars <= 0:
+        return
+    observed = prompt_chars / prompt_tokens
+    # A ratio outside this range means the two numbers describe different
+    # things, not that the tokenizer is unusual.
+    if not 1.0 <= observed <= 12.0:
+        return
+    previous = _ratios.get(model, _DEFAULT_RATIO)
+    _ratios[model] = previous * 0.7 + observed * 0.3
+
+
+def chars_per_token(model: str = "") -> float:
+    return _ratios.get(model, _DEFAULT_RATIO)
+
+
+def message_chars(messages: list[dict]) -> int:
+    """Characters the model will actually be billed for, near enough."""
     total = 0
     for m in messages:
         content = m.get("content") or ""
@@ -138,4 +168,13 @@ def estimate_tokens(messages: list[dict]) -> int:
             fn = tc.get("function", {})
             total += len(fn.get("name", "")) + len(fn.get("arguments", "") or "")
         total += 4  # per-message role/framing overhead
-    return total // 4
+    return total
+
+
+def estimate_tokens(messages: list[dict], model: str = "") -> int:
+    """Token estimate for UI display and compaction triggers.
+
+    Real accounting still comes from the provider's `usage` event; this is what
+    the app uses between those, and it is now calibrated by them.
+    """
+    return int(message_chars(messages) / chars_per_token(model))

@@ -31,6 +31,7 @@ from agent_server.conversation import (
     tool_call_name,
 )
 from agent_server.providers import Provider, get_provider
+from agent_server.providers.base import message_chars, observe_usage
 from agent_server.system_prompt import disabled_tools, get_compact_prompt, session_system_prompt
 from agent_server.tools.base import ToolContext, ToolResult, truncate
 from agent_server.tools.registry import execute_tool, get_tool, tool_schemas
@@ -646,6 +647,14 @@ async def _loop(
             if usage.get("prompt_tokens"):
                 await db.update_session(
                     session_id, cache_prompt_tokens=usage["prompt_tokens"]
+                )
+                # And teach the estimator, so the numbers it produces between
+                # API calls converge on this model's real tokenizer instead of
+                # staying at a hardcoded four characters per token.
+                observe_usage(
+                    session["model"],
+                    message_chars(messages),
+                    usage["prompt_tokens"],
                 )
             yield {"type": "usage", "usage": usage}
             # The cache can also expire server-side, which nothing local can

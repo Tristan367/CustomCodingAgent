@@ -1,0 +1,548 @@
+[
+  {
+    "path": "/",
+    "methods": [
+      "GET"
+    ],
+    "name": "index"
+  },
+  {
+    "path": "/_browse",
+    "methods": [
+      "GET"
+    ],
+    "name": "browse"
+  },
+  {
+    "path": "/_browse/mkdir",
+    "methods": [
+      "POST"
+    ],
+    "name": "browse_mkdir"
+  },
+  {
+    "path": "/_create_session",
+    "methods": [
+      "POST"
+    ],
+    "name": "create_session_form"
+  },
+  {
+    "path": "/_delete_custom_endpoint",
+    "methods": [
+      "POST"
+    ],
+    "name": "delete_custom_endpoint"
+  },
+  {
+    "path": "/_delete_custom_tool",
+    "methods": [
+      "POST"
+    ],
+    "name": "delete_custom_tool"
+  },
+  {
+    "path": "/_delete_prompt",
+    "methods": [
+      "POST"
+    ],
+    "name": "delete_prompt"
+  },
+  {
+    "path": "/_delete_secret",
+    "methods": [
+      "POST"
+    ],
+    "name": "delete_secret"
+  },
+  {
+    "path": "/_init",
+    "methods": [
+      "POST"
+    ],
+    "name": "init_project"
+  },
+  {
+    "path": "/_messages/{session_id}",
+    "methods": [
+      "GET"
+    ],
+    "name": "messages_partial"
+  },
+  {
+    "path": "/_new_custom_endpoint",
+    "methods": [
+      "POST"
+    ],
+    "name": "new_custom_endpoint"
+  },
+  {
+    "path": "/_new_custom_tool",
+    "methods": [
+      "POST"
+    ],
+    "name": "new_custom_tool"
+  },
+  {
+    "path": "/_new_prompt",
+    "methods": [
+      "POST"
+    ],
+    "name": "new_prompt"
+  },
+  {
+    "path": "/_new_secret",
+    "methods": [
+      "POST"
+    ],
+    "name": "new_secret"
+  },
+  {
+    "path": "/_quick_chat",
+    "methods": [
+      "POST"
+    ],
+    "name": "quick_chat"
+  },
+  {
+    "path": "/_save_custom_endpoint",
+    "methods": [
+      "POST"
+    ],
+    "name": "save_custom_endpoint"
+  },
+  {
+    "path": "/_save_custom_tool",
+    "methods": [
+      "POST"
+    ],
+    "name": "save_custom_tool"
+  },
+  {
+    "path": "/_save_prompts",
+    "methods": [
+      "POST"
+    ],
+    "name": "save_prompts"
+  },
+  {
+    "path": "/_save_secret",
+    "methods": [
+      "POST"
+    ],
+    "name": "save_secret"
+  },
+  {
+    "path": "/_save_subagent",
+    "methods": [
+      "POST"
+    ],
+    "name": "save_subagent"
+  },
+  {
+    "path": "/_session/{session_id}",
+    "methods": [
+      "GET"
+    ],
+    "name": "session_partial"
+  },
+  {
+    "path": "/_session_meta/{session_id}",
+    "methods": [
+      "GET"
+    ],
+    "name": "session_meta_partial"
+  },
+  {
+    "path": "/_settings",
+    "methods": [
+      "POST"
+    ],
+    "name": "save_settings"
+  },
+  {
+    "path": "/_settings/bash_rules",
+    "methods": [
+      "POST"
+    ],
+    "name": "save_bash_rules"
+  },
+  {
+    "path": "/_settings/sound",
+    "methods": [
+      "POST"
+    ],
+    "name": "save_sound_setting"
+  },
+  {
+    "path": "/_settings/sounds",
+    "methods": [
+      "GET"
+    ],
+    "name": "list_uploaded_sounds"
+  },
+  {
+    "path": "/_settings/sounds/upload",
+    "methods": [
+      "POST"
+    ],
+    "name": "upload_sound"
+  },
+  {
+    "path": "/_settings/sounds/{name}",
+    "methods": [
+      "DELETE"
+    ],
+    "name": "delete_sound"
+  },
+  {
+    "path": "/_settings/sounds/{name}/play",
+    "methods": [
+      "GET"
+    ],
+    "name": "serve_sound"
+  },
+  {
+    "path": "/_settings/tts",
+    "methods": [
+      "POST"
+    ],
+    "name": "save_tts_settings"
+  },
+  {
+    "path": "/_tab_bar",
+    "methods": [
+      "GET"
+    ],
+    "name": "tab_bar"
+  },
+  {
+    "path": "/_tab_close/{session_id}",
+    "methods": [
+      "POST"
+    ],
+    "name": "tab_close"
+  },
+  {
+    "path": "/_tab_order",
+    "methods": [
+      "POST"
+    ],
+    "name": "tab_order"
+  },
+  {
+    "path": "/_test_custom_tool",
+    "methods": [
+      "POST"
+    ],
+    "name": "test_custom_tool"
+  },
+  {
+    "path": "/api/files/image",
+    "methods": [
+      "GET"
+    ],
+    "name": "serve_image"
+  },
+  {
+    "path": "/api/sessions",
+    "methods": [
+      "GET"
+    ],
+    "name": "list_sessions"
+  },
+  {
+    "path": "/api/sessions",
+    "methods": [
+      "POST"
+    ],
+    "name": "create_session"
+  },
+  {
+    "path": "/api/sessions/{session_id}",
+    "methods": [
+      "DELETE"
+    ],
+    "name": "delete_session"
+  },
+  {
+    "path": "/api/sessions/{session_id}",
+    "methods": [
+      "GET"
+    ],
+    "name": "get_session"
+  },
+  {
+    "path": "/api/sessions/{session_id}",
+    "methods": [
+      "PATCH"
+    ],
+    "name": "update_session"
+  },
+  {
+    "path": "/api/sessions/{session_id}/accept-cache-warning",
+    "methods": [
+      "POST"
+    ],
+    "name": "accept_cache_warning"
+  },
+  {
+    "path": "/api/sessions/{session_id}/attach",
+    "methods": [
+      "GET"
+    ],
+    "name": "attach"
+  },
+  {
+    "path": "/api/sessions/{session_id}/auto-approve",
+    "methods": [
+      "POST"
+    ],
+    "name": "set_auto_approve"
+  },
+  {
+    "path": "/api/sessions/{session_id}/auto-compact",
+    "methods": [
+      "POST"
+    ],
+    "name": "set_auto_compact"
+  },
+  {
+    "path": "/api/sessions/{session_id}/cancel",
+    "methods": [
+      "POST"
+    ],
+    "name": "cancel"
+  },
+  {
+    "path": "/api/sessions/{session_id}/chat",
+    "methods": [
+      "POST"
+    ],
+    "name": "chat"
+  },
+  {
+    "path": "/api/sessions/{session_id}/chat-with-image",
+    "methods": [
+      "POST"
+    ],
+    "name": "chat_with_image"
+  },
+  {
+    "path": "/api/sessions/{session_id}/compact",
+    "methods": [
+      "POST"
+    ],
+    "name": "compact"
+  },
+  {
+    "path": "/api/sessions/{session_id}/compact-profile",
+    "methods": [
+      "POST"
+    ],
+    "name": "set_compact_profile"
+  },
+  {
+    "path": "/api/sessions/{session_id}/compact-prompt",
+    "methods": [
+      "GET"
+    ],
+    "name": "compact_prompt"
+  },
+  {
+    "path": "/api/sessions/{session_id}/compact-threshold",
+    "methods": [
+      "POST"
+    ],
+    "name": "set_compact_threshold"
+  },
+  {
+    "path": "/api/sessions/{session_id}/continue",
+    "methods": [
+      "POST"
+    ],
+    "name": "continue_run"
+  },
+  {
+    "path": "/api/sessions/{session_id}/messages",
+    "methods": [
+      "GET"
+    ],
+    "name": "get_messages"
+  },
+  {
+    "path": "/api/sessions/{session_id}/queue",
+    "methods": [
+      "POST"
+    ],
+    "name": "queue"
+  },
+  {
+    "path": "/api/sessions/{session_id}/queue/{queue_id}",
+    "methods": [
+      "DELETE"
+    ],
+    "name": "unqueue"
+  },
+  {
+    "path": "/api/sessions/{session_id}/resolve",
+    "methods": [
+      "POST"
+    ],
+    "name": "resolve"
+  },
+  {
+    "path": "/api/sessions/{session_id}/seen",
+    "methods": [
+      "POST"
+    ],
+    "name": "seen"
+  },
+  {
+    "path": "/api/sessions/{session_id}/state",
+    "methods": [
+      "GET"
+    ],
+    "name": "state"
+  },
+  {
+    "path": "/api/sessions/{session_id}/system-prompt",
+    "methods": [
+      "GET"
+    ],
+    "name": "get_system_prompt"
+  },
+  {
+    "path": "/api/sessions/{session_id}/system-prompt",
+    "methods": [
+      "POST"
+    ],
+    "name": "set_system_prompt"
+  },
+  {
+    "path": "/api/sessions/{session_id}/system-prompt/pending",
+    "methods": [
+      "DELETE"
+    ],
+    "name": "discard_pending_prompt"
+  },
+  {
+    "path": "/api/sessions/{session_id}/write-dirs",
+    "methods": [
+      "DELETE"
+    ],
+    "name": "remove_write_dir"
+  },
+  {
+    "path": "/api/sessions/{session_id}/write-dirs",
+    "methods": [
+      "GET"
+    ],
+    "name": "list_write_dirs"
+  },
+  {
+    "path": "/api/sessions/{session_id}/write-dirs",
+    "methods": [
+      "POST"
+    ],
+    "name": "add_write_dir"
+  },
+  {
+    "path": "/api/status",
+    "methods": [
+      "GET"
+    ],
+    "name": "status"
+  },
+  {
+    "path": "/api/stt",
+    "methods": [
+      "POST"
+    ],
+    "name": "transcribe"
+  },
+  {
+    "path": "/api/stt/status",
+    "methods": [
+      "GET"
+    ],
+    "name": "stt_status"
+  },
+  {
+    "path": "/api/tts/plan",
+    "methods": [
+      "POST"
+    ],
+    "name": "tts_plan"
+  },
+  {
+    "path": "/api/tts/speak",
+    "methods": [
+      "POST"
+    ],
+    "name": "tts_speak"
+  },
+  {
+    "path": "/api/tts/status",
+    "methods": [
+      "GET"
+    ],
+    "name": "tts_status"
+  },
+  {
+    "path": "/docs",
+    "methods": [
+      "GET"
+    ],
+    "name": "swagger_ui_html"
+  },
+  {
+    "path": "/docs/oauth2-redirect",
+    "methods": [
+      "GET"
+    ],
+    "name": "swagger_ui_redirect"
+  },
+  {
+    "path": "/openapi.json",
+    "methods": [
+      "GET"
+    ],
+    "name": "openapi"
+  },
+  {
+    "path": "/prompts",
+    "methods": [
+      "GET"
+    ],
+    "name": "prompts_page"
+  },
+  {
+    "path": "/redoc",
+    "methods": [
+      "GET"
+    ],
+    "name": "redoc_html"
+  },
+  {
+    "path": "/sessions/{session_id}",
+    "methods": [
+      "GET"
+    ],
+    "name": "session_page"
+  },
+  {
+    "path": "/static",
+    "methods": [
+      "MOUNT"
+    ],
+    "name": "static"
+  },
+  {
+    "path": "/tools",
+    "methods": [
+      "GET"
+    ],
+    "name": "tools_page"
+  }
+]

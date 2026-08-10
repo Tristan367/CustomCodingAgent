@@ -5,56 +5,54 @@ import html
 import json
 import re
 from contextlib import asynccontextmanager
-from datetime import UTC, datetime
+from datetime import datetime
 from pathlib import Path
 
 from fastapi import FastAPI, Form, HTTPException, Request
 from fastapi.responses import FileResponse, HTMLResponse, PlainTextResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
-from fastapi.templating import Jinja2Templates
 
-from agent_server import agent, permissions
+from agent_server import agent
 from agent_server import database as db
-from agent_server import tts as tts_service
-from agent_server.compaction import should_offer_compaction
 from agent_server.config import (
     DEFAULT_MODEL,
-    MODELS,
-    REASONING_EFFORTS,
-    THRESHOLD_STEPS,
     resolve_model_choice,
-    stt_available,
-)
-from agent_server.conversation import (
-    normalize_tool_calls,
-    parse_arguments,
-    pending_tool_calls,
-    tool_call_name,
 )
 from agent_server.database import close as close_db
 from agent_server.database import init_db
 from agent_server.providers import (
-    _providers,
     get_provider,
     get_provider_settings_fields,
-    list_providers,
     load_custom_endpoint_providers,
 )
 from agent_server.routes import chat, sessions, tts
-from agent_server.stt import availability as stt_availability
+from agent_server.routes.context import (
+    _ALLOWED_SOUND_EXTS,
+    _clamp,
+    _ensure_sound_dir,
+    _home_context,
+    _list_uploaded_sounds,
+    _open_tabs,
+    _save_tabs,
+    _session_context,
+    _slug,
+    _sound_enabled,
+    _start_watching,
+    _stop_watching,
+    _track_tab,
+)
 from agent_server.system_prompt import (
     COMPACTION,
     PROTECTED_PROMPT,
     SYSTEM,
     build_system_prompt,
-    list_prompt_names,
     migrate_prompts,
 )
-from agent_server.tools.registry import TOOLS, get_tool, tool_schemas
-
-BASE_DIR = Path(__file__).resolve().parent.parent
-TEMPLATE_DIR = BASE_DIR / "web_ui" / "templates"
-STATIC_DIR = BASE_DIR / "web_ui" / "static"
+from agent_server.templating import (
+    STATIC_DIR,
+    templates,
+)
+from agent_server.tools.registry import TOOLS, tool_schemas
 
 
 async def _warm_vision():
@@ -132,285 +130,25 @@ app.include_router(sessions.router)
 app.include_router(chat.router)
 app.include_router(tts.router)
 
-templates = Jinja2Templates(directory=str(TEMPLATE_DIR))
-
-
-# ── Template filters ────────────────────────────────────────────────────────
-
-def _parse(value: str) -> datetime | None:
-    if not value:
-        return None
-    try:
-        dt = datetime.fromisoformat(value.replace("Z", "+00:00"))
-    except ValueError:
-        return None
-    if dt.tzinfo is None:
-        dt = dt.replace(tzinfo=UTC)
-    return dt.astimezone()
-
-
-def humantime(value: str) -> str:
-    """Relative for recent timestamps, absolute once it stops being useful."""
-    dt = _parse(value)
-    if dt is None:
-        return value
-    delta = datetime.now(UTC) - dt.astimezone(UTC)
-    secs = delta.total_seconds()
-    if secs < 60:
-        return "just now"
-    if secs < 3600:
-        return f"{int(secs // 60)}m ago"
-    if secs < 86400:
-        return f"{int(secs // 3600)}h ago"
-    if secs < 604800:
-        return f"{int(secs // 86400)}d ago"
-    return dt.strftime("%b %-d, %Y")
-
-
-def clocktime(value: str) -> str:
-    dt = _parse(value)
-    if dt is None:
-        return value
-    return dt.strftime("%-I:%M %p").lower().replace("am", "AM").replace("pm", "PM")
-
-
-def tildepath(value: str) -> str:
-    """Render /home/you/projects/x as ~/projects/x."""
-    if not value:
-        return value
-    home = str(Path.home())
-    if value == home:
-        return "~"
-    if value.startswith(home + "/"):
-        return "~" + value[len(home):]
-    return value
-
-
-templates.env.filters["humantime"] = humantime
-_ATTACHMENT_RE = re.compile(r"^\[Image attached: (?P<path>.+?) \((?P<meta>[^)]*)\)\]$", re.M)
-_ATTACHMENT_HINT = re.compile(r"^Use the `vision` tool on th(?:is path|ese paths) to see the images?\.$", re.M)
-
-
-def extract_attachments(content: str) -> list[dict]:
-    """Attachment paths recorded in a user message, for rendering as thumbnails."""
-    return [
-        {"path": m.group("path"), "meta": m.group("meta")}
-        for m in _ATTACHMENT_RE.finditer(content or "")
-    ]
-
-
-def strip_attachments(content: str) -> str:
-    """The message without the plumbing the model needs but the user does not."""
-    text = _ATTACHMENT_RE.sub("", content or "")
-    text = _ATTACHMENT_HINT.sub("", text)
-    return text.strip()
-
-
-def difflines(diff: str) -> list[tuple[str, str]]:
-    """Tag each diff line with a CSS class, matching renderDiff() in app.js so a
-    reloaded transcript looks identical to the streamed one."""
-    out = []
-    for line in (diff or "").rstrip("\n").split("\n"):
-        if line.startswith("@@"):
-            cls = "diff-hunk"
-        elif line.startswith(("+++", "---")):
-            cls = "diff-meta"
-        elif line.startswith("+"):
-            cls = "diff-add"
-        elif line.startswith("-"):
-            cls = "diff-del"
-        else:
-            cls = "diff-ctx"
-        out.append((cls, line))
-    return out
-
-
-def diffstat_counts(diff: str) -> tuple[int, int]:
-    added = sum(1 for ln in (diff or "").splitlines() if ln.startswith("+") and not ln.startswith("+++"))
-    removed = sum(1 for ln in (diff or "").splitlines() if ln.startswith("-") and not ln.startswith("---"))
-    return added, removed
-
-
-def duration_label(ms: int | None) -> str:
-    """Only worth showing once a call is slow enough to have been noticed."""
-    if not ms or ms < 1000:
-        return ""
-    return f"{ms / 1000:.1f}s"
-
-
-templates.env.filters["clocktime"] = clocktime
-templates.env.filters["tildepath"] = tildepath
-templates.env.filters["attachments"] = extract_attachments
-templates.env.filters["withoutattachments"] = strip_attachments
-templates.env.filters["toolcalls"] = normalize_tool_calls
-templates.env.filters["difflines"] = difflines
-templates.env.filters["diffstat"] = diffstat_counts
-templates.env.filters["duration"] = duration_label
-
-
-def _render_bash_rules(raw: str) -> str:
-    """Format bash rules JSON for the human-readable textarea."""
-    try:
-        rules = json.loads(raw or "[]")
-        return "\n".join(f"{r['pattern']} → {r['action']}" for r in rules)
-    except Exception:
-        return raw
-
-
-templates.env.filters["render_bash_rules"] = _render_bash_rules
 
 
 # ── Shared context ──────────────────────────────────────────────────────────
 
-async def _sound_enabled() -> bool:
-    return await db.get_setting("sound_enabled", "1") != "0"
 
 
-def _list_uploaded_sounds() -> list[str]:
-    d = _ensure_sound_dir()
-    return sorted(f.name for f in d.iterdir() if f.suffix.lower() in _ALLOWED_SOUND_EXTS)
 
 
 # ── Directory rename watcher ────────────────────────────────────────────────
 
 
-def _start_watching(session_id: str, project_dir: str):
-    from agent_server.dir_watcher import watch
-
-    async def on_rename(sid: str, new_dir: str):
-        await db.set_setting(f"session_dir:{sid}", new_dir)
-        await db._execute(
-            "UPDATE sessions SET project_dir = ? WHERE id = ?",
-            (new_dir, sid),
-        )
-
-    watch(session_id, project_dir, on_rename)
 
 
-def _stop_watching(session_id: str):
-    from agent_server.dir_watcher import unwatch
-    unwatch(session_id)
 
 
-async def _session_context(session: dict) -> dict:
-    usage = await db.get_session_usage(session["id"])
-    messages = await db.get_messages(session["id"])
-    return {
-        "session": session,
-        "messages": messages,
-        "compactions": await db.get_compactions(session["id"]),
-        # Only models that can actually authenticate, so switching to one does
-        # not produce a session that fails on its next message.
-        "models": _offerable_models(),
-        "profiles": await list_prompt_names(),
-        "compact_profiles": await list_prompt_names(COMPACTION),
-        "efforts": REASONING_EFFORTS,
-        "usage": usage,
-        "should_compact": await should_offer_compaction(session["id"]),
-        "auto_approve": bool(session.get("bash_auto_approve"))
-        or agent.runtime_auto_approve(session["id"]),
-        "stt_enabled": stt_available(),
-        "pending": await _pending_prompt(session, messages),
-        "sound_enabled": await _sound_enabled(),
-        "uploaded_sounds": _list_uploaded_sounds(),
-        "threshold_steps": THRESHOLD_STEPS,
-        "allowed_dirs": await permissions.list_allowed(session["id"]),
-    }
 
 
-async def _pending_prompt(session: dict, messages: list[dict]) -> dict | None:
-    """Describe a tool call still waiting on the user, so a page reload can
-    re-offer the approval instead of stranding the session."""
-    _, pending = pending_tool_calls(messages)
-    if not pending:
-        return None
-    call = pending[0]
-    name = tool_call_name(call)
-    args = parse_arguments(call)
-    shell_auto = bool(session.get("bash_auto_approve")) or agent.runtime_auto_approve(session["id"])
-    tool = get_tool(name)
-    if tool and tool.pause == "permission" and name not in ("bash", "edit", "write"):
-        return {
-            "type": "permission",
-            "tool_call_id": call["id"],
-            "name": name,
-            "args": args,
-            "message": f"Run custom tool '{name}'?",
-            "kind": "custom_tool",
-        }
-    prompt = await permissions.check(
-        name, args, session["id"], session["project_dir"], shell_auto
-    )
-    if prompt is None:
-        return None
-    return {
-        "type": "permission",
-        "tool_call_id": call["id"],
-        "name": name,
-        "args": args,
-        **prompt,
-    }
 
 
-async def _home_context(error: str = "", clone_id: str = "") -> dict:
-    settings = await db.get_all_settings()
-    clone_defaults = {}
-    if clone_id:
-        clone_session = await db.get_session(clone_id)
-        if clone_session:
-            base_name = clone_session["name"]
-            # Find next available "(N)" suffix
-            existing = {s["name"] for s in await db.list_sessions()}
-            n = 1
-            while f"{base_name} ({n})" in existing:
-                n += 1
-            clone_defaults = {
-                "clone_name": f"{base_name} ({n})",
-                "clone_project_dir": clone_session["project_dir"],
-                "clone_model": clone_session.get("model", DEFAULT_MODEL),
-                "clone_provider": clone_session.get("provider", "deepseek"),
-                "clone_profile": clone_session.get("prompt_profile", "default"),
-                "clone_compact": clone_session.get("compact_profile", "default"),
-                "clone_thinking": clone_session.get("thinking_effort", "high"),
-                "clone_bash_auto": clone_session.get("bash_auto_approve", 0),
-            }
-    provider_settings = []
-    for ps in get_provider_settings_fields():
-        f_list = []
-        for f in ps["fields"]:
-            raw = settings.get(f["key"], "")
-            is_pw = f.get("kind") == "password"
-            preview = ""
-            if raw and is_pw:
-                # Shows the first and last quarter so a key is recognisable.
-                # Half of it reaches the page either way, which is more than
-                # identification needs -- worth revisiting.
-                edge = max(0, len(raw) // 4)
-                preview = raw[:edge] + "\u2026" + raw[len(raw) - edge:]
-            f_list.append(dict(f, value=("\u2022" * 12), has_value=bool(raw) and is_pw, preview=preview))
-        provider_settings.append({"name": ps["name"], "fields": f_list})
-
-    custom_endpoints = await db.list_custom_endpoints()
-    filtered_models = _offerable_models()
-
-    return {
-        "sessions": await db.list_sessions(),
-        "sound_enabled": await _sound_enabled(),
-        "uploaded_sounds": _list_uploaded_sounds(),
-        "stt": stt_availability(),
-        "tts": tts_service.availability(),
-        "settings": settings,
-        "provider_settings": provider_settings,
-        "custom_endpoints": custom_endpoints,
-        "providers": list_providers(),
-        "models": filtered_models,
-        "profiles": await list_prompt_names(),
-        "compact_profiles": await list_prompt_names(COMPACTION),
-        "default_model": DEFAULT_MODEL,
-        "clone_defaults": clone_defaults,
-        "default_name": f"temp session {datetime.now().strftime('%-m-%-d-%Y')}",
-        "error": error,
-    }
 
 
 # ── Pages ───────────────────────────────────────────────────────────────────
@@ -467,29 +205,12 @@ async def session_meta_partial(request: Request, session_id: str):
 
 # ── Tabs ────────────────────────────────────────────────────────────────────
 
-_tab_lock = asyncio.Lock()
 
 
-async def _open_tabs() -> list[str]:
-    try:
-        value = json.loads(await db.get_setting("open_tabs", "[]"))
-        return [str(v) for v in value] if isinstance(value, list) else []
-    except json.JSONDecodeError:
-        return []
 
 
-async def _save_tabs(ids: list[str]):
-    await db.set_setting("open_tabs", json.dumps(ids))
 
 
-async def _track_tab(session_id: str):
-    # Read-modify-write: two tabs opened in quick succession would otherwise
-    # each read the old list and the second would drop the first.
-    async with _tab_lock:
-        tabs = await _open_tabs()
-        if session_id not in tabs:
-            tabs.append(session_id)
-            await _save_tabs(tabs)
 
 
 @app.get("/_tab_bar")
@@ -566,13 +287,8 @@ async def save_sound_setting(request: Request):
     return {"ok": True}
 
 
-_SOUND_DIR = Path.home() / ".config" / "codeagent" / "sounds"
-_ALLOWED_SOUND_EXTS = {".mp3", ".wav", ".ogg", ".m4a"}
 
 
-def _ensure_sound_dir() -> Path:
-    _SOUND_DIR.mkdir(parents=True, exist_ok=True)
-    return _SOUND_DIR
 
 
 @app.get("/_settings/sounds")
@@ -724,44 +440,8 @@ async def save_tts_settings(
     return {"ok": True}
 
 
-def _offerable_models() -> list[dict]:
-    """Models that can actually be run right now, newest-configured last.
-
-    A model is offered only when its provider has credentials, because picking
-    one that cannot authenticate produces a session that fails on its first
-    message with no hint as to why. Each configured custom endpoint contributes
-    one entry: the provider is a property of the choice, so the form asks for
-    one thing rather than letting a model and a provider disagree.
-
-    The credential test is the provider's own `has_credentials`, which already
-    knows about environment variables, so this no longer restates the mapping
-    from provider name to env var and gets it wrong for new providers.
-    """
-    offered = []
-    for model in MODELS:
-        try:
-            provider = get_provider(model["provider"])
-        except ValueError:
-            continue
-        if provider.has_credentials():
-            offered.append(model)
-
-    for key, provider in _providers.items():
-        if key.startswith("custom:") and provider.has_credentials():
-            offered.append({
-                "id": key,
-                "name": f"{provider.name} (custom endpoint)",
-                "provider": key,
-                "needs_model_id": True,
-            })
-    return offered
 
 
-def _clamp(raw: str, low: float, high: float, fallback: float) -> float:
-    try:
-        return min(max(float(raw), low), high)
-    except ValueError:
-        return fallback
 
 
 @app.post("/_create_session")
@@ -906,8 +586,6 @@ async def delete_prompt(request: Request):
     return RedirectResponse("/prompts", status_code=303)
 
 
-def _slug(raw: str) -> str:
-    return re.sub(r"[^a-z0-9-]+", "-", raw.strip().lower()).strip("-")[:40]
 
 
 # ── Custom tools editor ─────────────────────────────────────────────────────

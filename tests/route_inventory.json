@@ -49,18 +49,18 @@
     "name": "delete_prompt"
   },
   {
-    "path": "/_delete_secret",
-    "methods": [
-      "POST"
-    ],
-    "name": "delete_secret"
-  },
-  {
     "path": "/_delete_script",
     "methods": [
       "POST"
     ],
     "name": "delete_script"
+  },
+  {
+    "path": "/_delete_secret",
+    "methods": [
+      "POST"
+    ],
+    "name": "delete_secret"
   },
   {
     "path": "/_init",
@@ -98,18 +98,18 @@
     "name": "new_prompt"
   },
   {
-    "path": "/_new_secret",
-    "methods": [
-      "POST"
-    ],
-    "name": "new_secret"
-  },
-  {
     "path": "/_new_script",
     "methods": [
       "POST"
     ],
     "name": "new_script"
+  },
+  {
+    "path": "/_new_secret",
+    "methods": [
+      "POST"
+    ],
+    "name": "new_secret"
   },
   {
     "path": "/_quick_chat",
@@ -236,6 +236,13 @@
       "POST"
     ],
     "name": "save_tts_settings"
+  },
+  {
+    "path": "/_shutdown",
+    "methods": [
+      "POST"
+    ],
+    "name": "shutdown"
   },
   {
     "path": "/_tab_bar",

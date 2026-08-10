@@ -7,7 +7,9 @@ has no business occupying schema tokens on every request.
 
 import asyncio
 import html
+import logging
 import os
+import signal
 
 from fastapi import APIRouter, Request
 from fastapi.responses import HTMLResponse, RedirectResponse
@@ -20,6 +22,8 @@ from agent_server.tools.bash import _collect, _kill
 RUN_TIMEOUT_SEC = 120
 MAX_SCRIPT_CHARS = 32000
 MAX_OUTPUT_CHARS = 5000
+
+log = logging.getLogger(__name__)
 
 router = APIRouter()
 
@@ -66,6 +70,26 @@ async def new_script(request: Request):
         return RedirectResponse("/", status_code=303)
     await db.save_script(name, "")
     return RedirectResponse(f"/?script={name}", status_code=303)
+
+
+@router.post("/_shutdown")
+async def shutdown():
+    """Stop the server from the UI.
+
+    Signals the process rather than calling sys.exit: uvicorn installs a SIGTERM
+    handler that runs the lifespan shutdown, which is what closes the database
+    and the browser. Killing the worker directly would skip it.
+    """
+    log.info("shutdown requested from the UI")
+
+    async def _later():
+        # Let the response reach the browser first, or the page reports a
+        # network error for a shutdown that worked.
+        await asyncio.sleep(0.3)
+        os.kill(os.getpid(), signal.SIGTERM)
+
+    asyncio.get_running_loop().create_task(_later())
+    return HTMLResponse('<div class="script-note">Stopped. This page is now dead.</div>')
 
 
 @router.post("/_run_script")

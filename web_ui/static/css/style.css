@@ -1686,3 +1686,14 @@ kbd {
 .stderr-output {
   color: var(--danger);
 }
+
+/* A destructive action that belongs at the end of the page, not beside Save. */
+.page-footer {
+  display: flex;
+  align-items: center;
+  gap: var(--s3);
+  padding: var(--s5) 0 var(--s6);
+  border-top: 1px solid var(--border);
+  margin-top: var(--s5);
+}
+.page-footer .hint { margin: 0; }

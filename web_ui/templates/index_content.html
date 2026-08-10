@@ -55,6 +55,19 @@
         {% endfor %}
         <button type="button" class="btn-secondary" onclick="newEndpoint()">Add endpoint</button>
         <script>
+async function stopCodeAgent(button) {
+    const ok = await ui.confirm(
+        'The server will stop. Any running agent turn is lost, and the page stops working.',
+        { title: 'Stop CodeAgent', confirmLabel: 'Stop' });
+    if (!ok) return;
+    button.disabled = true;
+    button.textContent = 'Stopping\u2026';
+    // The connection drops as the process goes away, which is the success case.
+    try { await fetch('/_shutdown', { method: 'POST' }); } catch (e) { /* expected */ }
+    document.body.innerHTML =
+        '<p style="padding:2rem;font-family:system-ui">CodeAgent has stopped. ' +
+        'Run <code>codeagent</code> to start it again.</p>';
+}
         async function newEndpoint() {
             const name = await ui.prompt('A short name you will recognise in the model list.', {
                 title: 'Add custom endpoint',
@@ -276,6 +289,13 @@
             {% endfor %}
         </div>
     </section>
+
+    <div class="page-footer">
+        <button type="button" class="btn-danger btn-sm" onclick="stopCodeAgent(this)">
+            Stop CodeAgent
+        </button>
+        <span class="hint">Shuts the server down. Start it again with <code>codeagent</code>.</span>
+    </div>
 </div>
 
 <script>

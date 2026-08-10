@@ -6,6 +6,7 @@ from collections.abc import Awaitable, Callable, Iterable
 from dataclasses import dataclass, field
 from typing import Any, Literal
 
+from agent_server.config import vision_configured
 from agent_server.tools.base import ToolContext, ToolResult
 from agent_server.tools.bash import run_bash
 from agent_server.tools.browser import browser as browser_tool
@@ -302,7 +303,7 @@ register(Tool(
     parallel_safe=True,
 ))
 
-register(Tool(
+_VISION_TOOL = Tool(
     name="vision",
     description=(
         "Look at images and get a description back. You cannot see images yourself; "
@@ -334,7 +335,14 @@ register(Tool(
     handler=vision,
     parallel_safe=True,
     vision_only=True,
-))
+)
+
+# Registered only when an image endpoint is configured. A tool that is in the
+# schema but cannot work costs tokens on every request and invites the model to
+# keep calling it; the harness advertising a capability it does not have is
+# worse than not having it.
+if vision_configured():
+    register(_VISION_TOOL)
 
 register(Tool(
     name="capture",

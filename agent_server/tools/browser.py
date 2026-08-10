@@ -394,6 +394,15 @@ async def _describe(question: str, images: list[tuple[str, bytes]]) -> str:
     if not images:
         return "(nothing captured to look at)"
     from agent_server import vision
+    from agent_server.config import vision_configured
+
+    # `ask` is opt-in per step, so an unconfigured install should be told the
+    # frame was still saved rather than have the whole step fail.
+    if not vision_configured():
+        return (
+            "(no vision endpoint configured, so the screenshot was saved but not "
+            "described -- set VISION_OLLAMA_URL to enable `ask`)"
+        )
 
     try:
         return await vision.analyze(

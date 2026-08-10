@@ -27,6 +27,8 @@ class SessionUpdate(BaseModel):
     # field pydantic dropped on the floor: the control looked like it worked
     # and changed nothing. database.SESSION_FIELDS accepted it all along.
     compact_profile: str | None = None
+    # "" means "same model as the session".
+    subagent_model: str | None = None
     bash_auto_approve: int | None = None
     auto_compact: int | None = None
     is_archived: int | None = None

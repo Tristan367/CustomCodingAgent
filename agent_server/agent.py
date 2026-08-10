@@ -392,6 +392,7 @@ async def run(session_id: str) -> AsyncIterator[dict]:
         project_dir=session["project_dir"],
         provider=session["provider"],
         model=session["model"],
+        subagent_model=session.get("subagent_model") or "",
         abort=abort,
     )
     _set_status(session_id, "running")

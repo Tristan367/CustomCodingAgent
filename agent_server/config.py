@@ -255,7 +255,11 @@ WEBFETCH_MAX_BYTES = int(os.getenv("WEBFETCH_MAX_BYTES", "5000000"))
 # tool. Set to 0 only if you need the agent to reach an internal service.
 WEBFETCH_ALLOW_PRIVATE = os.getenv("WEBFETCH_ALLOW_PRIVATE", "0") == "1"
 
-VISION_OLLAMA_URL = os.getenv("VISION_OLLAMA_URL", "http://vision-host.local:11434")
+# Vision talks to an Ollama server the user supplies. There is no sensible
+# default host, so unset means the tool is not registered at all rather than
+# registered and permanently failing -- a tool in the schema that cannot work
+# costs tokens on every request and invites the model to keep trying it.
+VISION_OLLAMA_URL = os.getenv("VISION_OLLAMA_URL", "")
 VISION_MODEL = os.getenv("VISION_MODEL", "qwen3-vl:32b")
 VISION_TIMEOUT = int(os.getenv("VISION_TIMEOUT", "300"))
 # Ollama unloads an idle model after five minutes by default. Reloading a 32B
@@ -265,7 +269,7 @@ VISION_KEEP_ALIVE = os.getenv("VISION_KEEP_ALIVE", "30m")
 # Bring the rig up on demand over SSH, so the only thing to switch on by hand is
 # the machine itself. Empty disables it and vision just reports being offline.
 # Requires key-based SSH; the binary is started as your user, no sudo involved.
-VISION_SSH_HOST = os.getenv("VISION_SSH_HOST", "you@vision-host.local")
+VISION_SSH_HOST = os.getenv("VISION_SSH_HOST", "")
 VISION_REMOTE_BIN = os.getenv("VISION_REMOTE_BIN", "~/.local/bin/ollama")
 VISION_AUTOSTART = os.getenv("VISION_AUTOSTART", "1") == "1"
 # How long to wait for it to come up before giving up on a request.
@@ -275,6 +279,11 @@ VISION_START_TIMEOUT = int(os.getenv("VISION_START_TIMEOUT", "45"))
 VISION_NUM_CTX = int(os.getenv("VISION_NUM_CTX", "8192"))
 # Downscale anything larger before sending; phone photos are needlessly huge.
 VISION_MAX_PIXELS = int(os.getenv("VISION_MAX_PIXELS", str(1600 * 1600)))
+
+
+def vision_configured() -> bool:
+    """Whether an image-capable endpoint has been pointed at."""
+    return bool(VISION_OLLAMA_URL)
 
 WHISPER_BIN = os.getenv("WHISPER_BIN") or shutil.which("whisper-cli") or shutil.which("whisper")
 

@@ -92,7 +92,12 @@
     </script>
 
     <section class="panel" style="margin-top:16px">
-        <h2>Subagent defaults <span class="hint" style="font-weight:400">(applies to all sessions)</span></h2>
+        <h2>Subagent prompt <span class="hint" style="font-weight:400">(applies to all sessions)</span></h2>
+        <p class="hint">
+            The model a session's subagents run on is chosen per session, on the
+            session itself &mdash; it depends on the work in front of you, not on
+            which prompt you happen to be editing.
+        </p>
         <form hx-post="/_save_subagent" hx-target="#prompts-page" hx-swap="outerHTML" class="stack">
             <label class="checkbox-label">
                 <input type="checkbox" name="use_system_prompt" value="1"
@@ -103,14 +108,6 @@
             <textarea name="prompt" id="sa-prompt-area" rows="6" class="prompt-textarea"
                       spellcheck="false" {% if not sa_prompt %}hidden{% endif %}
                       placeholder="Custom subagent prompt...">{{ sa_prompt }}</textarea>
-            <label class="field-label">Model
-                <select name="model">
-                    <option value="">Same as parent</option>
-                    {% for m in models %}
-                    <option value="{{ m.id }}" {% if m.id == sa_model %}selected{% endif %}>{{ m.name }}</option>
-                    {% endfor %}
-                </select>
-            </label>
             <button type="submit" class="btn-primary" style="align-self:flex-start">Save</button>
         </form>
     </section>

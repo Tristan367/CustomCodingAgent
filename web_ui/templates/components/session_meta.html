@@ -113,6 +113,17 @@
                                 {% endfor %}
                             </select>
                         </label>
+                        <label>Subagent model
+                            <select name="subagent_model">
+                                <option value="">Same as this session</option>
+                                {% for m in models %}
+                                {% if not m.needs_model_id %}
+                                <option value="{{ m.id }}"
+                                    {% if session.subagent_model == m.id %}selected{% endif %}>{{ m.name }}</option>
+                                {% endif %}
+                                {% endfor %}
+                            </select>
+                        </label>
                         <button type="submit" class="btn-primary">Apply</button>
                     </form>
                 </details>

@@ -144,6 +144,10 @@ MIGRATIONS: list[tuple[str, str, str]] = [
     # the prefix is already a miss at that point and the swap is close to free.
     # Applying it mid-conversation would re-bill the entire context.
     ("sessions", "pending_system_prompt", "TEXT"),
+    # Which model `task` subagents run on. Per session, not global: the choice
+    # depends on the work in front of you -- a cheap model for a wide search
+    # sweep, the same model as the parent for anything that has to write code.
+    ("sessions", "subagent_model", "TEXT"),
     ("messages", "reasoning_content", "TEXT"),
     ("messages", "tool_name", "TEXT"),
     ("messages", "is_error", "INTEGER DEFAULT 0"),
@@ -282,7 +286,7 @@ SESSION_FIELDS = {
     "name", "project_dir", "provider", "model", "thinking_effort",
     "prompt_profile", "compact_profile", "bash_auto_approve", "is_archived", "compact_threshold",
     "cache_fp", "cache_fp_tokens", "cache_checked_at", "cache_prompt_tokens",
-    "auto_compact", "system_prompt", "prompt_custom", "pending_system_prompt",
+    "auto_compact", "system_prompt", "prompt_custom", "pending_system_prompt", "subagent_model",
 }
 
 
@@ -294,15 +298,16 @@ async def create_session(
     prompt_profile: str = "default",
     compact_profile: str = "default",
     thinking_effort: str | None = None,
+    subagent_model: str | None = None,
 ) -> dict:
     sid = uuid.uuid4().hex[:8]
     now = _now()
     await _execute(
         "INSERT INTO sessions (id, name, project_dir, provider, model, prompt_profile,"
-        " compact_profile, thinking_effort, created_at, last_active_at)"
-        " VALUES (?,?,?,?,?,?,?,?,?,?)",
+        " compact_profile, thinking_effort, subagent_model, created_at, last_active_at)"
+        " VALUES (?,?,?,?,?,?,?,?,?,?,?)",
         (sid, name, project_dir, provider, model, prompt_profile, compact_profile,
-         thinking_effort, now, now),
+         thinking_effort, subagent_model, now, now),
     )
     session = await get_session(sid)
     assert session is not None

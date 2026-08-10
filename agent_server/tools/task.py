@@ -66,21 +66,22 @@ async def run_task(ctx: ToolContext, *, description: str, prompt: str, count: in
 
 
 async def _run(ctx: ToolContext, description: str, prompt: str, title: str, tool_cache: dict | None = None) -> ToolResult:
+    from agent_server import database as db
+    from agent_server.config import provider_for_model
     from agent_server.providers import get_provider
     from agent_server.tools.registry import execute_tool, tool_schemas
 
-    # Check for subagent overrides
-    subagent_prompt = ""
-    subagent_model = None
-    try:
-        from agent_server import database as db
-        subagent_prompt = await db.get_setting("subagent_prompt", "")
-        subagent_model = await db.get_setting("subagent_model", "")
-    except Exception:
-        pass
+    subagent_prompt = await db.get_setting("subagent_prompt", "")
 
-    provider_name = ctx.provider
-    effective_model = subagent_model or ctx.model
+    # The subagent model is a property of the session, so a search-heavy session
+    # can fan out onto something cheap while a session writing code keeps the
+    # parent's model. It was a single global setting, which meant choosing it
+    # for one session silently changed every other one.
+    effective_model = ctx.subagent_model or ctx.model
+    # A model implies its provider. Reading the parent's provider while
+    # overriding only the model is how a session ends up asking DeepSeek to
+    # serve an Anthropic model.
+    provider_name = provider_for_model(effective_model) or ctx.provider
 
     provider = get_provider(provider_name)
     tools = tool_schemas(SUBAGENT_TOOLS)

@@ -14,6 +14,8 @@ class ToolContext:
     project_dir: str
     provider: str = "deepseek"
     model: str = "deepseek-v4-pro"
+    # Empty means "same model as this session".
+    subagent_model: str = ""
     abort: asyncio.Event = field(default_factory=asyncio.Event)
 
     def resolve(self, path: str | None) -> Path:

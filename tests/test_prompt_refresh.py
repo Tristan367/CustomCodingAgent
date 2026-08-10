@@ -109,3 +109,30 @@ async def test_a_session_with_its_own_prompt_keeps_every_tool(clean_prompts):
     await db.save_prompt("default", "b", "system", "capture")
     off = await sp.disabled_tools({"id": "s", "prompt_profile": "default", "prompt_custom": 1})
     assert off == set()
+
+
+def test_default_prompt_names_no_tool_that_does_not_exist():
+    """The prompt is copied from another harness with a bigger tool set.
+
+    Guidance for a tool we do not have is worse than no guidance: it tells the
+    model to call something that will fail, and there is no way to notice
+    except by watching the agent behave worse.
+    """
+    import re
+
+    from agent_server.tools.registry import BUILT_IN_NAMES
+
+    # Backticked words that are shell commands or prose, not tool names.
+    prose = {
+        "cd", "ls", "fd", "rg", "awk", "grep", "head", "tail", "cwd",
+        "parallel", "parallelize", "expect", "plan",
+    }
+    named = set(re.findall(r"`([a-z][a-z0-9_-]*)`", sp.DEFAULT_PROMPT))
+    unknown = named - set(BUILT_IN_NAMES) - prose
+    assert not unknown, f"prompt references tools that do not exist: {sorted(unknown)}"
+
+
+def test_default_prompt_keeps_the_injection_contract():
+    """Reminders are injected into user turns, so both halves must be stated."""
+    assert "<system-conventions>" in sp.DEFAULT_PROMPT
+    assert "still a system directive" in sp.DEFAULT_PROMPT

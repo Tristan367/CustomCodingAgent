@@ -72,7 +72,6 @@ async def _prompts_context(
         "protected": PROTECTED_PROMPT,
         # Subagent defaults
         "sa_prompt": await db.get_setting("subagent_prompt", ""),
-        "sa_model": await db.get_setting("subagent_model", ""),
         "tools": [
             {
                 "name": t.name,
@@ -144,10 +143,8 @@ async def save_subagent(request: Request):
     form = await request.form()
     use_system = str(form.get("use_system_prompt", "")) == "1"
     prompt = str(form.get("prompt", "")).strip() if not use_system else ""
-    model = str(form.get("model", "")).strip()
 
     await db.set_setting("subagent_prompt", prompt)
-    await db.set_setting("subagent_model", model)
 
     return templates.TemplateResponse(
         request=request, name="prompts.html", context=await _prompts_context(saved=True),

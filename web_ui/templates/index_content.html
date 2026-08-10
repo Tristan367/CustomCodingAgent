@@ -117,6 +117,17 @@
                         {% endfor %}
                     </select>
                 </label>
+                <label>Subagents
+                    <select name="subagent_model">
+                        <option value="">Same as this session</option>
+                        {% for m in models %}
+                        {% if not m.needs_model_id %}
+                        <option value="{{ m.id }}"
+                                {% if m.id == clone_defaults.get('clone_subagent', '') %}selected{% endif %}>{{ m.name }}</option>
+                        {% endif %}
+                        {% endfor %}
+                    </select>
+                </label>
                 <label>Thinking
                     <select name="thinking_effort">
                         {% set ce = clone_defaults.get('clone_thinking', 'high') %}

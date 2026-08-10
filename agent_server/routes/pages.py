@@ -82,6 +82,7 @@ async def create_session_form(
     compact_profile: str = Form("default"),
     thinking_effort: str = Form(""),
     custom_model: str = Form(""),
+    subagent_model: str = Form(""),
 ):
     directory = Path(project_dir).expanduser()
     if not directory.is_dir():
@@ -107,6 +108,7 @@ async def create_session_form(
         prompt_profile=prompt_profile,
         compact_profile=compact_profile,
         thinking_effort=thinking_effort or None,
+        subagent_model=subagent_model or None,
     )
     _start_watching(session["id"], str(directory.resolve()))
     return RedirectResponse(f"/sessions/{session['id']}", status_code=303)

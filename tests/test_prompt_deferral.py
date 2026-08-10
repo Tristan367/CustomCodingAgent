@@ -74,7 +74,9 @@ async def test_the_endpoint_reports_live_and_pending_separately(client, tmp_path
     body = (await client.get(f"/api/sessions/{sid}/system-prompt")).json()
     assert body["pending"] == "QUEUED TEXT"
     assert body["live"] != "QUEUED TEXT"
-    assert body["live"].startswith("You are a coding agent")
+    # Structural, not a quote of the prompt's opening words: asserting the
+    # wording made an unrelated prompt rewrite fail here for no reason.
+    assert "Working directory:" in body["live"]
     assert body["profile"] == "default"
 
 

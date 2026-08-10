@@ -10,11 +10,41 @@ from dotenv import load_dotenv
 load_dotenv()
 
 BASE_DIR = Path(__file__).resolve().parent.parent
+
+
+def _default_data_dir() -> Path:
+    """User data lives outside the checkout.
+
+    The database holds API keys and every conversation. Keeping it in the
+    working tree means one `git clean -xdf` destroys it, and it only stays out
+    of a public repository for as long as nobody edits .gitignore. XDG puts it
+    where the rest of the user's application data already is, and where a
+    backup tool will find it.
+    """
+    if os.name == "nt":
+        base = Path(os.getenv("APPDATA") or Path.home() / "AppData" / "Roaming")
+    else:
+        base = Path(os.getenv("XDG_DATA_HOME") or Path.home() / ".local" / "share")
+    return base / "codeagent"
+
+
 # Overridable so the app can be run against a scratch database -- smoke-testing
 # a change otherwise means pointing it at the real conversation history.
-DATA_DIR = Path(os.getenv("CODEAGENT_DATA_DIR") or BASE_DIR / "data")
+DATA_DIR = Path(os.getenv("CODEAGENT_DATA_DIR") or _default_data_dir())
 DATA_DIR.mkdir(parents=True, exist_ok=True)
 DB_PATH = Path(os.getenv("CODEAGENT_DB") or DATA_DIR / "agent.db")
+
+# One-time move from the old in-repo location. Only runs when the destination
+# is empty, so it cannot overwrite a database the user is already using, and it
+# copies rather than moves the sqlite sidecars so an interrupted run is
+# recoverable from the original.
+_LEGACY_DB = BASE_DIR / "data" / "agent.db"
+if not DB_PATH.exists() and _LEGACY_DB.exists() and not os.getenv("CODEAGENT_DATA_DIR"):
+    for suffix in ("", "-wal", "-shm"):
+        source = _LEGACY_DB.with_name(_LEGACY_DB.name + suffix)
+        if source.exists():
+            shutil.copy2(source, DB_PATH.with_name(DB_PATH.name + suffix))
+    print(f"[config] moved database to {DB_PATH} (old copy left at {_LEGACY_DB})")
 
 # tempfile.gettempdir() rather than "/tmp": the screen-capture backends are
 # chosen per platform, so the app claims to run on Windows, where /tmp is not

@@ -23,7 +23,7 @@
                    placeholder="https://..." autocomplete="off" spellcheck="false">
             {% endif %}
             {% endfor %}
-            <button type="submit" {% if has_key %}disabled{% endif %}>Save</button>
+            <button type="submit" class="btn-primary" {% if has_key %}disabled{% endif %}>Save</button>
         </form>
     </section>
     {% endfor %}
@@ -55,8 +55,12 @@
         {% endfor %}
         <button type="button" class="btn-secondary" onclick="newEndpoint()">Add endpoint</button>
         <script>
-        function newEndpoint() {
-            const name = prompt('Name for the endpoint (e.g. "my-unsloth"):');
+        async function newEndpoint() {
+            const name = await ui.prompt('A short name you will recognise in the model list.', {
+                title: 'Add custom endpoint',
+                placeholder: 'my-unsloth',
+                confirmLabel: 'Add',
+            });
             if (!name) return;
             const form = document.createElement('form');
             form.method = 'POST';
@@ -135,28 +139,30 @@
                    onchange="toggleSound(this.checked)">
             Play a sound when an agent finishes or needs permission
         </label>
-        <div class="form-row" style="margin-top:8px;gap:12px">
+        <div class="form-row sound-row">
             <label class="field-label">Sound
-                <select id="sound-choice" onchange="saveSoundSetting()">
-                    <option value="click" {% if settings.get('sound_choice', 'click') == 'click' %}selected{% endif %}>Click</option>
-                    <option value="chime" {% if settings.get('sound_choice', 'click') == 'chime' %}selected{% endif %}>Chime</option>
-                    <option value="knock" {% if settings.get('sound_choice', 'click') == 'knock' %}selected{% endif %}>Knock</option>
-                    {% for s in uploaded_sounds %}
-                    <option value="{{ s }}" {% if settings.get('sound_choice', 'click') == s %}selected{% endif %}>{{ s }}</option>
-                    {% endfor %}
-                </select>
-                <button type="button" class="btn-secondary btn-sm" onclick="previewSound()" style="margin-left:4px">Preview</button>
-                <span class="hint" style="margin-left:8px">
+                <span class="control-row">
+                    <select id="sound-choice" onchange="saveSoundSetting()">
+                        <option value="click" {% if settings.get('sound_choice', 'click') == 'click' %}selected{% endif %}>Click</option>
+                        <option value="chime" {% if settings.get('sound_choice', 'click') == 'chime' %}selected{% endif %}>Chime</option>
+                        <option value="knock" {% if settings.get('sound_choice', 'click') == 'knock' %}selected{% endif %}>Knock</option>
+                        {% for s in uploaded_sounds %}
+                        <option value="{{ s }}" {% if settings.get('sound_choice', 'click') == s %}selected{% endif %}>{{ s }}</option>
+                        {% endfor %}
+                    </select>
+                    <button type="button" class="btn-secondary" onclick="previewSound()">Preview</button>
                     <input type="file" accept=".mp3,.wav,.ogg,.m4a" onchange="uploadSound(this)" hidden id="sound-upload">
-                    <button type="button" class="btn-sm" onclick="document.getElementById('sound-upload').click()">Upload</button>
+                    <button type="button" onclick="document.getElementById('sound-upload').click()">Upload</button>
                 </span>
             </label>
             <label class="field-label">Volume
-                <input type="range" id="sound-volume" min="0" max="1" step="0.05"
-                       value="{{ settings.get('sound_volume', '0.5') }}"
-                       oninput="this.nextElementSibling.value=Math.round(this.value*100)"
-                       onchange="saveSoundSetting()">
-                <output>{{ (settings.get('sound_volume', '0.5') | float * 100) | round | int }}</output>%
+                <span class="control-row">
+                    <input type="range" id="sound-volume" min="0" max="1" step="0.05"
+                           value="{{ settings.get('sound_volume', '0.5') }}"
+                           oninput="this.parentNode.querySelector('output').value=Math.round(this.value*100)"
+                           onchange="saveSoundSetting()">
+                    <span class="readout"><output>{{ (settings.get('sound_volume', '0.5') | float * 100) | round | int }}</output>%</span>
+                </span>
             </label>
         </div>
         <label class="field-label" style="margin-top:12px">Bash rules

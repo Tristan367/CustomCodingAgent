@@ -96,11 +96,11 @@
                 : '';
         }
 
-        picker.addEventListener('change', () => {
-            if (bodyBox.value !== lastSaved &&
-                !confirm('Discard unsaved changes to this prompt?')) {
-                picker.value = pickerPrevious;
-                return;
+        picker.addEventListener('change', async () => {
+            if (bodyBox.value !== lastSaved) {
+                const ok = await ui.confirm('Your edits to this prompt have not been saved.',
+                    { title: 'Discard changes?', confirmLabel: 'Discard' });
+                if (!ok) { picker.value = pickerPrevious; return; }
             }
             bodyBox.value = PROMPT_BODIES[picker.value] ?? '';
             lastSaved = bodyBox.value;
@@ -110,19 +110,26 @@
 
         /* New prompts are of whichever kind is on screen, seeded from that
            kind's default -- a blank box is a worse start than one to edit down. */
-        function newPrompt() {
+        async function newPrompt() {
             const kind = kindOf(picker.value);
             const label = kind === 'compaction' ? 'summarising prompt' : 'system prompt';
-            const name = prompt(`Name for the new ${label}:`);
+            const name = await ui.prompt(`It will start as a copy of the default ${label}.`, {
+                title: `New ${label}`,
+                placeholder: 'terse',
+                confirmLabel: 'Create',
+            });
             if (!name) return;
             document.getElementById('new-prompt-name').value = name;
             document.getElementById('new-prompt-kind').value = kind;
             document.getElementById('new-prompt-form').submit();
         }
 
-        function deletePrompt() {
+        async function deletePrompt() {
             if (nameOf(picker.value) === PROTECTED_PROMPT) return;
-            if (!confirm(`Delete "${nameOf(picker.value)}"? Sessions using it fall back to the default.`)) return;
+            const ok = await ui.confirm(
+                `Sessions using "${nameOf(picker.value)}" will fall back to the default.`,
+                { title: 'Delete prompt', confirmLabel: 'Delete' });
+            if (!ok) return;
             document.getElementById('delete-prompt-name').value = picker.value;
             document.getElementById('delete-prompt-form').submit();
         }

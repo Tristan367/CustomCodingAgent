@@ -65,11 +65,20 @@
         </div>
     </form>
     <script>
-        document.getElementById('delete-tool-form').addEventListener('submit', (e) => {
-            if (!confirm('Delete this tool?')) e.preventDefault();
+        document.getElementById('delete-tool-form').addEventListener('submit', async (e) => {
+            if (e.submitter && e.submitter.dataset.confirmed) return;
+            e.preventDefault();
+            const ok = await ui.confirm('This tool will be removed from every session.',
+                { title: 'Delete tool', confirmLabel: 'Delete' });
+            if (ok) e.target.submit();
         });
-        function newTool() {
-            const name = prompt('Name for the new tool:');
+        async function newTool() {
+            const name = await ui.prompt('The agent will call the tool by this name.', {
+                title: 'New custom tool',
+                placeholder: 'deploy_staging',
+                pattern: '[a-zA-Z_][a-zA-Z0-9_-]*',
+                confirmLabel: 'Create',
+            });
             if (!name) return;
             const form = document.createElement('form');
             form.method = 'POST';
@@ -102,29 +111,54 @@
     {% endif %}
     {% endif %}
 
-    <h2>All Tools</h2>
-    <p class="hint">Custom tools appear alongside built-in tools in every session.</p>
+    <h2>All tools</h2>
+    <p class="hint">
+        Every tool the agent can call this session, built-in and custom.
+        {{ tool_count }} in total, about {{ '{:,}'.format(tool_schema_tokens) }}
+        tokens of schema on every request. Copy a built-in definition to use as
+        a worked example when writing your own.
+    </p>
     <table class="tools-table">
-        <thead><tr><th>Tool</th><th>Type</th><th>Enabled</th><th>Ask permission</th><th>Description</th></tr></thead>
+        <thead><tr><th>Tool</th><th>Type</th><th>Permission</th><th>Description</th><th></th></tr></thead>
         <tbody>
             {% for t in tools %}
-            <tr onclick="window.location='/tools?edit={{ t.name }}'">
+            <tr class="row-link" onclick="window.location='/tools?edit={{ t.name }}'">
                 <td><code>{{ t.name }}</code></td>
                 <td><span class="chip">custom</span></td>
-                <td><span class="chip {% if t.enabled %}chip-ok{% else %}chip-warn{% endif %}">{{ 'on' if t.enabled else 'off' }}</span></td>
-                <td><span class="chip {% if t.ask_permission %}chip-warn{% else %}chip-ok{% endif %}">{{ 'asks' if t.ask_permission else 'auto' }}</span></td>
-                <td class="dim">{{ t.description[:100] }}{% if t.description|length > 100 %}...{% endif %}</td>
+                <td>
+                    <span class="chip {% if t.ask_permission %}chip-warn{% else %}chip-ok{% endif %}">{{ 'asks' if t.ask_permission else 'auto' }}</span>
+                    {% if not t.enabled %}<span class="chip chip-warn">off</span>{% endif %}
+                </td>
+                <td class="dim">{{ t.description[:100] }}{% if t.description|length > 100 %}…{% endif %}</td>
+                <td class="row-actions"><span class="hint">edit →</span></td>
             </tr>
             {% endfor %}
-            {% if not tools %}
-            <tr><td colspan="5" class="dim">No custom tools defined yet.</td></tr>
-            {% endif %}
+            {% for b in built_ins %}
+            <tr>
+                <td><code>{{ b.name }}</code></td>
+                <td><span class="chip chip-muted">built-in</span></td>
+                <td>
+                    <span class="chip {% if b.pause %}chip-warn{% else %}chip-ok{% endif %}">{{ 'asks' if b.pause else 'auto' }}</span>
+                    {% if b.shadowed %}<span class="chip chip-warn">shadowed</span>{% endif %}
+                </td>
+                <td class="dim">{{ b.description[:100] }}{% if b.description|length > 100 %}…{% endif %}</td>
+                <td class="row-actions">
+                    <button type="button" class="btn-sm" data-schema="{{ b.schema | tojson | forceescape }}"
+                            onclick="copySchema(this)">Copy JSON</button>
+                </td>
+            </tr>
+            {% endfor %}
         </tbody>
     </table>
 
-    <h2>Tool definitions (what the AI sees)</h2>
-    <p class="hint">{{ tool_count }} tools, about {{ '{:,}'.format(tool_schema_tokens) }} tokens of schema sent with every request.</p>
-    <pre class="schema-preview">{{ tool_schemas_json | default('') | safe }}</pre>
+    <details class="schema-details">
+        <summary>Full schema sent to the model ({{ tool_count }} tools)</summary>
+        <div class="schema-actions">
+            <button type="button" class="btn-sm" onclick="copyAllSchemas(this)">Copy all</button>
+        </div>
+        <textarea class="schema-preview" readonly spellcheck="false"
+                  onclick="this.select()">{{ tool_schemas_json | default('') }}</textarea>
+    </details>
 
     <h2>Secrets (env vars for custom tools)</h2>
     <p class="hint">Each secret is injected as an env var into custom tool scripts. Reference as <code>$NAME</code>. Values never displayed after saving.</p>
@@ -147,17 +181,53 @@
                 hx-confirm="Delete this secret?">×</button>
     </form>
     {% endfor %}
-    <button type="button" class="btn-secondary" onclick="newSecret()">Add secret</button>
+    <div class="page-row">
+    <form method="POST" action="/_new_secret" class="inline-form" id="new-secret-form" hidden>
+        <input type="text" name="name" placeholder="VAR_NAME" autocomplete="off" spellcheck="false"
+               pattern="[A-Za-z_][A-Za-z0-9_]*"
+               title="Letters, digits and underscores; cannot start with a digit">
+        <button type="submit" class="btn-primary btn-sm">Add</button>
+        <button type="button" class="btn-sm"
+                onclick="document.getElementById('new-secret-form').hidden = true">Cancel</button>
+    </form>
+    <button type="button" class="btn-secondary" id="add-secret-btn" onclick="newSecret()">Add secret</button>
+    </div>
     <script>
     function newSecret() {
-        const name = prompt('Variable name:');
-        if (!name) return;
-        const form = document.createElement('form');
-        form.method = 'POST';
-        form.action = '/_new_secret';
-        form.innerHTML = '<input name="name" value="' + name.replace(/"/g,'&quot;') + '">';
-        document.body.appendChild(form);
-        form.submit();
+        // Was a native prompt(), which cannot be styled, cannot be dismissed
+        // with the rest of the page, and validates nothing.
+        const form = document.getElementById('new-secret-form');
+        form.hidden = false;
+        form.querySelector('input').focus();
+    }
+
+    function flash(button, text) {
+        const original = button.textContent;
+        button.textContent = text;
+        button.disabled = true;
+        setTimeout(() => { button.textContent = original; button.disabled = false; }, 1200);
+    }
+
+    async function copyText(button, text) {
+        try {
+            await navigator.clipboard.writeText(text);
+            flash(button, 'Copied');
+        } catch (err) {
+            // Clipboard access needs a secure context; over plain http to a
+            // non-localhost address it rejects, and silently doing nothing
+            // looks identical to a copy that worked.
+            flash(button, 'Press Ctrl+C');
+            const area = document.querySelector('.schema-preview');
+            if (area) { area.hidden = false; area.value = text; area.select(); }
+        }
+    }
+
+    function copySchema(button) {
+        copyText(button, JSON.stringify(JSON.parse(button.dataset.schema), null, 2));
+    }
+
+    function copyAllSchemas(button) {
+        copyText(button, document.querySelector('.schema-preview').value);
     }
     </script>
 </div>

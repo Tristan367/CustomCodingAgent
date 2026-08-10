@@ -10,7 +10,7 @@ from fastapi.responses import HTMLResponse, RedirectResponse
 from agent_server import database as db
 from agent_server.routes.context import _slug
 from agent_server.templating import templates
-from agent_server.tools.registry import tool_schemas
+from agent_server.tools.registry import TOOLS, tool_schemas
 
 router = APIRouter()
 
@@ -25,8 +25,27 @@ async def _tools_context(edit_tool: str = "", saved: bool = False, error: str = 
     schemas = tool_schemas()
     tools_list = await db.list_custom_tools()
     edit_tool_data = next((t for t in tools_list if t["name"] == edit_tool), None)
+    custom_names = {t["name"] for t in tools_list}
+    # The table is headed "All Tools" and said custom tools appear alongside the
+    # built-ins, but it only ever listed the custom ones -- so the page showed a
+    # single row and gave no way to find out what the agent can actually do, or
+    # what a working tool definition looks like.
+    built_ins = [
+        {
+            "name": tool.name,
+            "description": tool.description,
+            "pause": tool.pause,
+            "parallel_safe": tool.parallel_safe,
+            "shadowed": tool.name in custom_names,
+            "schema": next(
+                (s for s in schemas if s.get("function", {}).get("name") == tool.name), None
+            ),
+        }
+        for tool in sorted(TOOLS.values(), key=lambda t: t.name)
+    ]
     return {
         "tools": tools_list,
+        "built_ins": built_ins,
         "saved": saved,
         "error": error,
         "edit_tool": edit_tool,

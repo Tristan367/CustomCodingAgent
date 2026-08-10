@@ -1,6 +1,105 @@
 /* CodeAgent front-end: SSE streaming, tool approval, dictation, tabs. */
 'use strict';
 
+/* ── Dialogs ─────────────────────────────────────────────────────────────── */
+/* Drop-in replacements for window.alert/confirm/prompt, which cannot be styled,
+   truncate long paths, and on a tiling compositor open wherever the window
+   manager decides. These return promises, so callers must await them. */
+const ui = (() => {
+  function build({ title, body, input, confirmLabel, cancelLabel, danger }) {
+    const dialog = document.createElement('dialog');
+    dialog.className = 'dialog';
+
+    const form = document.createElement('form');
+    form.method = 'dialog';
+
+    if (title) {
+      const h = document.createElement('h3');
+      h.textContent = title;
+      form.appendChild(h);
+    }
+    if (body) {
+      const p = document.createElement('p');
+      p.textContent = body;
+      form.appendChild(p);
+    }
+
+    let field = null;
+    if (input) {
+      field = document.createElement('input');
+      field.type = 'text';
+      field.value = input.value || '';
+      field.placeholder = input.placeholder || '';
+      if (input.pattern) field.pattern = input.pattern;
+      form.appendChild(field);
+    }
+
+    const actions = document.createElement('div');
+    actions.className = 'modal-actions';
+    if (cancelLabel !== null) {
+      const cancel = document.createElement('button');
+      cancel.type = 'button';
+      cancel.textContent = cancelLabel || 'Cancel';
+      cancel.onclick = () => { dialog.returnValue = ''; dialog.close(); };
+      actions.appendChild(cancel);
+    }
+    const ok = document.createElement('button');
+    ok.type = 'submit';
+    ok.className = danger ? 'btn-danger' : 'btn-primary';
+    ok.textContent = confirmLabel || 'OK';
+    ok.value = 'ok';
+    actions.appendChild(ok);
+    form.appendChild(actions);
+
+    // A submit button's value only reaches returnValue when the form is
+    // submitted by that button, which is what method="dialog" gives us.
+    form.addEventListener('submit', () => { dialog.returnValue = 'ok'; });
+
+    dialog.appendChild(form);
+    document.body.appendChild(dialog);
+    return { dialog, field };
+  }
+
+  function open({ input, ...opts }) {
+    return new Promise((resolve) => {
+      const { dialog, field } = build({ input, ...opts });
+      dialog.addEventListener('close', () => {
+        const ok = dialog.returnValue === 'ok';
+        const value = field ? field.value.trim() : null;
+        dialog.remove();
+        resolve(input ? (ok && value ? value : null) : ok);
+      });
+      dialog.showModal();
+      if (field) field.select();
+    });
+  }
+
+  return {
+    alert: (body, title) => open({ title: title || 'Heads up', body, cancelLabel: null }),
+    confirm: (body, opts = {}) => open({
+      title: opts.title || 'Are you sure?',
+      body,
+      confirmLabel: opts.confirmLabel || 'Confirm',
+      danger: opts.danger !== false,
+    }),
+    prompt: (body, opts = {}) => open({
+      title: opts.title || body,
+      body: opts.title ? body : '',
+      input: { value: opts.value || '', placeholder: opts.placeholder || '', pattern: opts.pattern },
+      confirmLabel: opts.confirmLabel || 'OK',
+      danger: false,
+    }),
+  };
+})();
+
+/* Every hx-confirm in the templates routes through the same dialog rather than
+   htmx's default window.confirm. */
+document.body.addEventListener('htmx:confirm', (e) => {
+  if (!e.detail.question) return;
+  e.preventDefault();
+  ui.confirm(e.detail.question).then((ok) => { if (ok) e.detail.issueRequest(true); });
+});
+
 const App = {
   sessionId: null,
   streaming: false,
@@ -941,8 +1040,12 @@ function appendPermissionCard(event) {
     );
   }
 
-  function reject() {
-    const why = prompt('Optional: tell the agent why, so it can try something else.', '');
+  async function reject() {
+    const why = await ui.prompt('Optional: tell the agent why, so it can try something else.', {
+      title: 'Reject this call',
+      placeholder: 'e.g. use the staging database instead',
+      confirmLabel: 'Reject',
+    });
     if (why === null) return;
     finish('reject', why, 'once');
   }
@@ -1478,29 +1581,34 @@ async function uploadSound(input) {
       sel.value = data.name;
       saveSoundSetting();
     } else {
-      alert(data.error || 'Upload failed');
+      ui.alert(data.error || 'Upload failed', 'Upload failed');
     }
   } catch (e) {
-    alert('Upload failed: ' + e);
+    ui.alert(String(e), 'Upload failed');
   }
   input.value = '';
 }
 
 async function initProject() {
-  const dir = prompt('Project directory (leave blank for home):', '~/' + (App.sessionId ? '' : ''));
-  if (!dir && dir !== '') return;
+  const dir = await ui.prompt('Which directory should be scanned?', {
+    title: 'Generate project rules',
+    value: '~/',
+    placeholder: '~/projects/thing',
+    confirmLabel: 'Scan',
+  });
+  if (dir === null) return;
   const form = new FormData();
   form.append('dir', dir || '~/');
   try {
     const r = await fetch('/_init', { method: 'POST', body: form });
     const data = await r.json();
     if (data.ok) {
-      alert('Wrote ' + data.path + '\n\n' + data.preview);
+      ui.alert('Wrote ' + data.path + '\n\n' + data.preview, 'AGENTS.md written');
     } else {
-      alert(data.error || 'Failed');
+      ui.alert(data.error || 'Failed', 'Could not write AGENTS.md');
     }
   } catch (e) {
-    alert('Failed: ' + e);
+    ui.alert(String(e), 'Could not write AGENTS.md');
   }
 }
 
@@ -1889,8 +1997,9 @@ async function applySessionSettings(form) {
   location.reload();
 }
 
-async function renameSession() {  const current = document.querySelector('.session-title')?.textContent.trim() || '';
-  const name = prompt('Session name:', current);
+async function renameSession() {
+  const current = document.querySelector('.session-title')?.textContent.trim() || '';
+  const name = await ui.prompt('Session name', { value: current, confirmLabel: 'Rename' });
   if (!name || name === current) return;
   await fetch(`/api/sessions/${App.sessionId}`, {
     method: 'PATCH',
@@ -1901,7 +2010,9 @@ async function renameSession() {  const current = document.querySelector('.sessi
 }
 
 async function deleteSession(sessionId, name) {
-  if (!confirm(`Delete session "${name}"? This cannot be undone.`)) return;
+  const ok = await ui.confirm(`"${name}" and its whole transcript will be deleted. This cannot be undone.`,
+    { title: 'Delete session', confirmLabel: 'Delete' });
+  if (!ok) return;
   await fetch(`/api/sessions/${sessionId}`, { method: 'DELETE' });
   if (sessionId === App.sessionId) location.href = '/';
   else location.reload();
@@ -2187,7 +2298,7 @@ async function addWriteDir(form) {
     body: JSON.stringify({ path }),
   });
   const data = await resp.json();
-  if (!resp.ok) { alert(data.detail || 'Could not allow that path'); return; }
+  if (!resp.ok) { ui.alert(data.detail || 'Could not allow that path', 'Not allowed'); return; }
   input.value = '';
   refreshMeta();
 }

@@ -37,6 +37,29 @@
   --mono: ui-monospace, "SF Mono", "JetBrains Mono", "Fira Code", Menlo, Consolas, monospace;
   --sans: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
 
+  /* Spacing. Everything that separates two things should pick a step from
+     here. The file previously held 47 distinct padding values, which is what
+     "looks slightly off but nobody can say why" is made of. */
+  --s1: 4px;
+  --s2: 8px;
+  --s3: 12px;
+  --s4: 16px;
+  --s5: 24px;
+  --s6: 32px;
+
+  /* Type. Five steps, and --fs-body is the default. There were fifteen sizes
+     between 8px and 24px, most of them a half-pixel apart and indistinguishable
+     on purpose from nothing. */
+  --fs-micro: 10px;   /* pill text, table headers */
+  --fs-small: 11.5px; /* field labels, hints */
+  --fs-body:  13px;   /* controls, body copy */
+  --fs-lead:  15px;   /* panel headings */
+  --fs-title: 20px;   /* page headings */
+
+  /* One height for every control, so a select, an input and a button that sit
+     next to each other line up without anyone nudging a margin. */
+  --control-h: 30px;
+
   --radius: 6px;
   --topbar-h: 42px;
   /* Wide enough to use a portrait monitor properly, capped so lines stay
@@ -221,6 +244,7 @@ hr { border: 0; border-top: 1px solid var(--border); margin: 6px 0; }
 }
 .chip-warn { border-color: var(--border-strong); color: var(--text-dim); }
 .chip-ok  { border-color: var(--success); color: var(--success); }
+.chip-muted { border-color: var(--border); color: var(--text-faint); }
 .dim { color: var(--text-dim); }
 .spacer { flex: 1; }
 
@@ -605,20 +629,49 @@ hr { border: 0; border-top: 1px solid var(--border); margin: 6px 0; }
 
 /* ── Buttons ─────────────────────────────────────────────────────────────── */
 
-.btn-primary, .btn-secondary, .btn-danger, .btn-stop, button[type="submit"] {
-  padding: 6px 15px;
-  border-radius: 4px;
-  font-size: 12.5px;
+/* Every button, whether or not anyone remembered to give it a class. The
+   variant classes below used to carry the base styling themselves, so a
+   button marked only `.btn-sm` -- which sets size and nothing else -- fell
+   through to the browser default and rendered as a grey native control in the
+   middle of a dark theme. Styling the element means that cannot happen again. */
+button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: var(--s2);
+  min-height: var(--control-h);
+  padding: 0 var(--s3);
+  background: var(--bg-inset);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius);
+  color: var(--text);
   font-family: inherit;
+  font-size: var(--fs-body);
+  line-height: 1;
+  white-space: nowrap;
   cursor: pointer;
-  border: 1px solid transparent;
 }
-.btn-primary, button[type="submit"] { background: var(--accent); color: #14190a; font-weight: 600; }
-.btn-primary:hover, button[type="submit"]:hover { filter: brightness(1.1); }
+button:hover { background: var(--bg-hover); border-color: var(--border-strong); }
+button:disabled { opacity: 0.4; cursor: not-allowed; }
+button:disabled:hover { background: var(--bg-inset); }
+button:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+
+/* Deliberately not `button[type=submit]`. That selector scores 0,1,1 and beat
+   `.btn-danger` at 0,1,0, so the Delete button rendered with the primary olive
+   background and, once disabled, dim grey text on it -- an unreadable olive
+   ghost. Submitting a form is semantics; being the primary action is
+   appearance. They are not the same claim. */
+.btn-primary {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: #14190a;
+  font-weight: 600;
+}
+.btn-primary:hover { background: var(--accent); filter: brightness(1.1); }
 .btn-secondary { background: var(--bg-inset); border-color: var(--border-strong); color: var(--text); }
 .btn-secondary:hover { background: var(--bg-hover); }
-.btn-stop { background: var(--danger); color: #250b0a; font-weight: 600; }
-.btn-stop:hover { filter: brightness(1.1); }
+.btn-stop { background: var(--danger); border-color: var(--danger); color: #250b0a; font-weight: 600; }
+.btn-stop:hover { background: var(--danger); filter: brightness(1.1); }
 
 .icon-btn {
   display: inline-flex;
@@ -722,6 +775,16 @@ hr { border: 0; border-top: 1px solid var(--border); margin: 6px 0; }
   max-width: 860px;
   margin-inline: auto;
 }
+/* `margin-inline: auto` only centres block-level boxes, so a bare <button> as a
+   direct child ignored it and sat against the page padding while the headings
+   beside it were centred 90px further in. Anything inline-level at this level
+   needs a block row of its own. */
+.page-row {
+  display: flex;
+  gap: var(--s2);
+  align-items: center;
+  flex-wrap: wrap;
+}
 
 .panel {
   margin-bottom: 22px;
@@ -746,21 +809,60 @@ hr { border: 0; border-top: 1px solid var(--border); margin: 6px 0; }
   border-radius: 6px;
   color: var(--text-dim);
 }
-.form-row { display: flex; gap: 8px; align-items: flex-end; }
+.form-row { display: flex; gap: var(--s2); align-items: flex-end; }
 .form-row > input[type="text"] { flex: 1; }
-.form-row label { display: flex; flex-direction: column; gap: 3px; font-size: 11px; color: var(--text-dim); flex: 1; }
+.form-row label {
+  display: flex;
+  flex-direction: column;
+  gap: var(--s1);
+  font-size: var(--fs-small);
+  color: var(--text-dim);
+  flex: 1;
+}
 
-input[type="text"], input[type="password"], select, textarea {
-  padding: 6px 10px;
+/* A column label whose controls belong side by side. Without this the label
+   stacks every child, which is how the volume readout ended up rendering as
+   "50" on one line and "%" on the next: a bare text node next to <output>
+   becomes its own flex item. */
+.form-row label .control-row {
+  display: flex;
+  align-items: center;
+  gap: var(--s2);
+}
+.form-row label .control-row > select { flex: 1; min-width: 0; }
+.form-row label .control-row > input[type="range"] { flex: 1; min-width: 0; }
+/* Tabular figures stop the row twitching as the number changes width. */
+.form-row label .control-row > .readout {
+  flex: 0 0 auto;
+  min-width: 4ch;
+  font-variant-numeric: tabular-nums;
+  color: var(--text);
+}
+
+.sound-row { margin-top: var(--s3); gap: var(--s4); }
+/* The sound side carries three controls, the volume side one. */
+.sound-row > label:first-child { flex: 3; }
+.sound-row > label:last-child { flex: 2; }
+
+input[type="text"], input[type="password"], input[type="number"], select, textarea {
+  padding: 0 var(--s2);
+  min-height: var(--control-h);
   background: var(--bg-inset);
   border: 1px solid var(--border-strong);
-  border-radius: 4px;
+  border-radius: var(--radius);
   color: var(--text);
   font-family: inherit;
-  font-size: 13px;
+  font-size: var(--fs-body);
 }
+textarea { padding: var(--s2); line-height: 1.5; }
 input:focus, select:focus, textarea:focus { outline: none; border-color: var(--accent-dim); }
 select { cursor: pointer; }
+
+/* Sliders were left native everywhere except the three that had been styled by
+   hand, so the sound volume rendered in the browser's blue directly above a
+   column of olive ones. */
+input[type="range"] { accent-color: var(--accent); cursor: pointer; }
+input[type="checkbox"] { accent-color: var(--accent); }
 
 .hint { font-size: 11.5px; color: var(--text-faint); margin: 6px 0 0; }
 .hint code { color: var(--text-dim); }
@@ -905,7 +1007,9 @@ select { cursor: pointer; }
 .btn-danger:hover:not(:disabled) { background: var(--danger); color: var(--bg); border-color: var(--danger); }
 .btn-danger:disabled { opacity: .5; cursor: not-allowed; color: var(--text-dim); border-color: var(--border); }
 
-.btn-sm { padding: 4px 8px; font-size: 12px; border-radius: var(--radius); cursor: pointer; }
+/* A size, not a look. Combine with a variant, or leave it bare for the
+   default bordered button. */
+.btn-sm { min-height: 24px; padding: 0 var(--s2); font-size: var(--fs-small); }
 
 .tools-table { width: 100%; border-collapse: collapse; font-size: 12px; margin-top: 10px; }
 .tools-table th, .tools-table td { border-bottom: 1px solid var(--border); padding: 6px 8px; text-align: left; vertical-align: top; }
@@ -932,10 +1036,32 @@ select { cursor: pointer; }
   border: 1px solid var(--border-strong);
   border-radius: 8px;
 }
-.modal-content h3 { font-size: 14px; color: var(--text); margin-bottom: 10px; }
+.modal-content h3 { font-size: var(--fs-lead); color: var(--text); margin-bottom: var(--s2); }
 .modal-content img { display: block; max-width: 100%; max-height: 220px; border-radius: 4px; margin-bottom: 10px; }
 .modal-content textarea { width: 100%; resize: vertical; }
-.modal-actions { display: flex; gap: 8px; margin-top: 12px; }
+.modal-actions { display: flex; gap: var(--s2); margin-top: var(--s4); justify-content: flex-end; }
+
+/* ── Dialogs ─────────────────────────────────────────────────────────────── */
+/* Replaces window.alert/confirm/prompt. A native dialog cannot be styled, cannot
+   show a diff or a path in monospace, blocks the whole event loop, and on a
+   tiling compositor opens wherever the window manager feels like. */
+.dialog::backdrop { background: rgba(0, 0, 0, 0.65); }
+.dialog {
+  width: min(440px, 92vw);
+  padding: var(--s5);
+  background: var(--bg-raised);
+  border: 1px solid var(--border-strong);
+  border-radius: 8px;
+  color: var(--text);
+  font-family: var(--sans);
+  font-size: var(--fs-body);
+}
+.dialog h3 { font-size: var(--fs-lead); margin: 0 0 var(--s2); }
+.dialog p { color: var(--text-dim); line-height: 1.5; margin: 0; white-space: pre-wrap; }
+.dialog p code, .dialog p strong { color: var(--text); }
+.dialog input[type="text"] { width: 100%; margin-top: var(--s3); }
+.dialog .dialog-error { color: var(--danger); font-size: var(--fs-small); margin-top: var(--s2); }
+.dialog form { margin: 0; }
 
 /* ── Narrow screens ──────────────────────────────────────────────────────── */
 
@@ -1188,21 +1314,43 @@ select { cursor: pointer; }
 #tools-page .hint { margin-bottom: 14px; }
 #tools-page h2 { margin-top: 24px; }
 #tools-page .schema-preview {
+  display: block;
+  width: 100%;
   font-family: var(--mono);
   font-size: 11px;
   background: var(--bg-inset);
   border: 1px solid var(--border);
   border-radius: var(--radius);
-  padding: 12px 16px;
-  max-height: 400px;
+  padding: var(--s3);
+  height: 380px;
+  resize: vertical;
   overflow: auto;
   color: var(--text-dim);
-  white-space: pre-wrap;
-  margin-top: 8px;
+  white-space: pre;
+  margin-top: var(--s2);
 }
+.schema-details { margin-top: var(--s4); }
+.schema-details > summary {
+  cursor: pointer;
+  font-size: var(--fs-small);
+  color: var(--text-dim);
+  padding: var(--s2) 0;
+}
+.schema-details > summary:hover { color: var(--text); }
+.schema-actions { display: flex; justify-content: flex-end; }
+
 input:disabled, textarea:disabled { opacity: 0.6; background: var(--bg-inset); }
-#tools-page .tools-table tr { cursor: pointer; }
-#tools-page .tools-table tr:hover { background: var(--bg-hover); }
+/* Only the custom rows navigate. Built-in rows were showing a pointer cursor
+   and a hover highlight while doing nothing when clicked. */
+#tools-page .tools-table tr.row-link { cursor: pointer; }
+#tools-page .tools-table tr.row-link:hover { background: var(--bg-hover); }
+#tools-page .tools-table td.row-actions { text-align: right; white-space: nowrap; }
+#tools-page .tools-table tr:not(:hover) .row-actions .hint { visibility: hidden; }
+
+/* Was flush against the viewport edge because it is a bare button after a
+   run of flex forms; give it the same rhythm as everything above it. */
+#tools-page .page-row { margin-top: var(--s3); }
+#tools-page #new-secret-form { max-width: 420px; flex: 1; }
 
 .get-key-link { font-size: 11px; font-weight: 400; color: var(--text-faint); margin-left: 4px; }
 .get-key-link::after { content: " \2192"; }

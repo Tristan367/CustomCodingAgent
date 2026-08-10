@@ -56,6 +56,13 @@
     "name": "delete_secret"
   },
   {
+    "path": "/_delete_script",
+    "methods": [
+      "POST"
+    ],
+    "name": "delete_script"
+  },
+  {
     "path": "/_init",
     "methods": [
       "POST"
@@ -98,11 +105,25 @@
     "name": "new_secret"
   },
   {
+    "path": "/_new_script",
+    "methods": [
+      "POST"
+    ],
+    "name": "new_script"
+  },
+  {
     "path": "/_quick_chat",
     "methods": [
       "POST"
     ],
     "name": "quick_chat"
+  },
+  {
+    "path": "/_run_script",
+    "methods": [
+      "POST"
+    ],
+    "name": "run_script"
   },
   {
     "path": "/_save_custom_endpoint",
@@ -124,6 +145,13 @@
       "POST"
     ],
     "name": "save_prompts"
+  },
+  {
+    "path": "/_save_script",
+    "methods": [
+      "POST"
+    ],
+    "name": "save_script"
   },
   {
     "path": "/_save_secret",
@@ -523,6 +551,13 @@
       "GET"
     ],
     "name": "redoc_html"
+  },
+  {
+    "path": "/scripts",
+    "methods": [
+      "GET"
+    ],
+    "name": "scripts_page"
   },
   {
     "path": "/sessions/{session_id}",

@@ -120,3 +120,46 @@ def test_every_handler_is_reachable():
                         f"{sorted(methods)} {route.path} (agent_server/routes/{info.name}.py)"
                     )
     assert not orphans, "defined but not included in the app:\n" + "\n".join(orphans)
+
+
+def test_every_page_template_closes_its_tags():
+    """A page rendering inside the topbar passes every other test.
+
+    Adding a nav link once replaced `</header>` instead of preceding it, so the
+    whole document nested inside the header: 287 tests green, ruff clean, and
+    every page unusable. Nothing else in the suite looks at the markup.
+    """
+    import re
+    from pathlib import Path
+
+    templates = Path(__file__).parent.parent / "web_ui" / "templates"
+    problems = []
+    for path in sorted(templates.rglob("*.html")):
+        text = path.read_text()
+        for tag in ("header", "nav", "form", "table", "details", "section", "dialog"):
+            opened = len(re.findall(rf"<{tag}[\s>]", text))
+            closed = len(re.findall(rf"</{tag}>", text))
+            if opened != closed:
+                problems.append(f"{path.name}: <{tag}> opened {opened}, closed {closed}")
+    assert not problems, "unbalanced tags:\n" + "\n".join(problems)
+
+
+def test_every_page_container_is_laid_out():
+    """A new page div that no layout rule matches renders with no width.
+
+    `#scripts-page` was added to the template and not to the rule listing the
+    page containers, so it had no padding, no max-width and no scrolling.
+    """
+    import re
+    from pathlib import Path
+
+    root = Path(__file__).parent.parent / "web_ui"
+    css = (root / "static" / "css" / "style.css").read_text()
+    laid_out = set(re.findall(r"#([a-z-]+-page)", css))
+
+    declared = set()
+    for path in (root / "templates").rglob("*.html"):
+        declared |= set(re.findall(r'id="([a-z-]+-page)"', path.read_text()))
+
+    missing = sorted(declared - laid_out)
+    assert not missing, f"page containers with no CSS rule: {missing}"

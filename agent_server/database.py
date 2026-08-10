@@ -109,6 +109,12 @@ CREATE TABLE IF NOT EXISTS secrets (
     updated_at TEXT NOT NULL
 );
 
+CREATE TABLE IF NOT EXISTS scripts (
+    name TEXT PRIMARY KEY,
+    body TEXT NOT NULL,
+    updated_at TEXT NOT NULL
+);
+
 CREATE INDEX IF NOT EXISTS idx_messages_session ON messages(session_id, id);
 CREATE INDEX IF NOT EXISTS idx_compactions_session ON compactions(session_id, id);
 """
@@ -824,4 +830,25 @@ async def delete_custom_tool(name: str):
     await _execute("DELETE FROM custom_tools WHERE name = ?", (name,))
 
 
+# ── Scripts ─────────────────────────────────────────────────────────────────
 
+
+async def list_scripts() -> list[dict]:
+    return await _fetchall("SELECT * FROM scripts ORDER BY name")
+
+
+async def get_script(name: str) -> dict | None:
+    return await _fetchone("SELECT * FROM scripts WHERE name = ?", (name,))
+
+
+async def save_script(name: str, body: str):
+    await _execute(
+        "INSERT INTO scripts (name, body, updated_at) VALUES (?,?,?)"
+        " ON CONFLICT(name) DO UPDATE SET body = excluded.body,"
+        " updated_at = excluded.updated_at",
+        (name, body, _now()),
+    )
+
+
+async def delete_script(name: str):
+    await _execute("DELETE FROM scripts WHERE name = ?", (name,))

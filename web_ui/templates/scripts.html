@@ -1,0 +1,124 @@
+{% extends "base.html" %}
+{% block content %}
+<div id="scripts-page">
+    <h2>Scripts</h2>
+    {% if saved %}<div class="success-banner">Saved.</div>{% endif %}
+    {% if error %}<div class="error-banner">{{ error }}</div>{% endif %}
+    <p class="hint">
+        Small shell scripts you run yourself, with a click. They run from the
+        project directory and can see your <code>.env</code>, so a script that
+        starts or stops a service has everything it needs. Scripts are never
+        shown to the agent &mdash; for that, write a custom tool.
+    </p>
+
+    {% set edit_script = edit_script or '' %}
+    <div class="prompt-bar">
+        <select id="script-picker" aria-label="Script"
+                onchange="window.location='/scripts?edit=' + encodeURIComponent(this.value)">
+            <option value="">(select a script)</option>
+            {% for s in scripts %}
+            <option value="{{ s.name }}" {% if s.name == edit_script %}selected{% endif %}>{{ s.name }}</option>
+            {% endfor %}
+        </select>
+        <button type="submit" form="edit-form" class="btn-primary"
+                {% if not edit_script %}disabled{% endif %}>Save</button>
+        {# Never disabled: with no scripts saved there would be no way to make
+           the first one. #}
+        <button type="button" class="btn-secondary" onclick="newScript()">New</button>
+        <form method="POST" action="/_delete_script" id="delete-form">
+            <input type="hidden" name="name" value="{{ edit_script }}">
+            <button type="submit" class="btn-danger"
+                    {% if not edit_script %}disabled{% endif %}>Delete</button>
+        </form>
+    </div>
+
+    <script>
+        /* Defined out here, not inside the "a script is selected" block: the
+           New button is always on screen, and with nothing saved yet that was
+           the only way to create the first script. */
+        async function newScript() {
+            const name = await ui.prompt('Lowercase letters, digits and hyphens.', {
+                title: 'New script',
+                placeholder: 'restart-dev-server',
+                pattern: '[a-z0-9][a-z0-9-]*',
+                confirmLabel: 'Create',
+            });
+            if (!name) return;
+            const form = document.createElement('form');
+            form.method = 'POST';
+            form.action = '/_new_script';
+            const field = document.createElement('input');
+            field.name = 'new_name';
+            field.value = name;
+            form.appendChild(field);
+            document.body.appendChild(form);
+            form.submit();
+        }
+    </script>
+
+    {% if edit_script %}
+    {% set s = scripts | selectattr('name', 'equalto', edit_script) | first %}
+    {% if s %}
+    <form method="POST" action="/_save_script" class="stack" id="edit-form">
+        <input type="hidden" name="name" value="{{ s.name }}">
+        <textarea name="body" id="script-body" rows="16" class="prompt-textarea"
+                  maxlength="32000" spellcheck="false"
+                  placeholder="#!/usr/bin/env bash&#10;echo hello">{{ s.body }}</textarea>
+    </form>
+
+    <div class="script-actions">
+        <button type="button" class="btn-primary" id="run-btn" onclick="runScript()">Run</button>
+        <div id="run-dirty" class="script-dirty" hidden>
+            Unsaved edits. Run uses the saved version.
+        </div>
+        <div id="run-result" class="script-result"></div>
+    </div>
+
+    <script>
+        const SCRIPT_NAME = {{ s.name | tojson }};
+        const bodyBox = document.getElementById('script-body');
+        let savedBody = bodyBox.value;
+
+        // Run executes what is stored, not what is on screen, so say when the
+        // two have diverged rather than running something the user did not
+        // just read in the confirmation.
+        bodyBox.addEventListener('input', () => {
+            document.getElementById('run-dirty').hidden = bodyBox.value === savedBody;
+        });
+
+        document.getElementById('delete-form').addEventListener('submit', async (e) => {
+            e.preventDefault();
+            const ok = await ui.confirm(`"${SCRIPT_NAME}" will be deleted.`, {
+                title: 'Delete script', confirmLabel: 'Delete',
+            });
+            if (ok) e.target.submit();
+        });
+
+        async function runScript() {
+            const ok = await ui.confirm(savedBody || '(empty)', {
+                title: `Run ${SCRIPT_NAME}?`, confirmLabel: 'Run', danger: false,
+            });
+            if (!ok) return;
+
+            const button = document.getElementById('run-btn');
+            const result = document.getElementById('run-result');
+            button.disabled = true;
+            result.textContent = 'Running\u2026';
+
+            const data = new FormData();
+            data.append('name', SCRIPT_NAME);
+            try {
+                const resp = await fetch('/_run_script', { method: 'POST', body: data });
+                // Server-rendered and escaped there; see _render_run.
+                result.innerHTML = await resp.text();
+            } catch (err) {
+                result.textContent = `Could not run it: ${err.message}`;
+            } finally {
+                button.disabled = false;
+            }
+        }
+    </script>
+    {% endif %}
+    {% endif %}
+</div>
+{% endblock %}

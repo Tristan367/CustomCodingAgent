@@ -766,12 +766,12 @@ button:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
 /* The scroll container spans the full window so its scrollbar sits against the
    edge of the screen. Centring is done on the children instead; putting the
    max-width on the scroller itself parked the scrollbar in mid-air. */
-#home-page, #prompts-page, #tools-page {
+#home-page, #prompts-page, #tools-page, #scripts-page {
   width: 100%;
   padding: 22px 20px 60px;
   overflow-y: auto;
 }
-#home-page > *, #prompts-page > *, #tools-page > * {
+#home-page > *, #prompts-page > *, #tools-page > *, #scripts-page > * {
   max-width: 860px;
   margin-inline: auto;
 }
@@ -1610,3 +1610,66 @@ kbd {
 .tool-grid .checkbox-label { display: flex; align-items: baseline; gap: var(--s2); }
 .tool-grid code { color: var(--accent); }
 .tool-grid .hint { margin: 0; }
+
+/* ── Scripts ── */
+
+.script-actions {
+  margin-top: var(--s3);
+}
+.script-result {
+  margin-top: var(--s3);
+}
+.script-exit {
+  font-family: var(--mono);
+  font-size: var(--fs-small);
+  padding: var(--s1) var(--s2);
+  border-radius: var(--radius);
+  margin-bottom: var(--s2);
+}
+/* Tinted from the tokens rather than a copied hex, so changing the palette
+   changes these too. */
+.script-exit.ok {
+  background: color-mix(in srgb, var(--success) 12%, transparent);
+  color: var(--success);
+}
+.script-exit.fail {
+  background: color-mix(in srgb, var(--danger) 12%, transparent);
+  color: var(--danger);
+}
+.script-note {
+  font-size: var(--fs-small);
+  color: var(--text-dim);
+  margin-bottom: var(--s2);
+}
+.script-dirty {
+  font-size: var(--fs-small);
+  color: var(--warn);
+  margin-top: var(--s2);
+}
+.script-output-details {
+  margin-bottom: var(--s1);
+}
+.script-output-details > summary {
+  cursor: pointer;
+  font-size: var(--fs-small);
+  color: var(--text-dim);
+  padding: var(--s1) 0;
+}
+.script-output-details > summary:hover {
+  color: var(--text);
+}
+.script-output {
+  font-family: var(--mono);
+  font-size: var(--fs-small);
+  background: var(--bg-inset);
+  padding: var(--s2);
+  border-radius: var(--radius);
+  margin: 0;
+  max-height: 300px;
+  overflow: auto;
+  white-space: pre-wrap;
+  word-break: break-all;
+}
+.stderr-output {
+  color: var(--danger);
+}

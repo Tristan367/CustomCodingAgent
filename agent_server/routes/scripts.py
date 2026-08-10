@@ -1,0 +1,170 @@
+"""User scripts: named shell scripts the user runs with a click.
+
+Deliberately not tools. A script is never sent to the model and has no schema,
+because "start the Ollama box" is a convenience for the person sitting here and
+has no business occupying schema tokens on every request.
+"""
+
+import asyncio
+import html
+import os
+
+from fastapi import APIRouter, Request
+from fastapi.responses import HTMLResponse, RedirectResponse
+
+from agent_server import database as db
+from agent_server.config import BASE_DIR
+from agent_server.routes.context import _slug
+from agent_server.templating import templates
+from agent_server.tools.bash import _collect, _kill
+
+RUN_TIMEOUT_SEC = 120
+MAX_OUTPUT_CHARS = 5000
+
+router = APIRouter()
+
+
+async def _scripts_context(edit_script: str = "", saved: bool = False, error: str = "") -> dict:
+    scripts_list = await db.list_scripts()
+    return {
+        "scripts": scripts_list,
+        "edit_script": edit_script,
+        "saved": saved,
+        "error": error,
+    }
+
+
+@router.get("/scripts")
+async def scripts_page(request: Request, saved: bool = False):
+    return templates.TemplateResponse(
+        request=request, name="scripts.html",
+        context=await _scripts_context(request.query_params.get("edit", ""), saved),
+    )
+
+
+@router.post("/_save_script")
+async def save_script(request: Request):
+    form = await request.form()
+    name = _slug(str(form.get("name", "")))
+    body = str(form.get("body", ""))
+
+    if not name:
+        return templates.TemplateResponse(
+            request=request, name="scripts.html",
+            context=await _scripts_context(name, error="Name is required"),
+        )
+    if len(body) > 32000:
+        return templates.TemplateResponse(
+            request=request, name="scripts.html",
+            context=await _scripts_context(name, error="Script too long (max 32000 chars)"),
+        )
+
+    await db.save_script(name, body)
+    return RedirectResponse(f"/scripts?edit={name}&saved=true", status_code=303)
+
+
+@router.post("/_delete_script")
+async def delete_script(request: Request):
+    form = await request.form()
+    name = str(form.get("name", "")).strip()
+    if name:
+        await db.delete_script(name)
+    return RedirectResponse("/scripts", status_code=303)
+
+
+@router.post("/_new_script")
+async def new_script(request: Request):
+    form = await request.form()
+    name = _slug(str(form.get("new_name", "")))
+    if not name:
+        return RedirectResponse("/scripts", status_code=303)
+    await db.save_script(name, "")
+    return RedirectResponse(f"/scripts?edit={name}", status_code=303)
+
+
+@router.post("/_run_script")
+async def run_script(request: Request):
+    form = await request.form()
+    name = str(form.get("name", ""))
+
+    # The saved script is run, not a body posted with the request. Trusting the
+    # form would make this endpoint "run arbitrary shell" rather than "run the
+    # thing the user saved and just confirmed", and the confirmation dialog
+    # names a script -- so that had better be what executes.
+    row = await db.get_script(name)
+    if row is None:
+        return HTMLResponse(
+            '<div class="script-exit fail">No saved script by that name. '
+            "Save it first.</div>"
+        )
+    script = row["body"]
+    if not script.strip():
+        return HTMLResponse('<div class="script-exit fail">This script is empty.</div>')
+
+    proc = None
+    detached = False
+    try:
+        proc = await asyncio.create_subprocess_exec(
+            "bash", "-c", script,
+            stdin=asyncio.subprocess.DEVNULL,
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE,
+            cwd=str(BASE_DIR),
+            # Inherit the environment so .env values -- the vision host, keys --
+            # are visible, which is most of the point for these scripts.
+            env={**os.environ, "TERM": "dumb", "NO_COLOR": "1", "PAGER": "cat"},
+            # Own process group, so a timeout kills the whole pipeline.
+            start_new_session=True,
+        )
+        # _collect, not communicate(): communicate waits for the pipes to reach
+        # EOF rather than for the shell to exit, so `ollama serve &` blocks for
+        # the full timeout and then gets killed along with the server it just
+        # started. Starting a daemon is the main thing these scripts are for.
+        stdout, stderr, detached = await asyncio.wait_for(
+            _collect(proc), timeout=RUN_TIMEOUT_SEC
+        )
+    except TimeoutError:
+        _kill(proc)
+        return HTMLResponse(
+            f'<div class="script-exit fail">Timed out after {RUN_TIMEOUT_SEC}s '
+            "and was killed.</div>"
+        )
+    except Exception as e:
+        _kill(proc)
+        return HTMLResponse(
+            f'<div class="script-exit fail">{html.escape(str(e))}</div>'
+        )
+
+    return HTMLResponse(_render_run(proc.returncode, stdout, stderr, detached))
+
+
+def _render_run(code: int, stdout: bytes, stderr: bytes, detached: bool) -> str:
+    out = stdout.decode("utf-8", errors="replace")
+    err = stderr.decode("utf-8", errors="replace")
+
+    state = "ok" if code == 0 else "fail"
+    label = "Finished" if code == 0 else "Failed"
+    parts = [f'<div class="script-exit {state}">{label} \u00b7 exit {code}</div>']
+
+    if detached:
+        parts.append(
+            '<div class="script-note">The shell exited and left something running. '
+            "It was not killed, and anything it prints from here on is not captured.</div>"
+        )
+
+    for title, text in (("stdout", out), ("stderr", err)):
+        if not text.strip():
+            continue
+        note = ""
+        if len(text) > MAX_OUTPUT_CHARS:
+            note = f" (first {MAX_OUTPUT_CHARS} characters)"
+            text = text[:MAX_OUTPUT_CHARS]
+        css = "script-output" + (" stderr-output" if title == "stderr" else "")
+        parts.append(
+            f'<details class="script-output-details" open><summary>{title}{note}</summary>'
+            f'<pre class="{css}">{html.escape(text)}</pre></details>'
+        )
+
+    if not out.strip() and not err.strip():
+        parts.append('<div class="script-note">No output.</div>')
+    return "".join(parts)

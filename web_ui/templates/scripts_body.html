@@ -11,7 +11,7 @@
     {% set edit_script = edit_script or '' %}
     <div class="prompt-bar">
         <select id="script-picker" aria-label="Script"
-                onchange="window.location='/scripts?edit=' + encodeURIComponent(this.value)">
+                onchange="window.location='/?script=' + encodeURIComponent(this.value)">
             <option value="">(select a script)</option>
             {% for s in scripts %}
             <option value="{{ s.name }}" {% if s.name == edit_script %}selected{% endif %}>{{ s.name }}</option>

@@ -83,10 +83,16 @@ def _tool_param_warnings(tool: dict) -> list[str]:
         return warnings
     props = params.get("properties") or {}
     script = tool.get("script") or ""
+    # A script may build the variable name instead of spelling it out --
+    # os.environ[f"TOOL_ARG_{name.upper()}"] is the natural thing to write in a
+    # python heredoc -- and was then reported as ignoring every parameter it
+    # actually reads. Any of these means "this script reads its arguments".
+    computed = any(marker in script for marker in ('TOOL_ARG_{', 'TOOL_ARG_" +', "TOOL_ARG_%s", "$@", "$*"))
     for name in props:
         ref = f"$TOOL_ARG_{name.upper()}"
-        if ref not in script and "$@" not in script and "$*" not in script:
-            warnings.append(f"Parameter '{name}' defined but not referenced in script (add {ref})")
+        if computed or ref in script or f"TOOL_ARG_{name.upper()}" in script:
+            continue
+        warnings.append(f"Parameter '{name}' defined but not referenced in script (add {ref})")
     used = set(re.findall(r'\$TOOL_ARG_(\w+)', script))
     for var in used - {k.upper() for k in props}:
         warnings.append(f"Script uses $TOOL_ARG_{var} but no parameter '{var.lower()}' defined")

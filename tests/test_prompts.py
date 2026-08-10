@@ -5,6 +5,7 @@ import hashlib
 import pytest
 
 from agent_server import database as db
+from agent_server import system_prompt as sp
 from agent_server.system_prompt import (
     _SHIPPED_HASHES,
     COMPACTION,
@@ -31,7 +32,7 @@ async def fresh(tmp_path, monkeypatch):
 
 async def test_migration_seeds_starters_on_a_clean_install(fresh):
     await migrate_prompts()
-    assert await list_prompt_names() == ["default", "minimal"]
+    assert await list_prompt_names() == sorted(sp.STARTER_PROMPTS)
     assert await prompt_body("default") == DEFAULT_PROMPT.strip()
     assert await prompt_body("minimal") == MINIMAL_PROMPT.strip()
 

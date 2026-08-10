@@ -23,15 +23,15 @@ from pathlib import Path
 import httpx
 
 from agent_server.config import (
-    VISION_MAX_PIXELS,
-    VISION_MODEL,
     VISION_AUTOSTART,
     VISION_KEEP_ALIVE,
+    VISION_MAX_PIXELS,
+    VISION_MODEL,
+    VISION_NUM_CTX,
+    VISION_OLLAMA_URL,
     VISION_REMOTE_BIN,
     VISION_SSH_HOST,
     VISION_START_TIMEOUT,
-    VISION_NUM_CTX,
-    VISION_OLLAMA_URL,
     VISION_TIMEOUT,
 )
 
@@ -60,7 +60,7 @@ def normalize_image(data: bytes) -> bytes:
     try:
         image = Image.open(io.BytesIO(data))
         image.load()
-    except Exception as e:  # noqa: BLE001
+    except Exception as e:
         raise VisionError(f"could not decode image: {e}") from e
 
     image = ImageOps.exif_transpose(image)
@@ -104,7 +104,7 @@ def describe_image_file(path: str | Path) -> str:
 
         with Image.open(Path(path).expanduser()) as im:
             return f"{im.width}x{im.height} {im.format}"
-    except Exception:  # noqa: BLE001
+    except Exception:
         return "image"
 
 
@@ -115,11 +115,12 @@ async def rig_available() -> bool:
         async with httpx.AsyncClient(timeout=4) as client:
             resp = await client.get(f"{VISION_OLLAMA_URL}/api/tags")
             return resp.status_code == 200
-    except Exception:  # noqa: BLE001
+    except Exception:
         return False
 
 
 _starting = asyncio.Lock()
+_analyze_lock = asyncio.Lock()
 
 
 async def ensure_rig() -> tuple[bool, str]:
@@ -151,7 +152,7 @@ async def ensure_rig() -> tuple[bool, str]:
                 stderr=asyncio.subprocess.PIPE,
             )
             _, err = await asyncio.wait_for(proc.communicate(), timeout=20)
-        except (asyncio.TimeoutError, OSError) as e:
+        except (TimeoutError, OSError) as e:
             return False, f"could not reach {VISION_SSH_HOST} to start it ({e})"
         if proc.returncode != 0:
             detail = err.decode("utf-8", "replace").strip().splitlines()
@@ -177,7 +178,7 @@ async def unload_model():
             json={"model": VISION_MODEL, "messages": [], "keep_alive": 0},
             timeout=8,
         )
-    except Exception:  # noqa: BLE001
+    except Exception:
         pass  # the rig may already be gone; nothing to clean up
 
 
@@ -238,11 +239,12 @@ async def analyze(images: list[bytes], prompt: str, labels: list[str] | None = N
     }
 
     try:
-        client = await _client()
-        resp = await client.post(f"{VISION_OLLAMA_URL}/api/chat", json=payload)
+        async with _analyze_lock:
+            client = await _client()
+            resp = await client.post(f"{VISION_OLLAMA_URL}/api/chat", json=payload)
     except httpx.TimeoutException as e:
         raise VisionError(f"vision model timed out after {VISION_TIMEOUT}s") from e
-    except Exception as e:  # noqa: BLE001
+    except Exception as e:
         raise VisionError(f"could not reach the vision rig at {VISION_OLLAMA_URL}: {e}") from e
 
     if resp.status_code != 200:
@@ -369,7 +371,7 @@ async def _perform(page, action: dict):
             await page.wait_for_timeout(min(int(value or 500), 15_000))
         else:
             raise VisionError(f"unknown action type: {kind}")
-    except Exception as e:  # noqa: BLE001
+    except Exception as e:
         raise VisionError(f"action {kind}({selector}) failed: {e}") from e
 
 

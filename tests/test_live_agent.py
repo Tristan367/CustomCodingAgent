@@ -15,10 +15,10 @@ import pytest
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from agent_server import agent  # noqa: E402
-from agent_server import database as db  # noqa: E402
-from agent_server.conversation import build_messages  # noqa: E402
-from agent_server.providers import get_provider  # noqa: E402
+from agent_server import agent
+from agent_server import database as db
+from agent_server.conversation import build_messages
+from agent_server.providers import get_provider
 
 pytestmark = pytest.mark.asyncio
 

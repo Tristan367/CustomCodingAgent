@@ -71,7 +71,7 @@ async def webfetch(ctx: ToolContext, *, url: str, **_) -> ToolResult:
             resp = await client.get(url)
     except httpx.TimeoutException:
         return ToolResult.error(f"request timed out after {TIMEOUT}s: {url}", title)
-    except Exception as e:  # noqa: BLE001
+    except Exception as e:
         return ToolResult.error(f"fetching {url}: {e}", title)
 
     if resp.status_code >= 400:
@@ -116,3 +116,63 @@ def _html_to_text(raw: str) -> str:
     text = re.sub(r"[ \t\u00a0]+", " ", text)
     text = re.sub(r"\n\s*\n\s*\n+", "\n\n", text)
     return "\n".join(line.strip() for line in text.splitlines())
+
+
+async def websearch(ctx: ToolContext, *, query: str, **_) -> ToolResult:
+    """Search the web via DuckDuckGo Lite (no API key needed)."""
+    title = f"search: {query[:60]}"
+    try:
+        async with httpx.AsyncClient(
+            timeout=TIMEOUT,
+            follow_redirects=True,
+            headers={"User-Agent": "Mozilla/5.0 (compatible; CodeAgent/1.0)"},
+        ) as client:
+            resp = await client.post(
+                "https://lite.duckduckgo.com/lite/",
+                data={"q": query, "kl": ""},
+            )
+            text = resp.text
+    except Exception as e:
+        return ToolResult.error(f"search failed: {e}", title)
+
+    results = _parse_ddg_lite_v2(text)
+    if not results:
+        return ToolResult(output="No results found.", title=title)
+
+    lines = []
+    for r in results:
+        lines.append(f"{r['title']} — {r['snippet']}\n  {r['url']}")
+    return ToolResult(
+        output=truncate("\n\n".join(lines), MAX_TOOL_RESULT_CHARS, "search", spill=True),
+        title=f"{title} ({len(results)} results)",
+    )
+
+
+def _parse_ddg_lite_v2(html_text: str) -> list[dict]:
+    """Extract title, snippet, URL from DuckDuckGo Lite v2 HTML."""
+    results = []
+    seen = set()
+    # Results are in <a> tags with external hrefs, followed by snippet <td>s
+    for m in re.finditer(
+        r'<a\s[^>]*href="(https?://[^"]+)"[^>]*>(.*?)</a>',
+        html_text, re.DOTALL | re.IGNORECASE,
+    ):
+        url = m.group(1)
+        title_text = html.unescape(re.sub(r"<[^>]+>", "", m.group(2))).strip()
+        if not url.startswith("http") or "duckduckgo.com" in url:
+            continue
+        if url in seen or not title_text:
+            continue
+        seen.add(url)
+        # Look for the nearest following snippet
+        snippet = ""
+        after = html_text[m.end():m.end() + 500]
+        sm = re.search(r"<td[^>]*>(.*?)</td>", after, re.DOTALL)
+        if sm:
+            snippet = html.unescape(
+                re.sub(r"<[^>]+>", "", sm.group(1)).strip()
+            )[:300]
+        results.append({"title": title_text, "snippet": snippet, "url": url})
+        if len(results) >= 10:
+            break
+    return results

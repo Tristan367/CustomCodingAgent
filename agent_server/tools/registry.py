@@ -2,16 +2,18 @@
 
 import asyncio
 import inspect
+from collections.abc import Awaitable, Callable, Iterable
 from dataclasses import dataclass, field
-from typing import Any, Awaitable, Callable, Iterable, Literal
+from typing import Any, Literal
 
 from agent_server.tools.base import ToolContext, ToolResult
-from agent_server.tools.bash import is_read_only, run_bash
+from agent_server.tools.bash import run_bash
 from agent_server.tools.file_ops import edit_file, read_file, write_file
 from agent_server.tools.search import glob_search, grep_search
+from agent_server.tools.skill import load_skill
 from agent_server.tools.task import run_task
 from agent_server.tools.vision import screenshot, vision
-from agent_server.tools.web import webfetch
+from agent_server.tools.web import webfetch, websearch
 
 Handler = Callable[..., Awaitable[ToolResult]]
 PauseKind = Literal["permission"]
@@ -24,10 +26,12 @@ class Tool:
     parameters: dict
     handler: Handler
     # "permission": run only after the user approves.
-    # "question":   the user supplies the result; the handler is never called.
     pause: PauseKind | None = None
-    # Called with (args) -> bool. Lets a tool waive its own permission prompt.
-    auto_allow: Callable[[dict], bool] | None = None
+    # Read-only and side-effect free, so several may run at once. This is a
+    # property of the tool rather than of its name: a custom tool is free to
+    # call itself `read`, and shadowing a built-in must not inherit the
+    # built-in's right to skip the permission gate and run concurrently.
+    parallel_safe: bool = field(default=False)
     vision_only: bool = field(default=False)
 
     def schema(self) -> dict:
@@ -42,16 +46,26 @@ class Tool:
 
 
 TOOLS: dict[str, Tool] = {}
+_custom_tool_names: set[str] = set()
 
 
 def register(tool: Tool):
     TOOLS[tool.name] = tool
 
 
+def unregister_custom(names: set[str]):
+    for name in names:
+        TOOLS.pop(name, None)
+    _custom_tool_names.difference_update(names)
+
+
 register(Tool(
     name="read",
     description=(
-        "Read a file from the filesystem. Returns contents prefixed with line numbers. "
+        "Read a file or directory from the filesystem. Returns contents with each line "
+        "prefixed as `N|hhhh|` where N is the 1-indexed line number and hhhh is a 4-char "
+        "hash of that line's content. Use these hashes with `edit` (hashStart/hashEnd) "
+        "to anchor changes precisely without retyping the text you want to replace. "
         "Prefer absolute paths. Use offset/limit for large files. You must read a file "
         "before you edit it."
     ),
@@ -65,24 +79,31 @@ register(Tool(
         "required": ["filePath"],
     },
     handler=read_file,
+    parallel_safe=True,
 ))
 
 register(Tool(
     name="edit",
     description=(
-        "Replace an exact string in an existing file. oldString must match the file "
-        "byte-for-byte including indentation, and must be unique unless replaceAll is true. "
-        "Read the file first."
+        "Apply changes to an existing file. Prefer the hashline mode: call `read` first, "
+        "note the `N|hh|` hashes on the lines you want to replace, then pass hashStart "
+        "(required) and hashEnd (optional, for ranges) with the replacement text in newText. "
+        "If the file changed since you read it the hashes will not match and the edit is "
+        "rejected — just read it again. Fallback: oldString/newString for exact text replacement "
+        "(use only when hashline is impractical)."
     ),
     parameters={
         "type": "object",
         "properties": {
             "filePath": {"type": "string", "description": "Path to the file"},
-            "oldString": {"type": "string", "description": "Exact text to replace"},
-            "newString": {"type": "string", "description": "Replacement text"},
+            "hashStart": {"type": "string", "description": "4-char hash of the first line to replace (preferred)"},
+            "hashEnd": {"type": "string", "description": "4-char hash of the last line to replace (for ranges)"},
+            "newText": {"type": "string", "description": "Replacement lines"},
+            "oldString": {"type": "string", "description": "Exact text to replace (fallback, avoid when possible)"},
+            "newString": {"type": "string", "description": "Replacement text for oldString mode"},
             "replaceAll": {"type": "boolean", "description": "Replace every occurrence"},
         },
-        "required": ["filePath", "oldString", "newString"],
+        "required": ["filePath"],
     },
     handler=edit_file,
 ))
@@ -122,7 +143,6 @@ register(Tool(
     },
     handler=run_bash,
     pause="permission",
-    auto_allow=lambda args: is_read_only(args.get("command", "")),
 ))
 
 register(Tool(
@@ -141,6 +161,7 @@ register(Tool(
         "required": ["pattern"],
     },
     handler=grep_search,
+    parallel_safe=True,
 ))
 
 register(Tool(
@@ -155,6 +176,7 @@ register(Tool(
         "required": ["pattern"],
     },
     handler=glob_search,
+    parallel_safe=True,
 ))
 
 register(Tool(
@@ -166,6 +188,23 @@ register(Tool(
         "required": ["url"],
     },
     handler=webfetch,
+    parallel_safe=True,
+))
+
+register(Tool(
+    name="websearch",
+    description=(
+        "Search the web via DuckDuckGo. Returns titles, snippets, and URLs for up to "
+        "10 results. No API key required. Use this when you need current information "
+        "not in the codebase — library docs, version changes, error messages."
+    ),
+    parameters={
+        "type": "object",
+        "properties": {"query": {"type": "string", "description": "Search query"}},
+        "required": ["query"],
+    },
+    handler=websearch,
+    parallel_safe=True,
 ))
 
 register(Tool(
@@ -183,10 +222,152 @@ register(Tool(
                 "type": "string",
                 "description": "Complete instructions, including exactly what to report back",
             },
+            "count": {
+                "type": "integer",
+                "description": "Number of parallel subagents to launch with the same prompt. Default 1. Use for consensus/exploration.",
+            },
         },
         "required": ["description", "prompt"],
     },
     handler=run_task,
+    parallel_safe=True,
+))
+
+register(Tool(
+    name="skill",
+    description=(
+        "Load reusable Markdown instructions for a technology, framework, or workflow. "
+        "Call without `name` to list available skills. Call with `name` to load one. "
+        "Skills live in ~/.config/codeagent/skills/ as .md files. Use this instead of "
+        "guessing at API signatures or conventions you might misremember."
+    ),
+    parameters={
+        "type": "object",
+        "properties": {
+            "name": {"type": "string", "description": "Skill filename without .md extension, or leave blank to list"},
+        },
+        "required": [],
+    },
+    handler=load_skill,
+    parallel_safe=True,
+))
+
+register(Tool(
+    name="explore",
+    description=(
+        "Dispatch a narrow subagent to search the codebase for specific facts — "
+        "file locations, class definitions, call sites, config patterns. Read-only, "
+        "lighter than `task`. Give it a focused question with concrete expected output. "
+        "Use `task` for open-ended research; use `explore` when you know exactly what "
+        "you need to find."
+    ),
+    parameters={
+        "type": "object",
+        "properties": {
+            "description": {"type": "string", "description": "3-5 word label"},
+            "prompt": {
+                "type": "string",
+                "description": "Specific question with expected output format",
+            },
+        },
+        "required": ["description", "prompt"],
+    },
+    handler=run_task,
+    parallel_safe=True,
+))
+
+# ── Playwright browser tools ────────────────────────────────────────────────
+
+from agent_server.tools.browser import (
+    browser_click,
+    browser_fill,
+    browser_goto,
+    browser_screenshot,
+    browser_steps,
+)
+
+register(Tool(
+    name="browser-goto",
+    description="Navigate to a URL in a headless browser and describe the page via screenshot analysis.",
+    parameters={
+        "type": "object",
+        "properties": {
+            "url": {"type": "string", "description": "Full URL to navigate to"},
+        },
+        "required": ["url"],
+    },
+    handler=browser_goto,
+    vision_only=True,
+))
+register(Tool(
+    name="browser-click",
+    description="Click a CSS selector in the browser and describe what changed.",
+    parameters={
+        "type": "object",
+        "properties": {
+            "selector": {"type": "string", "description": "CSS selector of the element to click"},
+        },
+        "required": ["selector"],
+    },
+    handler=browser_click,
+    vision_only=True,
+))
+register(Tool(
+    name="browser-fill",
+    description="Type text into a form field and describe the result.",
+    parameters={
+        "type": "object",
+        "properties": {
+            "selector": {"type": "string", "description": "CSS selector of the input field"},
+            "text": {"type": "string", "description": "Text to type into the field"},
+        },
+        "required": ["selector", "text"],
+    },
+    handler=browser_fill,
+    vision_only=True,
+))
+register(Tool(
+    name="browser-screenshot",
+    description="Capture and describe the current browser page.",
+    parameters={
+        "type": "object",
+        "properties": {},
+    },
+    handler=browser_screenshot,
+    vision_only=True,
+))
+
+register(Tool(
+    name="browser-steps",
+    description=(
+        "Run a sequence of browser actions (up to 8), taking a screenshot after each. "
+        "Actions: goto(url), click(selector), fill(selector, text), wait(ms). "
+        "Each step gets its own screenshot analysis. Use for multi-page workflows "
+        "like form submissions, login flows, or checkout processes."
+    ),
+    parameters={
+        "type": "object",
+        "properties": {
+            "steps": {
+                "type": "array",
+                "description": "Ordered list of actions",
+                "items": {
+                    "type": "object",
+                    "properties": {
+                        "action": {"type": "string", "enum": ["goto", "click", "fill", "wait"]},
+                        "url": {"type": "string"},
+                        "selector": {"type": "string"},
+                        "text": {"type": "string"},
+                        "ms": {"type": "integer"},
+                    },
+                    "required": ["action"],
+                },
+            },
+        },
+        "required": ["steps"],
+    },
+    handler=browser_steps,
+    vision_only=True,
 ))
 
 register(Tool(
@@ -222,6 +403,7 @@ register(Tool(
         "required": ["prompt"],
     },
     handler=vision,
+    parallel_safe=True,
     vision_only=True,
 ))
 
@@ -278,16 +460,19 @@ register(Tool(
         "required": ["url"],
     },
     handler=screenshot,
+    parallel_safe=True,
     vision_only=True,
 ))
 
 
-def tool_schemas(names: Iterable[str] | None = None, include_vision: bool = True) -> list[dict]:
+def tool_schemas(names: Iterable[str] | None = None, include_vision: bool = True, exclude: set[str] | None = None) -> list[dict]:
     selected = list(names) if names is not None else list(TOOLS)
     return [
         TOOLS[n].schema()
         for n in selected
-        if n in TOOLS and (include_vision or not TOOLS[n].vision_only)
+        if n in TOOLS
+        and (include_vision or not TOOLS[n].vision_only)
+        and (exclude is None or n not in exclude)
     ]
 
 
@@ -322,7 +507,7 @@ async def execute_tool(
         return ToolResult.error(f"invalid arguments for '{name}': {e}", name)
     except asyncio.CancelledError:
         raise
-    except Exception as e:  # noqa: BLE001
+    except Exception as e:
         return ToolResult.error(f"{name} failed: {type(e).__name__}: {e}", name)
 
     if not isinstance(result, ToolResult):
@@ -333,6 +518,11 @@ async def execute_tool(
 
 
 __all__ = [
-    "Tool", "TOOLS", "ToolContext", "ToolResult",
-    "tool_schemas", "get_tool", "execute_tool",
+    "TOOLS",
+    "Tool",
+    "ToolContext",
+    "ToolResult",
+    "execute_tool",
+    "get_tool",
+    "tool_schemas",
 ]

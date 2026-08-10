@@ -7,7 +7,8 @@ surfaces in the browser as an opaque "Error in input stream".
 """
 
 from abc import ABC, abstractmethod
-from typing import AsyncIterator, Literal, TypedDict
+from collections.abc import AsyncIterator
+from typing import Literal, TypedDict
 
 FinishReason = Literal["stop", "tool_calls", "length", "content_filter", "error"]
 
@@ -62,6 +63,13 @@ class Provider(ABC):
         thinking_effort: str | None = None,
     ) -> AsyncIterator[StreamEvent]:
         ...
+
+    def settings_fields(self) -> list[dict]:
+        """Return [{key, label, kind}] for the settings page. Override per provider."""
+        return []
+
+    def invalidate_key_cache(self):
+        """Called after the API key is saved. Override if the provider caches."""
 
 
 def estimate_tokens(messages: list[dict]) -> int:

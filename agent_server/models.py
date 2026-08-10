@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from typing import Any, Literal, Optional
+from typing import Any, Literal
 
 from pydantic import BaseModel
 
@@ -13,17 +13,17 @@ class SessionCreate(BaseModel):
     provider: str = DEFAULT_PROVIDER
     model: str = DEFAULT_MODEL
     prompt_profile: str = "default"
-    thinking_effort: Optional[str] = None
+    thinking_effort: str | None = None
 
 
 class SessionUpdate(BaseModel):
-    name: Optional[str] = None
-    provider: Optional[str] = None
-    model: Optional[str] = None
-    thinking_effort: Optional[str] = None
-    prompt_profile: Optional[str] = None
-    bash_auto_approve: Optional[int] = None
-    is_archived: Optional[int] = None
+    name: str | None = None
+    provider: str | None = None
+    model: str | None = None
+    thinking_effort: str | None = None
+    prompt_profile: str | None = None
+    bash_auto_approve: int | None = None
+    is_archived: int | None = None
 
 
 class ChatRequest(BaseModel):
@@ -47,12 +47,12 @@ class MessageResponse(BaseModel):
     session_id: str
     role: str
     content: str
-    reasoning_content: Optional[str] = None
-    tool_calls: Optional[list[dict[str, Any]]] = None
-    tool_call_id: Optional[str] = None
-    tool_name: Optional[str] = None
+    reasoning_content: str | None = None
+    tool_calls: list[dict[str, Any]] | None = None
+    tool_call_id: str | None = None
+    tool_name: str | None = None
     is_error: int = 0
-    token_count: Optional[int] = None
+    token_count: int | None = None
     created_at: str
     is_compacted: int = 0
 

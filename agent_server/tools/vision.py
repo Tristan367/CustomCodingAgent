@@ -64,7 +64,7 @@ async def vision(
             shots = await engine.capture(
                 url, selector=selector, full_page=full_page, width=width, height=height
             )
-        except Exception as e:  # noqa: BLE001
+        except Exception as e:
             return ToolResult.error(f"could not capture {url}: {e}", "vision")
         for saved, data in shots:
             images.append(data)
@@ -117,7 +117,7 @@ async def screenshot(
             interval_ms=interval_ms,
             actions=actions,
         )
-    except Exception as e:  # noqa: BLE001
+    except Exception as e:
         return ToolResult.error(f"capture failed: {e}", f"screenshot {url[:60]}")
 
     listing = "\n".join(f"  {i + 1}. {path}" for i, (path, _) in enumerate(shots))

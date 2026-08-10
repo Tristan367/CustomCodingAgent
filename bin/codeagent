@@ -16,7 +16,7 @@ done
 ROOT="$(cd "$(dirname "$SELF")/.." && pwd)"
 cd "$ROOT"
 
-PORT="${PORT:-8080}"
+PORT="${PORT:-8219}"
 HOST="${HOST:-127.0.0.1}"
 URL="http://${HOST}:${PORT}"
 

@@ -51,6 +51,7 @@ async def run_bash(
     command: str,
     timeout: int | None = None,
     workdir: str | None = None,
+    env: dict[str, str] | None = None,
     **_,
 ) -> ToolResult:
     if not command or not command.strip():
@@ -75,18 +76,18 @@ async def run_bash(
             # New process group so a timeout can kill the whole pipeline, not
             # just the shell that spawned it.
             start_new_session=True,
-            env={**os.environ, "TERM": "dumb", "NO_COLOR": "1", "PAGER": "cat"},
+            env={**os.environ, "TERM": "dumb", "NO_COLOR": "1", "PAGER": "cat", **(env or {})},
         )
         stdout, stderr, detached = await asyncio.wait_for(
             _collect(proc), timeout=timeout_sec
         )
-    except asyncio.TimeoutError:
+    except TimeoutError:
         _kill(proc)
         return ToolResult.error(f"command timed out after {timeout_sec:g}s: {command}", title)
     except asyncio.CancelledError:
         _kill(proc)
         raise
-    except Exception as e:  # noqa: BLE001
+    except Exception as e:
         return ToolResult.error(f"failed to execute: {e}", title)
 
     out = stdout.decode("utf-8", errors="replace").strip()

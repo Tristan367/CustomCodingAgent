@@ -13,9 +13,14 @@ from agent_server import database as db
 
 
 class ScriptedProvider:
-    """Asks for one `read` per round for `rounds`, then answers."""
+    """Asks for one `read` per round for `rounds`, then answers.
 
-    def __init__(self, rounds: int, args: str = '{"file_path": "x.txt"}'):
+    Each round reads a different path. Repeating one identical call is a doom
+    loop and is stopped on purpose, which is a different property from the one
+    under test here -- see test_doom_loop.py.
+    """
+
+    def __init__(self, rounds: int, args: str | None = None):
         self.rounds = rounds
         self.args = args
         self.calls = 0
@@ -38,7 +43,7 @@ class ScriptedProvider:
                     "index": 0,
                     "id": f"call_{self.calls}",
                     "name": "read",
-                    "arguments": self.args,
+                    "arguments": self.args or f'{{"filePath": "x{self.calls}.txt"}}',
                 }],
             }
             yield {"type": "finish", "reason": "tool_calls"}
@@ -70,6 +75,21 @@ async def test_a_turn_runs_past_the_old_forty_round_cap(session, monkeypatch):
         e["type"] == "error" and "round" in e.get("message", "").lower() for e in events
     ), "a round cap ended the turn"
     assert events[-1]["type"] == "done"
+
+
+async def test_a_model_stuck_on_one_call_is_stopped(session, monkeypatch):
+    """Unbounded rounds means the exit has to come from somewhere. A model that
+    asks for the identical thing every round is not going to produce one, and
+    each round is a billed request, so the harness ends the turn itself."""
+    provider = ScriptedProvider(rounds=10_000, args='{"filePath": "x.txt"}')
+    monkeypatch.setattr(agent, "get_provider", lambda _p: provider)
+
+    events = [e async for e in agent.run(session["id"])]
+
+    assert provider.calls <= agent.DOOM_ABORT_ROUNDS + 1, \
+        f"billed {provider.calls} requests for a loop that never changed"
+    errors = [e for e in events if e["type"] == "error"]
+    assert errors and "repeated the same tool call" in errors[-1]["message"]
 
 
 async def test_the_user_can_still_stop_it(session, monkeypatch):

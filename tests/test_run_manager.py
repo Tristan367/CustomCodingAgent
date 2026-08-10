@@ -244,8 +244,7 @@ def test_a_fast_call_reports_before_a_slow_one_ahead_of_it():
     a subagent held its finished result -- and kept its timer ticking -- until
     the subagent was done. Both then landed on the same duration."""
     import agent_server.agent as ag
-    from agent_server.tools.base import ToolContext
-    from agent_server.tools.base import ToolResult
+    from agent_server.tools.base import ToolContext, ToolResult
 
     async def fake_record(session_id, call, result, duration_ms=0):
         return {"id": 1}

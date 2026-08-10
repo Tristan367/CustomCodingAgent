@@ -6,6 +6,7 @@ the subagent raised.
 """
 
 import asyncio
+import json
 
 from agent_server.config import (
     MAX_TOOL_RESULT_CHARS,
@@ -17,7 +18,7 @@ from agent_server.conversation import normalize_tool_calls, parse_arguments, too
 from agent_server.tools.base import ToolContext, ToolResult, truncate
 
 # Deliberately read-only: a subagent researches, the main agent makes changes.
-SUBAGENT_TOOLS = ("read", "grep", "glob", "webfetch")
+SUBAGENT_TOOLS = ("read", "grep", "glob", "webfetch", "websearch", "skill")
 MAX_ROUNDS = SUBAGENT_MAX_ROUNDS
 TIMEOUT = SUBAGENT_TIMEOUT
 
@@ -32,27 +33,61 @@ it must stand alone: include concrete file paths with line numbers, relevant \
 code snippets, and direct answers. Do not ask questions or describe your plan."""
 
 
-async def run_task(ctx: ToolContext, *, description: str, prompt: str, **_) -> ToolResult:
+async def run_task(ctx: ToolContext, *, description: str, prompt: str, count: int = 1, **_) -> ToolResult:
     title = f"task: {description[:70]}"
+    if count < 1:
+        count = 1
+
     try:
-        return await asyncio.wait_for(_run(ctx, description, prompt, title), timeout=TIMEOUT)
-    except asyncio.TimeoutError:
+        if count == 1:
+            return await asyncio.wait_for(_run(ctx, description, prompt, title), timeout=TIMEOUT)
+        tool_cache: dict = {}
+        tasks = [asyncio.wait_for(_run(ctx, description, prompt, title, tool_cache), timeout=TIMEOUT) for _ in range(count)]
+        results = await asyncio.gather(*tasks, return_exceptions=True)
+        parts = []
+        total_usage: dict = {}
+        for i, r in enumerate(results):
+            if isinstance(r, Exception):
+                parts.append(f"[agent {i+1}]: failed: {r}")
+            elif r.is_error:
+                parts.append(f"[agent {i+1}]: {r.output}")
+            else:
+                parts.append(f"[agent {i+1}]: {r.output}")
+            if hasattr(r, 'usage') and r.usage:
+                for k, v in r.usage.items():
+                    total_usage[k] = total_usage.get(k, 0) + v
+        return ToolResult(output="\n\n".join(parts), title=title, usage=total_usage or None)
+    except TimeoutError:
         return ToolResult.error(f"subagent timed out after {TIMEOUT}s", title)
     except asyncio.CancelledError:
         raise
-    except Exception as e:  # noqa: BLE001
+    except Exception as e:
         return ToolResult.error(f"subagent failed: {type(e).__name__}: {e}", title)
 
 
-async def _run(ctx: ToolContext, description: str, prompt: str, title: str) -> ToolResult:
+async def _run(ctx: ToolContext, description: str, prompt: str, title: str, tool_cache: dict | None = None) -> ToolResult:
     from agent_server.providers import get_provider
     from agent_server.tools.registry import execute_tool, tool_schemas
 
-    provider = get_provider(ctx.provider)
+    # Check for subagent overrides
+    subagent_prompt = ""
+    subagent_model = None
+    try:
+        from agent_server import database as db
+        subagent_prompt = await db.get_setting("subagent_prompt", "")
+        subagent_model = await db.get_setting("subagent_model", "")
+    except Exception:
+        pass
+
+    provider_name = ctx.provider
+    effective_model = subagent_model or ctx.model
+
+    provider = get_provider(provider_name)
     tools = tool_schemas(SUBAGENT_TOOLS)
 
+    system_content = subagent_prompt or SUBAGENT_PROMPT
     messages: list[dict] = [
-        {"role": "system", "content": f"{SUBAGENT_PROMPT}\n\nWorking directory: {ctx.project_dir}"},
+        {"role": "system", "content": f"{system_content}\n\nWorking directory: {ctx.project_dir}"},
         {"role": "user", "content": prompt},
     ]
 
@@ -68,7 +103,7 @@ async def _run(ctx: ToolContext, description: str, prompt: str, title: str) -> T
         finish = "stop"
 
         async for event in provider.chat_completion(
-            messages=messages, tools=tools, model=ctx.model, thinking_effort=SUBAGENT_EFFORT
+            messages=messages, tools=tools, model=effective_model, thinking_effort=SUBAGENT_EFFORT
         ):
             if ctx.abort.is_set():
                 return ToolResult.error("cancelled", title, usage_total)
@@ -105,9 +140,17 @@ async def _run(ctx: ToolContext, description: str, prompt: str, title: str) -> T
             return ToolResult.error("subagent returned no answer", title, usage_total)
 
         for call in calls:
-            result = await execute_tool(
-                tool_call_name(call), parse_arguments(call), ctx, allowed=SUBAGENT_TOOLS
-            )
+            tool_name = tool_call_name(call)
+            tool_args = parse_arguments(call)
+            if tool_cache is not None:
+                cache_key = (tool_name, json.dumps(tool_args, sort_keys=True))
+                if cache_key in tool_cache:
+                    result = tool_cache[cache_key]
+                else:
+                    result = await execute_tool(tool_name, tool_args, ctx, allowed=SUBAGENT_TOOLS)
+                    tool_cache[cache_key] = result
+            else:
+                result = await execute_tool(tool_name, tool_args, ctx, allowed=SUBAGENT_TOOLS)
             messages.append({
                 "role": "tool",
                 "tool_call_id": call["id"],

@@ -22,6 +22,8 @@ function initSession() {
     // App.streaming true so the new tab refuses to attach to its own run.
     // The server run is untouched -- only this page stops listening.
     detachStream();
+    pendingImages = [];
+    renderAttachments();
   }
   App.els = {
     form: document.getElementById('chat-form'),
@@ -1270,17 +1272,29 @@ const Notifier = {
   ctx: null,
   lastUnseen: {},
 
+  volume: 0.5,
+  kind: 'click',
+
   init() {
     this.enabled = document.body.dataset.sound !== 'off';
+    this.volume = parseFloat(document.body.dataset.soundVolume || '0.5');
+    this.kind = document.body.dataset.soundKind || 'click';
   },
 
-  /* Synthesised so there is no audio file to ship or load. */
   play(kind) {
     if (!this.enabled) return;
+    const sound = kind || this.kind || 'click';
     try {
       this.ctx = this.ctx || new (window.AudioContext || window.webkitAudioContext)();
       if (this.ctx.state === 'suspended') this.ctx.resume();
-      const tones = kind === 'waiting' ? [660, 880] : kind === 'error' ? [300, 220] : [880];
+      const vol = this.volume || 0.5;
+      let tones;
+      if (sound === 'chime') tones = [1047, 1319, 1568];
+      else if (sound === 'knock') tones = [200, 300, 200];
+      else if (sound === 'click') tones = [1200, 1500];
+      else if (kind === 'waiting') tones = [660, 880];
+      else if (kind === 'error') tones = [300, 220];
+      else tones = [880];
       tones.forEach((freq, i) => {
         const osc = this.ctx.createOscillator();
         const gain = this.ctx.createGain();
@@ -1288,13 +1302,13 @@ const Notifier = {
         osc.type = 'sine';
         osc.frequency.value = freq;
         gain.gain.setValueAtTime(0.0001, start);
-        gain.gain.exponentialRampToValueAtTime(0.10, start + 0.012);
+        gain.gain.exponentialRampToValueAtTime(vol * 0.2, start + 0.012);
         gain.gain.exponentialRampToValueAtTime(0.0001, start + 0.10);
         osc.connect(gain).connect(this.ctx.destination);
         osc.start(start);
         osc.stop(start + 0.12);
       });
-    } catch (_) { /* audio unavailable */ }
+    } catch (_) {}
   },
 
   failures: 0,
@@ -1379,6 +1393,82 @@ async function toggleSound(enabled) {
   form.append('enabled', enabled ? '1' : '0');
   await fetch('/_settings/sound', { method: 'POST', body: form });
   if (enabled) Notifier.play('done');
+}
+
+function previewSound() {
+  const sel = document.getElementById('sound-choice');
+  const vol = parseFloat(document.getElementById('sound-volume')?.value || '0.5');
+  const val = sel.value;
+  if (['click', 'chime', 'knock'].includes(val)) {
+    Notifier.volume = vol;
+    Notifier.play(val);
+  } else {
+    const audio = new Audio('/_settings/sounds/' + encodeURIComponent(val) + '/play');
+    audio.volume = vol;
+    audio.play().catch(() => {});
+  }
+}
+
+async function saveSoundSetting() {
+  const sel = document.getElementById('sound-choice');
+  const vol = document.getElementById('sound-volume');
+  Notifier.kind = sel.value;
+  Notifier.volume = parseFloat(vol.value || '0.5');
+  const form = new FormData();
+  form.append('sound', sel.value);
+  form.append('volume', vol.value);
+  await fetch('/_settings/sound', { method: 'POST', body: form });
+}
+
+function saveBashRules() {
+  const text = document.getElementById('bash-rules').value;
+  const rules = text.split('\n').filter(l => l.trim()).map(line => {
+    const m = line.match(/^(.+?)\s*[→>]\s*(allow|deny|ask)$/);
+    if (m) return { pattern: m[1].trim(), action: m[2] };
+    return null;
+  }).filter(Boolean);
+  fetch('/_settings/bash_rules', { method: 'POST', body: JSON.stringify(rules), headers: {'Content-Type': 'application/json'} });
+}
+
+async function uploadSound(input) {
+  const file = input.files[0];
+  if (!file) return;
+  const form = new FormData();
+  form.append('file', file);
+  try {
+    const r = await fetch('/_settings/sounds/upload', { method: 'POST', body: form });
+    const data = await r.json();
+    if (data.ok) {
+      const sel = document.getElementById('sound-choice');
+      const opt = new Option(data.name, data.name, true, true);
+      sel.appendChild(opt);
+      sel.value = data.name;
+      saveSoundSetting();
+    } else {
+      alert(data.error || 'Upload failed');
+    }
+  } catch (e) {
+    alert('Upload failed: ' + e);
+  }
+  input.value = '';
+}
+
+async function initProject() {
+  const dir = prompt('Project directory (leave blank for home):', '~/' + (App.sessionId ? '' : ''));
+  if (!dir && dir !== '') return;
+  const form = new FormData();
+  form.append('dir', dir || '~/');
+  try {
+    const r = await fetch('/_init', { method: 'POST', body: form });
+    const data = await r.json();
+    if (data.ok) {
+      alert('Wrote ' + data.path + '\n\n' + data.preview);
+    } else {
+      alert(data.error || 'Failed');
+    }
+  } catch (e) {
+    alert('Failed: ' + e);
+  }
 }
 
 /* ── Drafts and scroll position ──────────────────────────────────────────── */

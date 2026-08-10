@@ -28,6 +28,8 @@ async def grep_search(
     search_dir = ctx.resolve(path)
     title = f"grep '{pattern[:60]}'"
 
+    if not pattern or not pattern.strip():
+        return ToolResult.error("empty pattern — nothing to search for", title)
     if not search_dir.exists():
         return ToolResult.error(f"path not found: {search_dir}", title)
     if not shutil.which("rg"):
@@ -50,9 +52,9 @@ async def grep_search(
             *cmd, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE
         )
         stdout, stderr = await asyncio.wait_for(proc.communicate(), timeout=60)
-    except asyncio.TimeoutError:
+    except TimeoutError:
         return ToolResult.error("search timed out after 60s", title)
-    except Exception as e:  # noqa: BLE001
+    except Exception as e:
         return ToolResult.error(f"search failed: {e}", title)
 
     if proc.returncode not in (0, 1):
@@ -128,7 +130,7 @@ async def glob_search(ctx: ToolContext, *, pattern: str, path: str | None = None
 
     try:
         matches = await asyncio.to_thread(_walk)
-    except Exception as e:  # noqa: BLE001
+    except Exception as e:
         return ToolResult.error(f"glob failed: {e}", title)
 
     if not matches:

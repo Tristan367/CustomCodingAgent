@@ -2,18 +2,20 @@
 
 import asyncio
 import json
+import os
 import re
 from contextlib import asynccontextmanager
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 
 from fastapi import FastAPI, Form, HTTPException, Request
-from fastapi.responses import HTMLResponse, RedirectResponse
+from fastapi.responses import FileResponse, HTMLResponse, PlainTextResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 
-from agent_server import agent
+from agent_server import agent, permissions
 from agent_server import database as db
+from agent_server import tts as tts_service
 from agent_server.compaction import should_offer_compaction
 from agent_server.config import (
     DEFAULT_MODEL,
@@ -22,8 +24,6 @@ from agent_server.config import (
     THRESHOLD_STEPS,
     stt_available,
 )
-from agent_server.stt import availability as stt_availability
-from agent_server import tts as tts_service
 from agent_server.conversation import (
     normalize_tool_calls,
     parse_arguments,
@@ -32,9 +32,9 @@ from agent_server.conversation import (
 )
 from agent_server.database import close as close_db
 from agent_server.database import init_db
-from agent_server.providers import list_providers
-from agent_server.providers.deepseek import invalidate_key_cache
+from agent_server.providers import get_provider, get_provider_settings_fields, list_providers
 from agent_server.routes import chat, sessions, tts
+from agent_server.stt import availability as stt_availability
 from agent_server.system_prompt import (
     COMPACTION,
     PROTECTED_PROMPT,
@@ -43,8 +43,7 @@ from agent_server.system_prompt import (
     list_prompt_names,
     migrate_prompts,
 )
-from agent_server import permissions
-from agent_server.tools.registry import TOOLS
+from agent_server.tools.registry import TOOLS, get_tool, tool_schemas
 
 BASE_DIR = Path(__file__).resolve().parent.parent
 TEMPLATE_DIR = BASE_DIR / "web_ui" / "templates"
@@ -63,7 +62,7 @@ async def _warm_vision():
         ready, note = await vision.ensure_rig()
         if ready and note:
             print(f"[vision] {note}")
-    except Exception:  # noqa: BLE001
+    except Exception:
         pass
 
 
@@ -71,14 +70,20 @@ async def _warm_vision():
 async def lifespan(app: FastAPI):
     await init_db()
     await migrate_prompts()
+    from agent_server.providers import load_custom_endpoint_providers
+    from agent_server.tools.custom import load_custom_tools
+    await load_custom_tools()
+    await load_custom_endpoint_providers()
     # Background: startup must not wait on a machine that may be off.
     warm = asyncio.create_task(_warm_vision())
     yield
     warm.cancel()
     from agent_server import vision
+    from agent_server.tools import browser
 
     await vision.unload_model()
     await vision.close_client()
+    await browser.close_browser()
     await close_db()
 
 
@@ -101,7 +106,7 @@ def _parse(value: str) -> datetime | None:
     except ValueError:
         return None
     if dt.tzinfo is None:
-        dt = dt.replace(tzinfo=timezone.utc)
+        dt = dt.replace(tzinfo=UTC)
     return dt.astimezone()
 
 
@@ -110,7 +115,7 @@ def humantime(value: str) -> str:
     dt = _parse(value)
     if dt is None:
         return value
-    delta = datetime.now(timezone.utc) - dt.astimezone(timezone.utc)
+    delta = datetime.now(UTC) - dt.astimezone(UTC)
     secs = delta.total_seconds()
     if secs < 60:
         return "just now"
@@ -204,10 +209,48 @@ templates.env.filters["diffstat"] = diffstat_counts
 templates.env.filters["duration"] = duration_label
 
 
+def _render_bash_rules(raw: str) -> str:
+    """Format bash rules JSON for the human-readable textarea."""
+    try:
+        rules = json.loads(raw or "[]")
+        return "\n".join(f"{r['pattern']} → {r['action']}" for r in rules)
+    except Exception:
+        return raw
+
+
+templates.env.filters["render_bash_rules"] = _render_bash_rules
+
+
 # ── Shared context ──────────────────────────────────────────────────────────
 
 async def _sound_enabled() -> bool:
     return await db.get_setting("sound_enabled", "1") != "0"
+
+
+def _list_uploaded_sounds() -> list[str]:
+    d = _ensure_sound_dir()
+    return sorted(f.name for f in d.iterdir() if f.suffix.lower() in _ALLOWED_SOUND_EXTS)
+
+
+# ── Directory rename watcher ────────────────────────────────────────────────
+
+
+def _start_watching(session_id: str, project_dir: str):
+    from agent_server.dir_watcher import watch
+
+    async def on_rename(sid: str, new_dir: str):
+        await db.set_setting(f"session_dir:{sid}", new_dir)
+        await db._execute(
+            "UPDATE sessions SET project_dir = ? WHERE id = ?",
+            (new_dir, sid),
+        )
+
+    watch(session_id, project_dir, on_rename)
+
+
+def _stop_watching(session_id: str):
+    from agent_server.dir_watcher import unwatch
+    unwatch(session_id)
 
 
 async def _session_context(session: dict) -> dict:
@@ -228,6 +271,7 @@ async def _session_context(session: dict) -> dict:
         "stt_enabled": stt_available(),
         "pending": await _pending_prompt(session, messages),
         "sound_enabled": await _sound_enabled(),
+        "uploaded_sounds": _list_uploaded_sounds(),
         "threshold_steps": THRESHOLD_STEPS,
         "allowed_dirs": await permissions.list_allowed(session["id"]),
     }
@@ -243,6 +287,16 @@ async def _pending_prompt(session: dict, messages: list[dict]) -> dict | None:
     name = tool_call_name(call)
     args = parse_arguments(call)
     shell_auto = bool(session.get("bash_auto_approve")) or agent.runtime_auto_approve(session["id"])
+    tool = get_tool(name)
+    if tool and tool.pause == "permission" and name not in ("bash", "edit", "write"):
+        return {
+            "type": "permission",
+            "tool_call_id": call["id"],
+            "name": name,
+            "args": args,
+            "message": f"Run custom tool '{name}'?",
+            "kind": "custom_tool",
+        }
     prompt = await permissions.check(
         name, args, session["id"], session["project_dir"], shell_auto
     )
@@ -257,18 +311,81 @@ async def _pending_prompt(session: dict, messages: list[dict]) -> dict | None:
     }
 
 
-async def _home_context(error: str = "") -> dict:
+async def _home_context(error: str = "", clone_id: str = "") -> dict:
+    settings = await db.get_all_settings()
+    clone_defaults = {}
+    if clone_id:
+        clone_session = await db.get_session(clone_id)
+        if clone_session:
+            base_name = clone_session["name"]
+            # Find next available "(N)" suffix
+            existing = {s["name"] for s in await db.list_sessions()}
+            n = 1
+            while f"{base_name} ({n})" in existing:
+                n += 1
+            clone_defaults = {
+                "clone_name": f"{base_name} ({n})",
+                "clone_project_dir": clone_session["project_dir"],
+                "clone_model": clone_session.get("model", DEFAULT_MODEL),
+                "clone_provider": clone_session.get("provider", "deepseek"),
+                "clone_profile": clone_session.get("prompt_profile", "default"),
+                "clone_compact": clone_session.get("compact_profile", "default"),
+                "clone_thinking": clone_session.get("thinking_effort", "high"),
+                "clone_bash_auto": clone_session.get("bash_auto_approve", 0),
+            }
+    provider_settings = []
+    for ps in get_provider_settings_fields():
+        f_list = []
+        for f in ps["fields"]:
+            raw = settings.get(f["key"], "")
+            is_pw = f.get("kind") == "password"
+            preview = ""
+            if raw and is_pw:
+                l = len(raw)
+                a = max(0, l // 4)
+                b = max(0, l - l // 4)
+                preview = raw[:a] + "\u2026" + raw[b:]
+            f_list.append(dict(f, value=("\u2022" * 12), has_value=bool(raw) and is_pw, preview=preview))
+        provider_settings.append({"name": ps["name"], "fields": f_list})
+
+    # Filter models: only show models for providers that have a key set
+    has_key = {}
+    for p in get_provider_settings_fields():
+        key_name = p["fields"][0]["key"]
+        db_val = bool(settings.get(key_name))
+        # DeepSeek and OpenRouter check both env var and DB
+        if p["key"] == "deepseek":
+            has_key["deepseek"] = bool(os.getenv("DEEPSEEK_API_KEY", "")) or db_val
+        elif p["key"] == "anthropic":
+            has_key["anthropic"] = bool(os.getenv("ANTHROPIC_API_KEY", "")) or db_val
+        else:
+            has_key[p["key"]] = db_val
+    custom_endpoints = await db.list_custom_endpoints()
+    custom_has_key = any(ep["base_url"] for ep in custom_endpoints)
+    filtered_models = [m for m in MODELS if
+        (m["provider"] == "deepseek" and has_key.get("deepseek")) or
+        (m["provider"] == "openrouter" and has_key.get("openrouter")) or
+        (m["provider"] == "anthropic" and has_key.get("anthropic")) or
+        (m["provider"] == "custom" and custom_has_key) or
+        m["provider"] not in ("deepseek", "openrouter", "anthropic", "custom")
+    ]
+
     return {
         "sessions": await db.list_sessions(),
         "sound_enabled": await _sound_enabled(),
+        "uploaded_sounds": _list_uploaded_sounds(),
         "stt": stt_availability(),
         "tts": tts_service.availability(),
-        "settings": await db.get_all_settings(),
+        "settings": settings,
+        "provider_settings": provider_settings,
+        "custom_endpoints": custom_endpoints,
         "providers": list_providers(),
-        "models": MODELS,
+        "models": filtered_models,
         "profiles": await list_prompt_names(),
         "compact_profiles": await list_prompt_names(COMPACTION),
         "default_model": DEFAULT_MODEL,
+        "clone_defaults": clone_defaults,
+        "default_name": f"temp session {datetime.now().strftime('%-m-%-d-%Y')}",
         "error": error,
     }
 
@@ -276,9 +393,9 @@ async def _home_context(error: str = "") -> dict:
 # ── Pages ───────────────────────────────────────────────────────────────────
 
 @app.get("/")
-async def index(request: Request):
+async def index(request: Request, clone: str = ""):
     return templates.TemplateResponse(
-        request=request, name="index.html", context=await _home_context()
+        request=request, name="index.html", context=await _home_context(clone_id=clone)
     )
 
 
@@ -368,6 +485,7 @@ async def tab_bar(request: Request, current: str = ""):
 
 @app.post("/_tab_close/{session_id}")
 async def tab_close(session_id: str):
+    _stop_watching(session_id)
     tabs = await _open_tabs()
     if session_id in tabs:
         tabs.remove(session_id)
@@ -385,21 +503,185 @@ async def tab_order(payload: dict):
 # ── Settings ────────────────────────────────────────────────────────────────
 
 @app.post("/_settings")
-async def save_settings(request: Request, deepseek_api_key: str = Form("")):
-    key = deepseek_api_key.strip()
-    # The masked placeholder means "unchanged"; don't overwrite the real key.
-    if key and "\u2022" not in key:
-        await db.set_setting("deepseek_api_key", key)
-        invalidate_key_cache()
+async def save_settings(request: Request):
+    form = await request.form()
+    for ps in get_provider_settings_fields():
+        changed = False
+        for f in ps["fields"]:
+            value = str(form.get(f["key"], "")).strip()
+            if not value:
+                continue
+            if f.get("kind") == "password" and "\u2022" in value:
+                continue
+            await db.set_setting(f["key"], value)
+            changed = True
+        if changed:
+            p = get_provider(ps["key"])
+            p.invalidate_key_cache()
     return templates.TemplateResponse(
         request=request, name="index_content.html", context=await _home_context()
     )
 
 
-@app.post("/_settings/sound")
-async def save_sound_setting(enabled: str = Form("1")):
-    await db.set_setting("sound_enabled", "1" if enabled in ("1", "true", "on") else "0")
+@app.post("/_settings/bash_rules")
+async def save_bash_rules(request: Request):
+    data = await request.json()
+    await db.set_setting("bash_rules", json.dumps(data))
     return {"ok": True}
+
+
+@app.post("/_settings/sound")
+async def save_sound_setting(request: Request):
+    form = await request.form()
+    if form.get("enabled") is not None:
+        enabled = str(form.get("enabled", "1"))
+        await db.set_setting("sound_enabled", "1" if enabled in ("1", "true", "on") else "0")
+    if "sound" in form:
+        await db.set_setting("sound_choice", str(form.get("sound", "click")))
+    if "volume" in form:
+        await db.set_setting("sound_volume", str(form.get("volume", "0.5")))
+    return {"ok": True}
+
+
+_SOUND_DIR = Path.home() / ".config" / "codeagent" / "sounds"
+_ALLOWED_SOUND_EXTS = {".mp3", ".wav", ".ogg", ".m4a"}
+
+
+def _ensure_sound_dir() -> Path:
+    _SOUND_DIR.mkdir(parents=True, exist_ok=True)
+    return _SOUND_DIR
+
+
+@app.get("/_settings/sounds")
+async def list_uploaded_sounds():
+    d = _ensure_sound_dir()
+    files = sorted(
+        [f.name for f in d.iterdir() if f.suffix.lower() in _ALLOWED_SOUND_EXTS]
+    )
+    return {"sounds": files}
+
+
+@app.post("/_settings/sounds/upload")
+async def upload_sound(request: Request):
+    form = await request.form()
+    file = form.get("file")
+    if not file or not hasattr(file, "filename"):
+        return {"ok": False, "error": "No file provided"}
+    name = Path(file.filename).name
+    ext = Path(name).suffix.lower()
+    if ext not in _ALLOWED_SOUND_EXTS:
+        return {"ok": False, "error": f"Unsupported format: {ext}. Use .mp3, .wav, .ogg, or .m4a."}
+    safe = re.sub(r"[^\w.-]", "_", name)
+    d = _ensure_sound_dir()
+    dest = d / safe
+    data = await file.read()
+    if len(data) > 5 * 1024 * 1024:
+        return {"ok": False, "error": "File too large (max 5 MB)"}
+    dest.write_bytes(data)
+    return {"ok": True, "name": safe}
+
+
+@app.delete("/_settings/sounds/{name}")
+async def delete_sound(name: str):
+    d = _ensure_sound_dir()
+    path = d / re.sub(r"[^\w.-]", "_", name)
+    if path.is_file():
+        path.unlink()
+        return {"ok": True}
+    return {"ok": False, "error": "Not found"}
+
+
+@app.get("/_settings/sounds/{name}/play")
+async def serve_sound(name: str):
+    d = _ensure_sound_dir()
+    path = d / re.sub(r"[^\w.-]", "_", name)
+    if not path.is_file():
+        return PlainTextResponse("Not found", status_code=404)
+    return FileResponse(path)
+
+
+@app.post("/_init")
+async def init_project(request: Request):
+    """Auto-detect project structure and write a rules file."""
+    form = await request.form()
+    project_dir = str(form.get("dir", "")).strip()
+    if not project_dir:
+        return {"ok": False, "error": "No directory provided"}
+    p = Path(project_dir).expanduser().resolve()
+    if not p.is_dir():
+        return {"ok": False, "error": f"Not a directory: {p}"}
+
+    rules_path = p / "AGENTS.md"
+    content = _generate_rules(p)
+    rules_path.write_text(content)
+
+    return {"ok": True, "path": str(rules_path), "preview": content[:500]}
+
+
+def _generate_rules(p: Path) -> str:
+    """Scan a directory and produce a concise AGENTS.md."""
+    try:
+        entries = list(p.iterdir())
+    except (OSError, PermissionError):
+        return f"# Project rules\n\nCould not scan {p}: permission denied or unreadable.\n"
+    files = {f.name for f in entries if f.is_file()}
+    lines = ["# Project rules (auto-generated)", ""]
+    lines.append(f"Generated from {p.name} at {datetime.now().strftime('%Y-%m-%d')}.")
+    lines.append("")
+
+    has_pkg = False
+    if "package.json" in files:
+        has_pkg = True
+        try:
+            import json as _json
+            pkg = _json.loads((p / "package.json").read_text())
+            name = pkg.get("name", p.name)
+            lines.append(f"- **Project**: {name}")
+            if pkg.get("scripts"):
+                lines.append("- **Scripts**: " + ", ".join(f"`{k}`" for k in list(pkg["scripts"].keys())[:8]))
+        except Exception:
+            lines.append("- **Project**: Node.js (package.json)")
+    if "tsconfig.json" in files:
+        lines.append("- **Language**: TypeScript")
+    if "requirements.txt" in files or "pyproject.toml" in files or "setup.py" in files:
+        lines.append("- **Language**: Python")
+    if "Cargo.toml" in files:
+        lines.append("- **Language**: Rust")
+    if "go.mod" in files:
+        lines.append("- **Language**: Go")
+    if "Makefile" in files:
+        lines.append("- **Build**: Make")
+    if "Dockerfile" in files:
+        lines.append("- **Deploy**: Docker")
+
+    # Test framework detection
+    if any(f.startswith(".eslint") for f in files):
+        lines.append("- **Lint**: ESLint")
+    if "pyproject.toml" in files and has_pkg:
+        lines.append("- **Lint/Format**: Check pyproject.toml for ruff/black config")
+    if ".pylintrc" in files:
+        lines.append("- **Lint**: Pylint")
+    if "jest.config" in str(files) or "vitest.config" in str(files) or ".jest." in str(files):
+        lines.append("- **Test**: Jest/Vitest")
+    if "pytest" in str(files) or (p / "tests").is_dir() or (p / "test").is_dir():
+        lines.append("- **Test**: Pytest")
+    if "cargo" in str(files) and (p / "tests").is_dir():
+        lines.append("- **Test**: Cargo test")
+
+    # Git
+    if (p / ".git").is_dir():
+        lines.append("- **VCS**: Git — commit small, atomic changes with descriptive messages")
+
+    lines.append("")
+    lines.append("## Conventions")
+    lines.append("")
+    lines.append("- Read existing code before writing new code. Match the existing style.")
+    lines.append("- Prefer the project's existing patterns over what you remember from elsewhere.")
+    lines.append("- Run the project's tests after changes. If no tests exist, verify manually.")
+    lines.append("- Delete unused code. Don't leave commented-out blocks or dead paths.")
+    lines.append("")
+
+    return "\n".join(lines)
 
 
 @app.post("/_settings/tts")
@@ -435,6 +717,7 @@ async def create_session_form(
     prompt_profile: str = Form("default"),
     compact_profile: str = Form("default"),
     thinking_effort: str = Form(""),
+    custom_model: str = Form(""),
 ):
     directory = Path(project_dir).expanduser()
     if not directory.is_dir():
@@ -442,14 +725,16 @@ async def create_session_form(
             request=request, name="index_content.html",
             context=await _home_context(f"Not a directory: {project_dir}"),
         )
+    effective_model = custom_model.strip() if model == "custom" and custom_model.strip() else model
     session = await db.create_session(
         name=name.strip() or directory.name,
         project_dir=str(directory.resolve()),
-        model=model,
+        model=effective_model,
         prompt_profile=prompt_profile,
         compact_profile=compact_profile,
         thinking_effort=thinking_effort or None,
     )
+    _start_watching(session["id"], str(directory.resolve()))
     return RedirectResponse(f"/sessions/{session['id']}", status_code=303)
 
 
@@ -470,7 +755,10 @@ async def quick_chat(request: Request):
         label = f"{stamp} ({n})"
         scratch = root / f"{stamp}-{n}"
         n += 1
-    scratch.mkdir(parents=True)
+    try:
+        scratch.mkdir(parents=True)
+    except OSError:
+        scratch = root
 
     session = await db.create_session(
         name=f"temp session {label}",
@@ -499,9 +787,7 @@ async def save_prompts(request: Request):
 
     moved = 0
     if name and body and kind in (SYSTEM, COMPACTION):
-        await db.save_prompt(name, body, kind)
-        # A summarising prompt is only read at compaction time, so an edit is
-        # live for every session using it -- nothing to queue.
+        await db.save_prompt(name, body, kind, "")
         if kind == SYSTEM:
             moved = await _propagate(name)
 
@@ -519,12 +805,23 @@ async def new_prompt(request: Request):
     name = _slug(str(form.get("new_name", "")))
     if not name or kind not in (SYSTEM, COMPACTION):
         return RedirectResponse("/prompts", status_code=303)
-    if not await db.get_prompt(name, kind):
-        # Start from the default rather than an empty box: a blank prompt is a
-        # worse starting point than one you can edit down.
-        row = await db.get_prompt(PROTECTED_PROMPT, kind)
-        await db.save_prompt(name, row["body"] if row else "", kind)
+    await db.save_prompt(name, "", kind)
     return RedirectResponse(f"/prompts?selected={kind}:{name}", status_code=303)
+
+
+@app.post("/_save_subagent")
+async def save_subagent(request: Request):
+    form = await request.form()
+    use_system = str(form.get("use_system_prompt", "")) == "1"
+    prompt = str(form.get("prompt", "")).strip() if not use_system else ""
+    model = str(form.get("model", "")).strip()
+
+    await db.set_setting("subagent_prompt", prompt)
+    await db.set_setting("subagent_model", model)
+
+    return templates.TemplateResponse(
+        request=request, name="prompts.html", context=await _prompts_context(saved=True),
+    )
 
 
 @app.post("/_delete_prompt")
@@ -545,6 +842,329 @@ async def delete_prompt(request: Request):
 
 def _slug(raw: str) -> str:
     return re.sub(r"[^a-z0-9-]+", "-", raw.strip().lower()).strip("-")[:40]
+
+
+# ── Custom tools editor ─────────────────────────────────────────────────────
+
+
+@app.get("/tools")
+async def tools_page(request: Request, saved: bool = False):
+    edit_tool = request.query_params.get("edit", "")
+    schemas = tool_schemas()
+    tools_list = await db.list_custom_tools()
+    edit_tool_data = next((t for t in tools_list if t["name"] == edit_tool), None)
+    return templates.TemplateResponse(
+        request=request, name="custom_tools.html",
+        context={
+            "tools": tools_list,
+            "saved": saved,
+            "edit_tool": edit_tool,
+            "secrets": await db.list_secrets(),
+            "tool_schemas_json": json.dumps(schemas, indent=2),
+            "tool_schemas_count": sum(1 for _ in schemas),
+            "tool_warnings": _tool_param_warnings(edit_tool_data) if edit_tool_data else [],
+            "default_test_args": _default_test_args(edit_tool_data),
+        },
+    )
+
+
+@app.post("/_save_custom_tool")
+async def save_custom_tool(request: Request):
+    from agent_server.tools.custom import reload_custom_tools
+
+    form = await request.form()
+    name = _slug(str(form.get("name", "")))
+    description = str(form.get("description", "")).strip()
+    parameters = str(form.get("parameters", "")).strip()
+    script = str(form.get("script", ""))
+    enabled = str(form.get("enabled", "")).lower() in ("1", "true", "on")
+    ask_permission = str(form.get("ask_permission", "")).lower() in ("1", "true", "on")
+
+    if not name:
+        return templates.TemplateResponse(
+            request=request, name="custom_tools.html",
+            context={"tools": await db.list_custom_tools(), "saved": False, "error": "Name is required"},
+        )
+    if name in {"read", "edit", "write", "bash", "grep", "glob", "webfetch", "websearch", "task", "explore", "skill", "vision", "screenshot", "browser-goto", "browser-click", "browser-fill", "browser-screenshot", "browser-steps"}:
+        return templates.TemplateResponse(
+            request=request, name="custom_tools.html",
+            context={"tools": await db.list_custom_tools(), "saved": False, "error": f"'{name}' is a built-in tool name"},
+        )
+    if len(description) > 1000:
+        return templates.TemplateResponse(
+            request=request, name="custom_tools.html",
+            context={"tools": await db.list_custom_tools(), "saved": False, "error": "Description too long (max 1000 chars)"},
+        )
+    if len(parameters) > 8000:
+        return templates.TemplateResponse(
+            request=request, name="custom_tools.html",
+            context={"tools": await db.list_custom_tools(), "saved": False, "error": "Parameters too long (max 8000 chars)"},
+        )
+    if len(script) > 32000:
+        return templates.TemplateResponse(
+            request=request, name="custom_tools.html",
+            context={"tools": await db.list_custom_tools(), "saved": False, "error": "Script too long (max 32000 chars)"},
+        )
+
+    if parameters:
+        try:
+            params_json = json.loads(parameters)
+            if not isinstance(params_json, dict):
+                raise ValueError("parameters must be a JSON object")
+        except (json.JSONDecodeError, ValueError) as e:
+            return templates.TemplateResponse(
+                request=request, name="custom_tools.html",
+                context={"tools": await db.list_custom_tools(), "saved": False, "error": f"Invalid JSON in parameters: {e}"},
+            )
+
+    await db.save_custom_tool(name, description, parameters, script, enabled, ask_permission)
+    await reload_custom_tools()
+
+    return RedirectResponse(f"/tools?edit={name}&saved=true", status_code=303)
+
+
+def _tool_param_warnings(tool: dict) -> list[str]:
+    """Warn about parameter/script mismatches."""
+    import re
+
+    warnings: list[str] = []
+    try:
+        params = json.loads(tool.get("parameters") or "{}")
+    except Exception:
+        return warnings
+    props = params.get("properties") or {}
+    script = tool.get("script") or ""
+    for name in props:
+        ref = f"$TOOL_ARG_{name.upper()}"
+        if ref not in script and "$@" not in script and "$*" not in script:
+            warnings.append(f"Parameter '{name}' defined but not referenced in script (add {ref})")
+    used = set(re.findall(r'\$TOOL_ARG_(\w+)', script))
+    for var in used - {k.upper() for k in props}:
+        warnings.append(f"Script uses $TOOL_ARG_{var} but no parameter '{var.lower()}' defined")
+    return warnings
+
+
+def _default_test_args(tool: dict | None) -> str:
+    """Build sample JSON from schema defaults for the test textarea."""
+    if not tool:
+        return "{}"
+    try:
+        params = json.loads(tool.get("parameters") or "{}")
+    except Exception:
+        return "{}"
+    props = params.get("properties", {})
+    if not props:
+        return "{}"
+    sample = {}
+    for name, schema in props.items():
+        if "default" in schema:
+            sample[name] = schema["default"]
+        elif schema.get("type") == "string":
+            sample[name] = ""
+        elif schema.get("type") == "integer" or schema.get("type") == "number":
+            sample[name] = 0
+        elif schema.get("type") == "boolean":
+            sample[name] = False
+        else:
+            sample[name] = None
+    return json.dumps(sample, indent=2)
+
+
+@app.post("/_delete_custom_tool")
+async def delete_custom_tool(request: Request):
+    from agent_server.tools.custom import reload_custom_tools
+
+    form = await request.form()
+    name = str(form.get("name", "")).strip()
+    if name:
+        await db.delete_custom_tool(name)
+        await reload_custom_tools()
+    return RedirectResponse("/tools", status_code=303)
+
+
+@app.post("/_new_custom_tool")
+async def new_custom_tool(request: Request):
+    form = await request.form()
+    name = _slug(str(form.get("new_name", "")))
+    if not name:
+        return RedirectResponse("/tools", status_code=303)
+    await db.save_custom_tool(name, "", "{}", "", True, True)
+    await reload_custom_tools()
+    return RedirectResponse(f"/tools?edit={name}", status_code=303)
+
+
+@app.post("/_save_secret")
+async def save_secret(request: Request):
+    form = await request.form()
+    name = str(form.get("name", "")).strip()
+    value = str(form.get("value", "")).strip()
+    if not name:
+        return RedirectResponse("/tools", status_code=303)
+    if value and "\u2022" in value:
+        return RedirectResponse("/tools", status_code=303)
+    if value:
+        await db.save_secret(name, value)
+    return RedirectResponse("/tools", status_code=303)
+
+
+@app.post("/_delete_secret")
+async def delete_secret(request: Request):
+    form = await request.form()
+    name = str(form.get("name", "")).strip()
+    if name:
+        await db.delete_secret(name)
+    return RedirectResponse("/tools", status_code=303)
+
+
+@app.post("/_new_secret")
+async def new_secret(request: Request):
+    form = await request.form()
+    name = str(form.get("name", "")).strip()
+    if name:
+        await db.save_secret(name, "")
+    return RedirectResponse("/tools", status_code=303)
+
+
+@app.post("/_test_custom_tool")
+async def test_custom_tool(request: Request):
+    form = await request.form()
+    name = str(form.get("name", ""))
+    script = str(form.get("script", ""))
+    test_args = str(form.get("test_args", "{}"))
+
+    try:
+        script_params = json.loads(str(form.get("parameters", "{}")))
+    except json.JSONDecodeError:
+        script_params = {}
+
+    try:
+        params = script_params
+        args = json.loads(test_args) if test_args else {}
+    except json.JSONDecodeError:
+        return HTMLResponse("<div class='notice-error'>Invalid JSON in test arguments</div>")
+
+    # Build default args from schema properties
+    if not args and params.get("properties"):
+        for key, prop in params["properties"].items():
+            ptype = prop.get("type", "string")
+            if ptype == "string":
+                args[key] = prop.get("default", "")
+            elif ptype == "number" or ptype == "integer":
+                args[key] = prop.get("default", 0)
+            elif ptype == "array":
+                args[key] = prop.get("default", [])
+            elif ptype == "object":
+                args[key] = prop.get("default", {})
+            elif ptype == "boolean":
+                args[key] = prop.get("default", False)
+
+    if not name or not script:
+        return HTMLResponse("<div class='notice-error'>Missing name or script</div>")
+
+    env_vars = {f"TOOL_ARG_{k.upper()}": json.dumps(v) for k, v in args.items()}
+    secrets = await db.load_secrets_dict()
+    env_vars.update(secrets)
+
+    import asyncio as _asyncio
+    import os as _os
+    try:
+        proc = await _asyncio.create_subprocess_shell(
+            script,
+            stdout=_asyncio.subprocess.PIPE,
+            stderr=_asyncio.subprocess.PIPE,
+            env={**_os.environ, "TERM": "dumb", "NO_COLOR": "1", **env_vars},
+        )
+        stdout, stderr = await _asyncio.wait_for(proc.communicate(), timeout=30)
+        out = stdout.decode("utf-8", errors="replace")[:5000]
+        err = stderr.decode("utf-8", errors="replace")[:2000]
+        if proc.returncode != 0:
+            return HTMLResponse(f"<div class='notice-error'><strong>Exit code {proc.returncode}</strong><pre>{err or out}</pre></div>")
+        return HTMLResponse(f"<pre class='test-output'>{out or '(no output)'}</pre>")
+    except TimeoutError:
+        try:
+            proc.kill()
+            await proc.wait()
+        except Exception:
+            pass
+        return HTMLResponse("<div class='notice-error'>Timed out after 30s</div>")
+    except Exception as e:
+        return HTMLResponse(f"<div class='notice-error'>{type(e).__name__}: {e}</div>")
+
+
+# ── Custom endpoints ────────────────────────────────────────────────────────
+
+
+@app.post("/_save_custom_endpoint")
+async def save_custom_endpoint(request: Request):
+    form = await request.form()
+    name = _slug(str(form.get("name", "")))
+    base_url = str(form.get("base_url", "")).strip()
+    api_key = str(form.get("api_key", "")).strip()
+    if not name or not base_url:
+        return templates.TemplateResponse(
+            request=request, name="index_content.html",
+            context=await _home_context(error="Name and base URL are required"),
+        )
+    # Skip masked passwords (unchanged)
+    if api_key and "\u2022" in api_key:
+        existing = await db.get_custom_endpoint(name)
+        api_key = existing["api_key"] if existing else ""
+    await db.save_custom_endpoint(name, base_url, api_key)
+    _reload_custom_endpoint_providers()
+    return templates.TemplateResponse(
+        request=request, name="index_content.html", context=await _home_context(),
+    )
+
+
+@app.post("/_delete_custom_endpoint")
+async def delete_custom_endpoint(request: Request):
+    form = await request.form()
+    name = str(form.get("name", "")).strip()
+    if name:
+        await db.delete_custom_endpoint(name)
+        _reload_custom_endpoint_providers()
+    return templates.TemplateResponse(
+        request=request, name="index_content.html", context=await _home_context(),
+    )
+
+
+@app.post("/_new_custom_endpoint")
+async def new_custom_endpoint(request: Request):
+    form = await request.form()
+    name = _slug(str(form.get("name", "")))
+    if not name:
+        return RedirectResponse("/", status_code=303)
+    if not await db.get_custom_endpoint(name):
+        await db.save_custom_endpoint(name, "", "")
+    _reload_custom_endpoint_providers()
+    return RedirectResponse("/", status_code=303)
+
+
+def _reload_custom_endpoint_providers():
+    """Add/remove custom endpoint providers without a server restart."""
+    import asyncio
+
+    from agent_server.providers import _providers
+    from agent_server.providers.custom_openai import CustomOpenAIProvider
+
+    # Remove old custom endpoint providers
+    for key in list(_providers):
+        if key.startswith("custom:"):
+            del _providers[key]
+
+    # Load from DB
+    async def _load():
+        for row in await db.list_custom_endpoints():
+            if row["base_url"]:
+                p = CustomOpenAIProvider(row["name"], row["base_url"])
+                _providers[f"custom:{row['name']}"] = p
+
+    try:
+        loop = asyncio.get_running_loop()
+    except RuntimeError:
+        asyncio.run(_load())
+    else:
+        loop.create_task(_load())
 
 
 async def _propagate(name: str) -> int:
@@ -587,13 +1207,16 @@ async def _prompts_context(
     }
     if selected not in bodies:
         selected = f"{SYSTEM}:{PROTECTED_PROMPT}"
-    schemas = [t.schema() for t in TOOLS.values()]
+
     return {
         "groups": groups,
         "bodies": bodies,
         "selected": selected,
         "body": bodies.get(selected, ""),
         "protected": PROTECTED_PROMPT,
+        # Subagent defaults
+        "sa_prompt": await db.get_setting("subagent_prompt", ""),
+        "sa_model": await db.get_setting("subagent_model", ""),
         "tools": [
             {
                 "name": t.name,
@@ -603,10 +1226,10 @@ async def _prompts_context(
             }
             for t in TOOLS.values()
         ],
-        "tools_tokens": len(json.dumps(schemas)) // 4,
         "saved": saved,
         "moved": moved,
         "sound_enabled": await _sound_enabled(),
+        "uploaded_sounds": _list_uploaded_sounds(),
     }
 
 

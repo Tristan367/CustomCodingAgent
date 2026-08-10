@@ -7,15 +7,18 @@
     <link rel="stylesheet" href="/static/css/style.css">
     {# A drawn triangle rather than the U+25B6 glyph. The glyph carried its own
        side bearing, which the tab strip rendered as a gap before the title. #}
-    <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'><polygon points='1,0 16,8 1,16' fill='%238ea24f'/></svg>">
+    <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'><polygon points='3,2 14,8 3,14' fill='%238ea24f'/></svg>">
     <script src="/static/js/htmx.min.js"></script>
     <script src="/static/js/markdown.js"></script>
 </head>
-<body data-sound="{{ 'off' if sound_enabled is defined and not sound_enabled else 'on' }}">
+<body data-sound="{{ 'off' if sound_enabled is defined and not sound_enabled else 'on' }}"
+      data-sound-volume="{{ settings.get('sound_volume', '0.5') if settings is defined else '0.5' }}"
+      data-sound-kind="{{ settings.get('sound_choice', 'click') if settings is defined else 'click' }}">
     <header id="top-bar">
         <a href="/" class="logo" title="Home">CodeAgent</a>
         <nav id="tab-bar"><div class="tab-scroll" id="tab-scroll"></div></nav>
-        <a href="/prompts" class="topbar-link" title="Prompts &amp; tools">Prompts</a>
+        <a href="/prompts" class="topbar-link" title="Prompts">Prompts</a>
+        <a href="/tools" class="topbar-link" title="Custom tools">Tools</a>
     </header>
     {# Shown when the status poll cannot reach the server, so a stopped backend
        is obvious rather than looking like a frozen page. #}

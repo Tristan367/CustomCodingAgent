@@ -1,20 +1,19 @@
 """Chat, tool resolution, compaction, transcription, and image endpoints."""
 
 import uuid
+from collections.abc import AsyncIterator
 from pathlib import Path
-from typing import AsyncIterator
 
 from fastapi import APIRouter, Body, File, Form, HTTPException, Request, UploadFile
 from fastapi.responses import FileResponse, JSONResponse, StreamingResponse
 
-from agent_server import agent
+from agent_server import agent, permissions
 from agent_server import database as db
-from agent_server import permissions
 from agent_server import stt as stt_service
+from agent_server import vision as vision_engine
 from agent_server.compaction import compact_session_events, should_offer_compaction
 from agent_server.config import MIN_COMPACT_THRESHOLD, MODELS_BY_ID, UPLOAD_DIR
 from agent_server.models import ChatRequest, CompactProfileRequest, ResolveRequest
-from agent_server import vision as vision_engine
 from agent_server.system_prompt import (
     COMPACTION,
     PROTECTED_PROMPT,
@@ -114,7 +113,7 @@ async def chat_with_image(
             saved.append(await _save_image(session_id, upload))
         except HTTPException:
             raise
-        except Exception as e:  # noqa: BLE001
+        except Exception as e:
             raise HTTPException(400, f"Could not read {upload.filename}: {e}") from e
 
     lines = [

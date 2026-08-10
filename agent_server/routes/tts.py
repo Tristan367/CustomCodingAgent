@@ -24,9 +24,9 @@ class SpeakBody(BaseModel):
 async def tts_status():
     status = tts_service.availability()
     status["voice"] = await db.get_setting("tts_voice", status["default_voice"])
-    status["speed"] = float(await db.get_setting("tts_speed", "1.0"))
+    status["speed"] = float(await db.get_setting("tts_speed", "1.25"))
     status["volume"] = float(await db.get_setting("tts_volume", "0.66"))
-    status["tone"] = float(await db.get_setting("tts_tone", "20000"))
+    status["tone"] = float(await db.get_setting("tts_tone", "13000"))
     return status
 
 

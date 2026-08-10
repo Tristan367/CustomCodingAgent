@@ -8,8 +8,8 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from agent_server.compaction import group_messages, split_for_compaction  # noqa: E402
-from agent_server.conversation import (  # noqa: E402
+from agent_server.compaction import group_messages, split_for_compaction
+from agent_server.conversation import (
     build_messages,
     normalize_tool_calls,
     parse_arguments,

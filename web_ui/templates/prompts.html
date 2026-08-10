@@ -22,7 +22,8 @@
 
     <form method="POST" action="/_save_prompts" class="stack" id="prompt-form">
         <div class="prompt-bar">
-            <select id="prompt-picker" name="name" aria-label="Prompt">
+            <select id="prompt-picker" name="name" aria-label="Prompt"
+                    onchange="window.location='/prompts?selected=' + encodeURIComponent(this.value)">
                 {% for label, keys in groups.items() %}
                 {% if keys %}
                 <optgroup label="{{ label }}">
@@ -40,9 +41,33 @@
             <button type="button" class="btn-danger" onclick="deletePrompt()"
                     id="delete-prompt">Delete</button>
         </div>
-        <textarea name="body" id="prompt-body" rows="26" class="prompt-textarea"
+        <textarea name="body" id="prompt-body" rows="20" class="prompt-textarea"
                   spellcheck="false">{{ body }}</textarea>
     </form>
+
+    <section class="panel" style="margin-top:16px">
+        <h2>Subagent defaults <span class="hint" style="font-weight:400">(applies to all sessions)</span></h2>
+        <form hx-post="/_save_subagent" hx-target="#prompts-page" hx-swap="outerHTML" class="stack">
+            <label class="checkbox-label">
+                <input type="checkbox" name="use_system_prompt" value="1"
+                       {% if not sa_prompt %}checked{% endif %}
+                       onchange="document.getElementById('sa-prompt-area').hidden=this.checked">
+                Same as system prompt
+            </label>
+            <textarea name="prompt" id="sa-prompt-area" rows="6" class="prompt-textarea"
+                      spellcheck="false" {% if not sa_prompt %}hidden{% endif %}
+                      placeholder="Custom subagent prompt...">{{ sa_prompt }}</textarea>
+            <label class="field-label">Model
+                <select name="model">
+                    <option value="">Same as parent</option>
+                    {% for m in models %}
+                    <option value="{{ m.id }}" {% if m.id == sa_model %}selected{% endif %}>{{ m.name }}</option>
+                    {% endfor %}
+                </select>
+            </label>
+            <button type="submit" class="btn-primary" style="align-self:flex-start">Save</button>
+        </form>
+    </section>
 
     <form method="POST" action="/_new_prompt" id="new-prompt-form" hidden>
         <input name="new_name" id="new-prompt-name">
@@ -105,26 +130,5 @@
         document.getElementById('prompt-form').addEventListener('submit', () => { lastSaved = bodyBox.value; });
         syncDelete();
     </script>
-
-<h2>Tools</h2>
-    <p class="hint">
-        Every tool schema is sent with each request, costing roughly
-        <strong>{{ '{:,}'.format(tools_tokens) }} tokens</strong> per call before your
-        conversation is counted.
-    </p>
-    <table class="tools-table">
-        <thead><tr><th>Tool</th><th>Behaviour</th><th>~tokens</th><th>Description</th></tr></thead>
-        <tbody>
-            {% for t in tools %}
-            <tr>
-                <td><code>{{ t.name }}</code></td>
-                <td>{% if t.pause == 'permission' %}<span class="chip chip-warn">asks first</span>
-                    {%- else %}<span class="chip">automatic</span>{% endif %}</td>
-                <td class="num">{{ t.tokens }}</td>
-                <td>{{ t.description }}</td>
-            </tr>
-            {% endfor %}
-        </tbody>
-    </table>
 </div>
 {% endblock %}

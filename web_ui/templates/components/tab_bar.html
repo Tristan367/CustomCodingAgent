@@ -15,5 +15,5 @@
         </span>
         {% endfor %}
     </div>
-    <a href="/" class="tab-new" title="New session">+</a>
+    <a href="/{% if current_session_id %}?clone={{ current_session_id }}{% endif %}" class="tab-new" title="New session">+</a>
 </nav>

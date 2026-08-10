@@ -80,7 +80,7 @@ async def _run(cmd: list[str], timeout: int, label: str) -> str:
             stdin=asyncio.subprocess.DEVNULL,
         )
         stdout, stderr = await asyncio.wait_for(proc.communicate(), timeout=timeout)
-    except asyncio.TimeoutError:
+    except TimeoutError:
         raise STTError(f"{label} timed out after {timeout}s") from None
     except FileNotFoundError:
         raise STTError(f"{label} not found: {cmd[0]}") from None

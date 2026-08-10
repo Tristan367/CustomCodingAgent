@@ -3,7 +3,7 @@
 set -euo pipefail
 cd "$(dirname "$0")"
 
-PORT="${PORT:-8080}"
+PORT="${PORT:-8219}"
 [ -d .venv ] || { echo "No .venv found. Run: uv venv && uv pip install -r requirements.txt"; exit 1; }
 
 # Free the port if a previous run is still holding it. -sTCP:LISTEN matters:

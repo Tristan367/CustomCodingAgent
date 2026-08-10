@@ -1,5 +1,6 @@
 """File reading and editing tools."""
 
+import hashlib
 from pathlib import Path
 
 from agent_server.tools.base import ToolContext, ToolResult, diff_stats, truncate, unified_diff
@@ -18,6 +19,11 @@ BINARY_SUFFIXES = {
 # Files the model has read this session; `edit`/`write` require a prior read so
 # the model cannot blindly clobber a file it has never seen.
 _read_files: dict[str, set[str]] = {}
+
+
+def _hash_line(line: str) -> str:
+    """4-char content hash so edits can anchor on a line without retyping it."""
+    return hashlib.md5(line[:128].encode()).hexdigest()[:4]
 
 
 def clear_read_cache(session_id: str = ""):
@@ -68,7 +74,7 @@ async def read_file(
 
     try:
         content = path.read_text(encoding="utf-8", errors="replace")
-    except Exception as e:  # noqa: BLE001
+    except Exception as e:
         return ToolResult.error(f"reading file: {e}", title)
 
     if "\x00" in content[:8192]:
@@ -90,7 +96,7 @@ async def read_file(
         line = lines[idx]
         if len(line) > MAX_LINE_CHARS:
             line = line[:MAX_LINE_CHARS] + "... [line truncated]"
-        numbered.append(f"{idx + 1}: {line}")
+        numbered.append(f"{idx + 1}|{_hash_line(line)}| {line}")
 
     output = "\n".join(numbered)
     if end < total:
@@ -104,9 +110,12 @@ async def edit_file(
     ctx: ToolContext,
     *,
     filePath: str,
-    oldString: str,
-    newString: str,
+    oldString: str = "",
+    newString: str = "",
     replaceAll: bool = False,
+    hashStart: str = "",
+    hashEnd: str = "",
+    newText: str = "",
     **_,
 ) -> ToolResult:
     path = ctx.resolve(filePath)
@@ -116,8 +125,6 @@ async def edit_file(
         return ToolResult.error(f"file not found: {path}. Use `write` to create it.", title)
     if not path.is_file():
         return ToolResult.error(f"not a file: {path}", title)
-    if oldString == newString:
-        return ToolResult.error("oldString and newString are identical", title)
     if not has_read(ctx.session_id, path):
         return ToolResult.error(
             f"you must read {path} before editing it", title
@@ -125,8 +132,56 @@ async def edit_file(
 
     try:
         content = path.read_text(encoding="utf-8")
-    except Exception as e:  # noqa: BLE001
+    except Exception as e:
         return ToolResult.error(f"reading file: {e}", title)
+
+    # ── hashline mode: anchor edits on 2-char content hashes ──
+    if hashStart:
+        lines = content.splitlines()
+        start_idx = _find_hash(lines, hashStart)
+        if start_idx < 0:
+            return ToolResult.error(
+                f"hash {hashStart} not found in {path}. "
+                "The file changed since you read it — read it again.",
+                title,
+            )
+        end_idx = _find_hash(lines, hashEnd) if hashEnd else start_idx
+        if end_idx < 0:
+            return ToolResult.error(
+                f"hash {hashEnd} not found in {path}. "
+                "The file changed since you read it — read it again.",
+                title,
+            )
+        if end_idx < start_idx:
+            start_idx, end_idx = end_idx, start_idx
+
+        replaced_lines = end_idx - start_idx + 1
+        replacement_lines = newText.count("\n") + 1 if newText else 0
+        new_lines = lines[:start_idx] + (newText.splitlines() if newText else []) + lines[end_idx + 1:]
+        updated = "\n".join(new_lines)
+        if content.endswith("\n"):
+            updated += "\n"
+
+        try:
+            path.write_text(updated, encoding="utf-8")
+        except Exception as e:
+            return ToolResult.error(f"writing file: {e}", title)
+
+        diff = unified_diff(content, updated, _display(path, ctx))
+        added, removed = diff_stats(diff)
+        return ToolResult(
+            output=f"Edited {path} (replaced {replaced_lines} line{'s' if replaced_lines != 1 else ''}"
+                   + (f" with {replacement_lines}" if replacement_lines != replaced_lines else "")
+                   + f" starting at line {start_idx + 1}).",
+            title=f"{title} (+{added}/-{removed})",
+            diff=diff,
+        )
+
+    # ── exact-string mode ──
+    if not oldString:
+        return ToolResult.error("provide oldString or hashStart", title)
+    if oldString == newString:
+        return ToolResult.error("oldString and newString are identical", title)
 
     count = content.count(oldString)
     if count == 0:
@@ -145,7 +200,7 @@ async def edit_file(
     updated = content.replace(oldString, newString) if replaceAll else content.replace(oldString, newString, 1)
     try:
         path.write_text(updated, encoding="utf-8")
-    except Exception as e:  # noqa: BLE001
+    except Exception as e:
         return ToolResult.error(f"writing file: {e}", title)
 
     replaced = count if replaceAll else 1
@@ -177,13 +232,13 @@ async def write_file(ctx: ToolContext, *, filePath: str, content: str, **_) -> T
     if existed:
         try:
             previous = path.read_text(encoding="utf-8")
-        except Exception:  # noqa: BLE001
+        except Exception:
             previous = ""
 
     try:
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text(content, encoding="utf-8")
-    except Exception as e:  # noqa: BLE001
+    except Exception as e:
         return ToolResult.error(f"writing file: {e}", title)
 
     mark_read(ctx.session_id, path)
@@ -197,6 +252,16 @@ async def write_file(ctx: ToolContext, *, filePath: str, content: str, **_) -> T
         title=summary,
         diff=diff,
     )
+
+
+def _find_hash(lines: list[str], target: str) -> int:
+    """Return the index of the line whose 4-char hash matches `target`, or -1."""
+    if not target:
+        return -1
+    for i, line in enumerate(lines):
+        if _hash_line(line) == target:
+            return i
+    return -1
 
 
 def _display(path: Path, ctx: ToolContext) -> str:
@@ -221,4 +286,4 @@ def _suggest(path: Path) -> str:
     return f"\nDid you mean: {', '.join(close)}" if close else ""
 
 
-__all__ = ["read_file", "edit_file", "write_file", "mark_read", "has_read", "truncate"]
+__all__ = ["edit_file", "has_read", "mark_read", "read_file", "truncate", "write_file"]

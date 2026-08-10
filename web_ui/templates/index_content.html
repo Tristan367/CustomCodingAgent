@@ -1,78 +1,120 @@
 <div id="home-page">
     {% if error %}<div class="error-banner">{{ error }}</div>{% endif %}
 
+    <div class="provider-grid">
+    {% for ps in provider_settings %}
     <section class="panel">
-        <h2>API key</h2>
+        <h2>{{ ps.name }} <a href="{% if ps.name == 'DeepSeek' %}https://platform.deepseek.com{% elif ps.name == 'OpenRouter' %}https://openrouter.ai{% elif ps.name == 'Anthropic' %}https://platform.claude.com{% endif %}" target="_blank" class="get-key-link">get a key @ {% if ps.name == 'DeepSeek' %}platform.deepseek.com{% elif ps.name == 'OpenRouter' %}openrouter.ai{% elif ps.name == 'Anthropic' %}platform.claude.com{% endif %}</a></h2>
         <form hx-post="/_settings" hx-target="#home-page" hx-swap="outerHTML" class="inline-form">
-            <input type="password" name="deepseek_api_key" id="api-key-input"
-                   value="{% if settings.get('deepseek_api_key') %}{{ '\u2022' * 12 }}{% endif %}"
-                   placeholder="sk-..." autocomplete="off" spellcheck="false"
-                   onfocus="if(this.value.indexOf('\u2022')>-1)this.value=''">
-            <button type="submit">Save</button>
+            {% set has_key = ps.fields[0].has_value %}
+            {% for f in ps.fields %}
+            {% if f.kind == "password" %}
+            {% if f.has_value %}
+            <span class="key-preview" onclick="this.hidden=true;this.nextElementSibling.hidden=false;this.nextElementSibling.focus()" style="cursor:pointer">{{ f.preview }}</span>
+            <input type="password" name="{{ f.key }}" hidden
+                   placeholder="sk-..." autocomplete="off" spellcheck="false" oninput="this.form.querySelector('button[type=submit]').disabled=false">
+            {% else %}
+            <input type="password" name="{{ f.key }}" id="{{ f.key }}-input"
+                   placeholder="sk-..." autocomplete="off" spellcheck="false">
+            {% endif %}
+            {% else %}
+            <input type="text" name="{{ f.key }}"
+                   value="{{ f.value }}"
+                   placeholder="https://..." autocomplete="off" spellcheck="false">
+            {% endif %}
+            {% endfor %}
+            <button type="submit" {% if has_key %}disabled{% endif %}>Save</button>
         </form>
-        <p class="hint">
-            {% if settings.get('deepseek_api_key') %}A key is saved.{% else %}No key saved yet.{% endif %}
-            The <code>DEEPSEEK_API_KEY</code> environment variable takes precedence if set.
-        </p>
     </section>
+    {% endfor %}
+    </div>
 
-    <section class="panel quick-panel">
-        <div class="quick-row">
-            <div>
-                <h2>Quick chat</h2>
-                <p class="hint">
-                    A throwaway session for a question, with the defaults and a scratch
-                    directory. It is an ordinary session -- it stays in the list, and you
-                    can reopen or rename it like any other.
-                </p>
-            </div>
-            <form method="POST" action="/_quick_chat">
-                <button type="submit" class="btn-primary">Start quick chat</button>
-            </form>
-        </div>
+    <section class="panel">
+        <h2>Custom endpoints</h2>
+        <p class="hint" style="margin-bottom:10px">OpenAI-compatible servers (Unsloth, Ollama, vLLM). Each endpoint gets its own API key and base URL.</p>
+        {% for ep in custom_endpoints %}
+        <form hx-post="/_save_custom_endpoint" hx-target="#home-page" hx-swap="outerHTML" class="inline-form" style="margin-bottom:6px">
+            <input type="hidden" name="name" value="{{ ep.name }}">
+            <span style="color:var(--text-dim);white-space:nowrap;font-size:13px">{{ ep.name }}</span>
+            <input type="text" name="base_url" value="{{ ep.base_url }}"
+                   placeholder="http://localhost:8888/v1" autocomplete="off" spellcheck="false" style="flex:1">
+            {% if ep.api_key %}
+            <span class="key-preview" onclick="this.hidden=true;this.nextElementSibling.hidden=false;this.nextElementSibling.focus()" style="cursor:pointer;flex:1">{{ ep.api_key[:ep.api_key|length//4] if ep.api_key|length > 4 else '••••' }}{% if ep.api_key|length > 4 %}…{{ ep.api_key[-(ep.api_key|length//4):] }}{% endif %}</span>
+            <input type="password" name="api_key" hidden
+                   placeholder="sk-..." autocomplete="off" spellcheck="false" style="flex:1" oninput="this.form.querySelector('button[type=submit]').disabled=false">
+            {% else %}
+            <input type="password" name="api_key"
+                   placeholder="sk-..." autocomplete="off" spellcheck="false" style="flex:1" oninput="this.form.querySelector('button[type=submit]').disabled=false">
+            {% endif %}
+            <button type="submit" class="btn-primary btn-sm" {% if ep.api_key %}disabled{% endif %}>Save</button>
+            <button type="button" class="btn-danger btn-sm"
+                    hx-post="/_delete_custom_endpoint" hx-vals='{"name":"{{ ep.name }}"}'
+                    hx-target="#home-page" hx-swap="outerHTML"
+                    hx-confirm="Delete this endpoint?">×</button>
+        </form>
+        {% endfor %}
+        <button type="button" class="btn-secondary" onclick="newEndpoint()">Add endpoint</button>
+        <script>
+        function newEndpoint() {
+            const name = prompt('Name for the endpoint (e.g. "my-unsloth"):');
+            if (!name) return;
+            const form = document.createElement('form');
+            form.method = 'POST';
+            form.action = '/_new_custom_endpoint';
+            form.innerHTML = '<input name="name" value="' + name.replace(/"/g,'&quot;') + '">';
+            document.body.appendChild(form);
+            form.submit();
+        }
+        </script>
     </section>
 
     <section class="panel">
         <h2>New session</h2>
         <form method="POST" action="/_create_session" class="stack">
             <div class="form-row">
-                <input type="text" name="name" placeholder="Session name" required autocomplete="off">
+                <input type="text" name="name" placeholder="Session name" required autocomplete="off"
+                       value="{{ clone_defaults.get('clone_name', '') or default_name }}">
             </div>
             <div class="form-row">
                 <input type="text" name="project_dir" id="project-dir-input"
-                       placeholder="Project directory" required autocomplete="off" spellcheck="false">
+                       placeholder="Project directory" required autocomplete="off" spellcheck="false"
+                       value="{{ clone_defaults.get('clone_project_dir', '~/') }}">
                 <button type="button" class="btn-secondary" onclick="toggleBrowser()">Browse</button>
             </div>
             <div id="file-browser-container" hidden></div>
             <div class="form-row">
                 <label>Model
-                    <select name="model">
+                    <select name="model" id="model-select" onchange="document.getElementById('custom-model-input').hidden=this.value!=='custom'; if(this.value==='custom')document.getElementById('custom-model-input').focus()">
                         {% for m in models %}
-                        <option value="{{ m.id }}" {% if m.id == default_model %}selected{% endif %}>{{ m.name }}</option>
+                        <option value="{{ m.id }}" {% if m.id == clone_defaults.get('clone_model', default_model) %}selected{% endif %}>{{ m.name }}</option>
                         {% endfor %}
                     </select>
+                    <input type="text" name="custom_model" id="custom-model-input" placeholder="model-id"
+                           hidden autocomplete="off" spellcheck="false"
+                           style="width:160px">
                 </label>
                 <label>Prompt
                     <select name="prompt_profile">
                         {% for p in profiles %}
-                        <option value="{{ p }}" {% if p == 'default' %}selected{% endif %}>{{ p }}</option>
+                        <option value="{{ p }}" {% if p == clone_defaults.get('clone_profile', 'default') %}selected{% endif %}>{{ p }}</option>
                         {% endfor %}
                     </select>
                 </label>
                 <label>Summariser
                     <select name="compact_profile">
                         {% for p in compact_profiles %}
-                        <option value="{{ p }}" {% if p == 'default' %}selected{% endif %}>{{ p }}</option>
+                        <option value="{{ p }}" {% if p == clone_defaults.get('clone_compact', 'default') %}selected{% endif %}>{{ p }}</option>
                         {% endfor %}
                     </select>
                 </label>
                 <label>Thinking
                     <select name="thinking_effort">
-                        <option value="">high (default)</option>
-                        <option value="none">none</option>
-                        <option value="low">low</option>
-                        <option value="medium">medium</option>
-                        <option value="max">max</option>
+                        {% set ce = clone_defaults.get('clone_thinking', 'high') %}
+                        <option value="" {% if ce in (None, 'high') %}selected{% endif %}>high (default)</option>
+                        <option value="none" {% if ce == 'none' %}selected{% endif %}>none</option>
+                        <option value="low" {% if ce == 'low' %}selected{% endif %}>low</option>
+                        <option value="medium" {% if ce == 'medium' %}selected{% endif %}>medium</option>
+                        <option value="max" {% if ce == 'max' %}selected{% endif %}>max</option>
                     </select>
                 </label>
             </div>
@@ -87,7 +129,41 @@
                    onchange="toggleSound(this.checked)">
             Play a sound when an agent finishes or needs permission
         </label>
-        <p class="hint">
+        <div class="form-row" style="margin-top:8px;gap:12px">
+            <label class="field-label">Sound
+                <select id="sound-choice" onchange="saveSoundSetting()">
+                    <option value="click" {% if settings.get('sound_choice', 'click') == 'click' %}selected{% endif %}>Click</option>
+                    <option value="chime" {% if settings.get('sound_choice', 'click') == 'chime' %}selected{% endif %}>Chime</option>
+                    <option value="knock" {% if settings.get('sound_choice', 'click') == 'knock' %}selected{% endif %}>Knock</option>
+                    {% for s in uploaded_sounds %}
+                    <option value="{{ s }}" {% if settings.get('sound_choice', 'click') == s %}selected{% endif %}>{{ s }}</option>
+                    {% endfor %}
+                </select>
+                <button type="button" class="btn-secondary btn-sm" onclick="previewSound()" style="margin-left:4px">Preview</button>
+                <span class="hint" style="margin-left:8px">
+                    <input type="file" accept=".mp3,.wav,.ogg,.m4a" onchange="uploadSound(this)" hidden id="sound-upload">
+                    <button type="button" class="btn-sm" onclick="document.getElementById('sound-upload').click()">Upload</button>
+                </span>
+            </label>
+            <label class="field-label">Volume
+                <input type="range" id="sound-volume" min="0" max="1" step="0.05"
+                       value="{{ settings.get('sound_volume', '0.5') }}"
+                       oninput="this.nextElementSibling.value=Math.round(this.value*100)"
+                       onchange="saveSoundSetting()">
+                <output>{{ (settings.get('sound_volume', '0.5') | float * 100) | round | int }}</output>%
+            </label>
+        </div>
+        <label class="field-label" style="margin-top:12px">Bash rules
+            <span class="hint">One per line: <code>PATTERN &rarr; allow|deny|ask</code></span>
+            <textarea id="bash-rules" rows="4" spellcheck="false"
+                      placeholder="git push* &#8594; ask&#10;npm test* &#8594; allow&#10;rm -rf * &#8594; deny"
+                      onchange="saveBashRules()">{{ settings.get('bash_rules', '[]') | render_bash_rules }}</textarea>
+        </label>
+        <p style="margin-top:12px">
+            <button type="button" class="btn-sm" onclick="initProject()">Generate project rules</button>
+            <span class="hint">Scans a directory and writes AGENTS.md</span>
+        </p>
+        <p class="hint" style="margin-top:6px">
             Dictation:
             {% if stt.available %}
             ready &mdash; <code>{{ stt.model }}</code> via whisper.cpp
@@ -115,9 +191,9 @@
                 </select>
             </label>
             <label>
-                <span>Speed <output id="tts-speed-out">{{ settings.get('tts_speed', '1.0') }}</output>&times;</span>
+                <span>Speed <output id="tts-speed-out">{{ settings.get('tts_speed', '1.25') }}</output>&times;</span>
                 <input type="range" id="tts-speed" min="0.5" max="2" step="0.05"
-                       value="{{ settings.get('tts_speed', '1.0') }}"
+                       value="{{ settings.get('tts_speed', '1.25') }}"
                        oninput="document.getElementById('tts-speed-out').value = this.value"
                        onchange="saveTts()">
             </label>
@@ -129,9 +205,9 @@
                        onchange="saveTts()">
             </label>
             <label>
-                <span>Tone <output id="tts-tone-out">{{ settings.get('tts_tone', '20000') | int // 1000 }}</output>kHz</span>
+                <span>Tone <output id="tts-tone-out">{{ (settings.get('tts_tone', '13000') | int) // 1000 }}</output>kHz</span>
                 <input type="range" id="tts-tone" min="2000" max="20000" step="500"
-                       value="{{ settings.get('tts_tone', '20000') }}"
+                       value="{{ settings.get('tts_tone', '13000') }}"
                        oninput="document.getElementById('tts-tone-out').value = Math.round(this.value/1000)"
                        onchange="saveTts()">
             </label>
@@ -211,7 +287,7 @@ async function previewTts(btn) {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({
-                text: 'The fast grep now reports first, at three point eight times realtime.',
+                text: 'Hi. I\'m ' + (document.getElementById('tts-voice').value || 'aoede') + ', and this is what my voice sounds like.',
                 voice: document.getElementById('tts-voice').value,
                 speed: parseFloat(document.getElementById('tts-speed').value),
             }),

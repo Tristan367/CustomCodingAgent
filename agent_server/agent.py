@@ -14,12 +14,12 @@ Responsibilities, in order of how badly they used to break:
 
 import asyncio
 import json
-from datetime import datetime, timezone
 import time
 import uuid
-from typing import AsyncIterator
+from collections.abc import AsyncIterator
+from datetime import UTC, datetime
 
-from agent_server import cache_guard
+from agent_server import cache_guard, permissions
 from agent_server import database as db
 from agent_server.config import CACHE_WARN_TOKENS, MAX_TOOL_RESULT_CHARS, MODELS_BY_ID
 from agent_server.conversation import (
@@ -32,22 +32,42 @@ from agent_server.conversation import (
 from agent_server.providers import Provider, get_provider
 from agent_server.system_prompt import get_compact_prompt, session_system_prompt
 from agent_server.tools.base import ToolContext, ToolResult, truncate
-from agent_server import permissions
 from agent_server.tools.registry import execute_tool, get_tool, tool_schemas
 
 # session_id -> abort signal for the in-flight run.
 _aborts: dict[str, asyncio.Event] = {}
 # Sessions the user chose to auto-approve for the lifetime of this process.
 _runtime_auto_approve: set[str] = set()
-# Read-only tools with no side effects, so running several at once cannot
-# produce a conflicting write or an approval prompt. Anything that mutates
-# state (write, edit, bash) stays strictly sequential.
-PARALLEL_SAFE_TOOLS = frozenset({"read", "grep", "glob", "webfetch", "task", "vision", "screenshot"})
 
-# Individual tool calls the user approved. Consumed by the next _drain_pending
-# so the approved tool runs inside the loop and streams its output like any
-# other tool call, instead of executing silently in the resolve endpoint.
-_approved_calls: set[str] = set()
+
+def _parallel_safe(name: str) -> bool:
+    """Whether several calls to this tool may run at once.
+
+    Keyed on the registered tool rather than on a list of names. A custom tool
+    may call itself `read`, and shadowing a built-in must not inherit the
+    built-in's right to run concurrently -- concurrency is also what used to
+    skip the permission gate, so a name check here was a way in.
+    """
+    tool = get_tool(name)
+    return bool(tool and tool.parallel_safe and tool.pause is None)
+
+# session_id -> tool call ids the user approved. Consumed by the next
+# _drain_pending so the approved tool runs inside the loop and streams its
+# output like any other tool call, instead of executing silently in the resolve
+# endpoint. Keyed by session so an approval granted in one cannot answer for
+# another, and so a session that goes away takes its approvals with it.
+_approved_calls: dict[str, set[str]] = {}
+
+# Per-session history of recent tool rounds, for doom-loop detection. Each
+# entry is the set of (name, args_json) keys issued on one assistant turn.
+_doom_history: dict[str, list[set[tuple[str, str]]]] = {}
+# A key present in this many consecutive rounds is the model going in circles;
+# the call is refused and the refusal is fed back so it can adapt.
+DOOM_ROUNDS = 3
+# Still asking for the same thing this many rounds in is not something the model
+# is going to talk itself out of. End the turn rather than bill for the rest of
+# it -- a loop the model cannot see costs real money at one request per round.
+DOOM_ABORT_ROUNDS = 6
 # Sessions whose compaction prompt the user dismissed for the current run.
 _compaction_snoozed: set[str] = set()
 
@@ -152,7 +172,7 @@ class _Run:
     task and clients attach to it, so a disconnect costs nothing.
     """
 
-    __slots__ = ("events", "subscribers", "task", "done", "inflight")
+    __slots__ = ("done", "events", "inflight", "subscribers", "task")
 
     def __init__(self):
         self.events: list[dict] = []
@@ -224,7 +244,7 @@ async def _drive(session_id: str, handle: _Run):
     except asyncio.CancelledError:
         _publish(handle, {"type": "error", "message": "Run cancelled."})
         raise
-    except Exception as e:  # noqa: BLE001
+    except Exception as e:
         _publish(handle, {"type": "error", "message": f"{type(e).__name__}: {e}"})
     finally:
         _publish(handle, {"type": "stream_end"})
@@ -248,12 +268,19 @@ def forget_session(session_id: str):
 
     clear_env_cache(session_id)
     clear_read_cache(session_id)
-    _runs.pop(session_id, None)
+    run = _runs.pop(session_id, None)
+    if run is not None and run.task is not None and not run.task.done():
+        run.task.cancel()
     _queued.pop(session_id, None)
     _aborts.pop(session_id, None)
     _tool_tasks.pop(session_id, None)
+    _doom_history.pop(session_id, None)
+    _approved_calls.pop(session_id, None)
     _compaction_snoozed.discard(session_id)
     _cache_warning_ack.discard(session_id)
+    _runtime_auto_approve.discard(session_id)
+    _status.pop(session_id, None)
+    _unseen.pop(session_id, None)
 
 
 def start_run(session_id: str) -> _Run:
@@ -360,7 +387,7 @@ async def run(session_id: str) -> AsyncIterator[dict]:
         # Client disconnected: stop quietly, transcript is already consistent.
         _set_status(session_id, "idle")
         raise
-    except Exception as e:  # noqa: BLE001
+    except Exception as e:
         outcome = "error"
         yield {"type": "error", "message": f"Agent error: {type(e).__name__}: {e}"}
     finally:
@@ -386,7 +413,9 @@ async def _loop(
     # message whose tool_calls have no matching results, which the API rejects.
     async for event in _drain_pending(session, ctx):
         yield event
-        if event["type"] == "permission":
+        # `permission` waits for the user; `error` is a doom-loop abort. Both
+        # end the turn here rather than asking the model for another round.
+        if event["type"] in ("permission", "error"):
             return
 
     # Frozen when the session first ran, so the cached prefix survives anything
@@ -481,7 +510,7 @@ async def _loop(
             session_id,
             cache_fp=json.dumps(fp),
             cache_fp_tokens=json.dumps(fp_tokens),
-            cache_checked_at=datetime.now(timezone.utc).isoformat(),
+            cache_checked_at=datetime.now(UTC).isoformat(),
         )
         session = await db.get_session(session_id) or session
 
@@ -608,12 +637,12 @@ async def _loop(
             }
             return
 
-        paused = False
+        stop = False
         async for event in _drain_pending(session, ctx):
             yield event
-            if event["type"] == "permission":
-                paused = True
-        if paused:
+            if event["type"] in ("permission", "error"):
+                stop = True
+        if stop:
             return
 
 
@@ -631,6 +660,22 @@ async def _drain_pending(session: dict, ctx: ToolContext) -> AsyncIterator[dict]
         return
 
     shell_auto = await _auto_approves(session)
+    # Recorded once for the whole turn, so a fan-out counts as one round.
+    doomed, fatal = _doom_round(session_id, pending)
+    if fatal:
+        for call in pending:
+            result = ToolResult.error(_doom_message(tool_call_name(call)), "doom-loop")
+            await _record(session_id, call, result, 0)
+        _doom_history.pop(session_id, None)
+        yield {
+            "type": "error",
+            "message": (
+                f"Stopped: the model has repeated the same tool call for "
+                f"{DOOM_ABORT_ROUNDS} rounds without making progress. Ending the "
+                "turn rather than billing for more of it."
+            ),
+        }
+        return
 
     index = 0
     while index < len(pending):
@@ -638,17 +683,29 @@ async def _drain_pending(session: dict, ctx: ToolContext) -> AsyncIterator[dict]
         # another made a turn cost the sum of their runtimes, which is brutal
         # for subagents: three researchers took three times as long as one.
         batch: list[dict] = []
-        while index < len(pending) and tool_call_name(pending[index]) in PARALLEL_SAFE_TOOLS:
+        while index < len(pending) and _parallel_safe(tool_call_name(pending[index])):
             batch.append(pending[index])
             index += 1
+
         if len(batch) > 1:
-            async for event in _run_batch(session_id, ctx, batch):
+            # Every call clears the gate before any of them starts. This used
+            # to be skipped entirely for batches, so a permission-gated tool
+            # ran unprompted as soon as it shared a round with another.
+            gated = False
+            for call in batch:
+                event = await _gate(call, session, ctx, shell_auto)
+                if event is not None:
+                    yield event
+                    gated = True
+                    break
+            if gated:
+                return
+            async for event in _run_batch(session_id, ctx, batch, doomed):
                 yield event
             continue
-        if batch:
-            call = batch[0]
-        else:
-            call = pending[index]
+
+        call = batch[0] if batch else pending[index]
+        if not batch:
             index += 1
 
         if ctx.abort.is_set():
@@ -658,24 +715,21 @@ async def _drain_pending(session: dict, ctx: ToolContext) -> AsyncIterator[dict]
 
         name = tool_call_name(call)
         args = parse_arguments(call)
-        tool = get_tool(name)
 
-        if call["id"] not in _approved_calls:
-            prompt = await permissions.check(
-                name, args, session_id, session["project_dir"], shell_auto
-            )
-            if prompt is not None:
-                yield {
-                    "type": "permission",
-                    "tool_call_id": call["id"],
-                    "name": name,
-                    "args": args,
-                    **prompt,
-                }
-                return
+        event = await _gate(call, session, ctx, shell_auto)
+        if event is not None:
+            yield event
+            return
 
-        _approved_calls.discard(call["id"])
+        _approved_calls.get(session_id, set()).discard(call["id"])
         yield {"type": "tool_start", "tool_call_id": call["id"], "name": name, "args": args}
+
+        if _doom_key(call) in doomed:
+            result = ToolResult.error(_doom_message(name), "doom-loop")
+            await _record(session_id, call, result, 0)
+            yield _tool_end_event(call, name, result, 0)
+            continue
+
         began = time.monotonic()
         task = asyncio.create_task(execute_tool(name, args, ctx))
         _track(session_id, task)
@@ -693,6 +747,89 @@ async def _drain_pending(session: dict, ctx: ToolContext) -> AsyncIterator[dict]
         yield _tool_end_event(call, name, result, elapsed_ms)
 
 
+async def _gate(
+    call: dict, session: dict, ctx: ToolContext, shell_auto: bool
+) -> dict | None:
+    """Return a `permission` event when this call needs the user, else None.
+
+    One gate for every path into tool execution. It used to be inline in the
+    sequential branch only, which is how the concurrent branch came to run
+    permission-gated tools without asking.
+    """
+    if call["id"] in _approved_calls.get(session["id"], ()):
+        return None
+
+    name = tool_call_name(call)
+    args = parse_arguments(call)
+    tool = get_tool(name)
+
+    if tool and tool.pause == "permission" and name not in ("bash", "edit", "write"):
+        return {
+            "type": "permission",
+            "tool_call_id": call["id"],
+            "name": name,
+            "args": args,
+            "message": f"Run custom tool '{name}'?",
+            "kind": "custom_tool",
+        }
+
+    prompt = await permissions.check(
+        name, args, session["id"], session["project_dir"], shell_auto
+    )
+    if prompt is None:
+        return None
+    return {
+        "type": "permission",
+        "tool_call_id": call["id"],
+        "name": name,
+        "args": args,
+        **prompt,
+    }
+
+
+def _doom_key(call: dict) -> tuple[str, str]:
+    return (tool_call_name(call), json.dumps(parse_arguments(call), sort_keys=True))
+
+
+def _doom_round(session_id: str, calls: list[dict]) -> tuple[set[tuple[str, str]], bool]:
+    """Record one round of tool calls; report the keys that have now repeated.
+
+    A round is every tool call on a single assistant turn. Identical calls
+    *within* a round are deliberate fan-out -- three subagents sharing a prompt
+    is what `task`'s `count` exists for -- so a round counts a key once. Only a
+    key that survives DOOM_ROUNDS consecutive rounds is a loop: the model asked,
+    was answered, and asked the identical thing again.
+
+    The previous version counted each call separately, so a three-way fan-out
+    tripped the detector on its own first round and was killed before it ran.
+
+    Returns (refuse, fatal): keys to refuse, and whether the loop has gone on
+    long enough that the turn should end instead.
+    """
+    keys = {_doom_key(call) for call in calls}
+    history = _doom_history.setdefault(session_id, [])
+    history.append(keys)
+    if len(history) > DOOM_ABORT_ROUNDS:
+        history.pop(0)
+    if len(history) < DOOM_ROUNDS:
+        return set(), False
+    refuse = set.intersection(*history[-DOOM_ROUNDS:])
+    fatal = (
+        len(history) >= DOOM_ABORT_ROUNDS
+        and bool(set.intersection(*history[-DOOM_ABORT_ROUNDS:]))
+    )
+    return refuse, fatal
+
+
+def _doom_message(name: str) -> str:
+    return (
+        f"Doom loop: `{name}` has now been called with identical arguments in "
+        f"{DOOM_ROUNDS} consecutive rounds. The result will not change. Stop "
+        "retrying it -- either use what you already have, try a different "
+        "approach, or tell the user what is blocking you."
+    )
+
+
 def _tool_end_event(call: dict, name: str, result: ToolResult, elapsed_ms: int) -> dict:
     return {
         "type": "tool_end",
@@ -706,7 +843,12 @@ def _tool_end_event(call: dict, name: str, result: ToolResult, elapsed_ms: int) 
     }
 
 
-async def _run_batch(session_id: str, ctx: ToolContext, batch: list[dict]) -> AsyncIterator[dict]:
+async def _run_batch(
+    session_id: str,
+    ctx: ToolContext,
+    batch: list[dict],
+    doomed: set[tuple[str, str]] | None = None,
+) -> AsyncIterator[dict]:
     """Run a group of independent read-only calls concurrently.
 
     Each call is reported the instant it finishes rather than in call order, so
@@ -718,11 +860,16 @@ async def _run_batch(session_id: str, ctx: ToolContext, batch: list[dict]) -> As
     tool_end is matched back to one of them by id. The database writes stay in
     call order too, so a reload renders what the stream rendered.
     """
+    doomed = doomed or set()
+
     async def run(call: dict) -> tuple[ToolResult, int]:
         began = time.monotonic()
         if ctx.abort.is_set():
             return ToolResult.error("cancelled by user", "cancelled"), 0
-        result = await execute_tool(tool_call_name(call), parse_arguments(call), ctx)
+        name = tool_call_name(call)
+        if _doom_key(call) in doomed:
+            return ToolResult.error(_doom_message(name), "doom-loop"), 0
+        result = await execute_tool(name, parse_arguments(call), ctx)
         return result, int((time.monotonic() - began) * 1000)
 
     for call in batch:
@@ -824,7 +971,7 @@ async def resolve_pending(
             await permissions.allow_directory(session_id, grant_path)
         # Don't run it here. Marking it approved lets the agent loop execute it
         # and stream tool_start/tool_end, so the user sees the result.
-        _approved_calls.add(tool_call_id)
+        _approved_calls.setdefault(session_id, set()).add(tool_call_id)
         return True
 
     if action == "reject":

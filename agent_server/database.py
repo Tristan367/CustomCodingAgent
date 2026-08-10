@@ -10,7 +10,7 @@ assistant message that requested them.
 import asyncio
 import json
 import uuid
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
 import aiosqlite
 
@@ -83,6 +83,32 @@ CREATE TABLE IF NOT EXISTS settings (
     updated_at TEXT NOT NULL
 );
 
+CREATE TABLE IF NOT EXISTS custom_tools (
+    name TEXT PRIMARY KEY,
+    description TEXT NOT NULL,
+    parameters TEXT NOT NULL,
+    script TEXT NOT NULL,
+    enabled INTEGER NOT NULL DEFAULT 1,
+    ask_permission INTEGER NOT NULL DEFAULT 1,
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS custom_endpoints (
+    name TEXT PRIMARY KEY,
+    base_url TEXT NOT NULL,
+    api_key TEXT NOT NULL DEFAULT '',
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS secrets (
+    name TEXT PRIMARY KEY,
+    value TEXT NOT NULL DEFAULT '',
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL
+);
+
 CREATE INDEX IF NOT EXISTS idx_messages_session ON messages(session_id, id);
 CREATE INDEX IF NOT EXISTS idx_compactions_session ON compactions(session_id, id);
 """
@@ -133,22 +159,30 @@ MIGRATIONS: list[tuple[str, str, str]] = [
     # derived, because deriving it would silently rewrite the prefix the moment
     # the user typed again and re-bill the whole conversation at the miss rate.
     ("messages", "send_reasoning", "INTEGER DEFAULT 1"),
+    # Which tools are disabled for this prompt profile (JSON array of names).
+    ("prompts", "disabled_tools", "TEXT"),
 ]
 
 
 def _now() -> str:
-    return datetime.now(timezone.utc).isoformat()
+    return datetime.now(UTC).isoformat()
+
+
+_connect_lock = asyncio.Lock()
 
 
 async def connect() -> aiosqlite.Connection:
     global _conn
-    if _conn is None:
-        _conn = await aiosqlite.connect(str(DB_PATH))
-        _conn.row_factory = aiosqlite.Row
-        await _conn.execute("PRAGMA journal_mode=WAL")
-        await _conn.execute("PRAGMA foreign_keys=ON")
-        await _conn.execute("PRAGMA busy_timeout=5000")
-        await _conn.execute("PRAGMA synchronous=NORMAL")
+    if _conn is not None:
+        return _conn
+    async with _connect_lock:
+        if _conn is None:
+            _conn = await aiosqlite.connect(str(DB_PATH))
+            _conn.row_factory = aiosqlite.Row
+            await _conn.execute("PRAGMA journal_mode=WAL")
+            await _conn.execute("PRAGMA foreign_keys=ON")
+            await _conn.execute("PRAGMA busy_timeout=5000")
+            await _conn.execute("PRAGMA synchronous=NORMAL")
     return _conn
 
 
@@ -169,6 +203,7 @@ async def init_db():
             await db.execute(f"ALTER TABLE {table} ADD COLUMN {column} {decl}")
     await _rekey_prompts(db)
     await db.commit()
+    await seed_default_custom_tools()
 
 
 async def _rekey_prompts(db):
@@ -299,6 +334,56 @@ async def purge_orphans() -> int:
             total += cur.rowcount or 0
         await db.commit()
     return total
+
+# ── Custom endpoints ────────────────────────────────────────────────────────
+
+
+async def list_custom_endpoints() -> list[dict]:
+    return await _fetchall("SELECT * FROM custom_endpoints ORDER BY name")
+
+
+async def get_custom_endpoint(name: str) -> dict | None:
+    return await _fetchone("SELECT * FROM custom_endpoints WHERE name = ?", (name,))
+
+
+async def save_custom_endpoint(name: str, base_url: str, api_key: str = ""):
+    await _execute(
+        "INSERT INTO custom_endpoints (name, base_url, api_key, created_at, updated_at)"
+        " VALUES (?,?,?,?,?)"
+        " ON CONFLICT(name) DO UPDATE SET base_url = excluded.base_url,"
+        " api_key = excluded.api_key, updated_at = excluded.updated_at",
+        (name, base_url, api_key, _now(), _now()),
+    )
+
+
+async def delete_custom_endpoint(name: str):
+    await _execute("DELETE FROM custom_endpoints WHERE name = ?", (name,))
+
+
+# ── Secrets / env vars for custom tools ──────────────────────────────────────
+
+
+async def list_secrets() -> list[dict]:
+    return await _fetchall("SELECT * FROM secrets ORDER BY name")
+
+
+async def save_secret(name: str, value: str):
+    await _execute(
+        "INSERT INTO secrets (name, value, created_at, updated_at)"
+        " VALUES (?,?,?,?)"
+        " ON CONFLICT(name) DO UPDATE SET value = excluded.value,"
+        " updated_at = excluded.updated_at",
+        (name, value, _now(), _now()),
+    )
+
+
+async def delete_secret(name: str):
+    await _execute("DELETE FROM secrets WHERE name = ?", (name,))
+
+
+async def load_secrets_dict() -> dict[str, str]:
+    rows = await _fetchall("SELECT name, value FROM secrets")
+    return {r["name"]: r["value"] for r in rows}
 
 
 # ── Messages ────────────────────────────────────────────────────────────────
@@ -623,18 +708,138 @@ async def get_prompt(name: str, kind: str = "system") -> dict | None:
     )
 
 
-async def save_prompt(name: str, body: str, kind: str = "system"):
+async def save_prompt(name: str, body: str, kind: str = "system", disabled_tools: str = ""):
     # Textareas submit CRLF per the HTML spec; storing that would make an
     # untouched round-trip through the editor look like an edit.
     body = body.replace("\r\n", "\n").strip()
     await _execute(
-        "INSERT INTO prompts (kind, name, body, updated_at) VALUES (?,?,?,?)"
+        "INSERT INTO prompts (kind, name, body, disabled_tools, updated_at) VALUES (?,?,?,?,?)"
         " ON CONFLICT(kind, name) DO UPDATE SET body = excluded.body,"
+        " disabled_tools = excluded.disabled_tools,"
         " updated_at = excluded.updated_at",
-        (kind, name, body, _now()),
+        (kind, name, body, disabled_tools, _now()),
     )
 
 
 async def delete_prompt(name: str, kind: str = "system"):
     await _execute("DELETE FROM prompts WHERE kind = ? AND name = ?", (kind, name))
+
+
+# ── Custom tools ────────────────────────────────────────────────────────────
+
+
+async def list_custom_tools() -> list[dict]:
+    return await _fetchall(
+        "SELECT * FROM custom_tools ORDER BY name"
+    )
+
+
+async def get_custom_tool(name: str) -> dict | None:
+    return await _fetchone(
+        "SELECT * FROM custom_tools WHERE name = ?", (name,)
+    )
+
+
+async def save_custom_tool(
+    name: str, description: str, parameters: str,
+    script: str, enabled: bool, ask_permission: bool,
+):
+    await _execute(
+        "INSERT INTO custom_tools (name, description, parameters, script,"
+        " enabled, ask_permission, created_at, updated_at)"
+        " VALUES (?,?,?,?,?,?,?,?)"
+        " ON CONFLICT(name) DO UPDATE SET description = excluded.description,"
+        " parameters = excluded.parameters, script = excluded.script,"
+        " enabled = excluded.enabled,"
+        " ask_permission = excluded.ask_permission,"
+        " updated_at = excluded.updated_at",
+        (name, description, parameters, script,
+         int(enabled), int(ask_permission), _now(), _now()),
+    )
+
+
+async def delete_custom_tool(name: str):
+    await _execute("DELETE FROM custom_tools WHERE name = ?", (name,))
+
+
+async def seed_default_custom_tools():
+    """Populate custom_tools with vision/screenshot on first run."""
+    existing = await _fetchall("SELECT name FROM custom_tools")
+    if existing:
+        return
+
+    vision_script = (
+        'python3 -c "'
+        "import asyncio, json, sys, os; "
+        "from agent_server.vision import analyze, load_image; "
+        "async def main(): "
+        "  paths = json.loads(os.environ.get('TOOL_ARG_PATHS','[]') or sys.argv[1]); "
+        "  prompt = os.environ.get('TOOL_ARG_PROMPT','') or sys.argv[2]; "
+        "  images = [load_image(p) for p in paths]; "
+        "  print(await analyze(images, prompt)); "
+        "asyncio.run(main())"
+        '" "$TOOL_ARG_PATHS" "$TOOL_ARG_PROMPT'
+    )
+
+    screenshot_script = (
+        'python3 -c "'
+        "import asyncio, json, sys, os; "
+        "from agent_server.vision import capture, analyze; "
+        "async def main(): "
+        "  url = os.environ.get('TOOL_ARG_URL','') or sys.argv[1]; "
+        "  w = os.environ.get('TOOL_ARG_WIDTH'); h = os.environ.get('TOOL_ARG_HEIGHT'); "
+        "  img = await capture(url, width=int(w) if w else None, height=int(h) if h else None); "
+        "  prompt = os.environ.get('TOOL_ARG_PROMPT','') or sys.argv[2] if len(sys.argv) > 2 else 'Describe this page.'; "
+        "  print(await analyze([img], prompt)); "
+        "asyncio.run(main())"
+        '" "$TOOL_ARG_URL" "$TOOL_ARG_PROMPT'
+    )
+
+    vision_params = json.dumps({
+        "type": "object",
+        "properties": {
+            "paths": {
+                "type": "array",
+                "items": {"type": "string"},
+                "description": "Paths to image files to analyse"
+            },
+            "prompt": {
+                "type": "string",
+                "description": "What to ask about the images"
+            },
+        },
+        "required": ["paths", "prompt"],
+    })
+
+    screenshot_params = json.dumps({
+        "type": "object",
+        "properties": {
+            "url": {
+                "type": "string",
+                "description": "URL to capture"
+            },
+            "width": {
+                "type": "integer",
+                "description": "Viewport width (default: 1280)"
+            },
+            "height": {
+                "type": "integer",
+                "description": "Viewport height (default: 720)"
+            },
+            "prompt": {
+                "type": "string",
+                "description": "What to ask about the screenshot"
+            },
+        },
+        "required": ["url"],
+    })
+
+    await save_custom_tool(
+        "vision", "Look at images with a vision model. Pass paths to image files and a prompt.",
+        vision_params, vision_script, True, True,
+    )
+    await save_custom_tool(
+        "screenshot", "Capture a web page and analyse it with a vision model.",
+        screenshot_params, screenshot_script, True, True,
+    )
 

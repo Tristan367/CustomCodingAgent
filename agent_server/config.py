@@ -45,6 +45,78 @@ MODELS = [
         "price_in_miss": 0.14,
         "price_out": 0.28,
     },
+    {
+        "id": "anthropic/claude-sonnet-4-20250514",
+        "name": "Claude Sonnet 4",
+        "provider": "openrouter",
+        "context": 200_000,
+        "price_in_hit": 1.25,
+        "price_in_miss": 3.0,
+        "price_out": 15.0,
+    },
+    {
+        "id": "openai/gpt-4.1",
+        "name": "GPT-4.1",
+        "provider": "openrouter",
+        "context": 1_000_000,
+        "price_in_hit": 1.25,
+        "price_in_miss": 2.0,
+        "price_out": 8.0,
+    },
+    {
+        "id": "google/gemini-2.5-pro",
+        "name": "Gemini 2.5 Pro",
+        "provider": "openrouter",
+        "context": 1_000_000,
+        "price_in_hit": 0.25,
+        "price_in_miss": 1.25,
+        "price_out": 10.0,
+    },
+    {
+        "id": "meta-llama/llama-4-maverick",
+        "name": "Llama 4 Maverick",
+        "provider": "openrouter",
+        "context": 1_000_000,
+        "price_in_hit": 0.15,
+        "price_in_miss": 0.20,
+        "price_out": 0.60,
+    },
+    {
+        "id": "claude-sonnet-5",
+        "name": "Claude Sonnet 5",
+        "provider": "anthropic",
+        "context": 200_000,
+        "price_in_hit": 1.25,
+        "price_in_miss": 3.0,
+        "price_out": 15.0,
+    },
+    {
+        "id": "claude-opus-5",
+        "name": "Claude Opus 5",
+        "provider": "anthropic",
+        "context": 200_000,
+        "price_in_hit": 3.75,
+        "price_in_miss": 15.0,
+        "price_out": 75.0,
+    },
+    {
+        "id": "claude-haiku-4-5",
+        "name": "Claude Haiku 4.5",
+        "provider": "anthropic",
+        "context": 200_000,
+        "price_in_hit": 0.25,
+        "price_in_miss": 0.80,
+        "price_out": 4.0,
+    },
+    {
+        "id": "custom",
+        "name": "Custom (type model ID)",
+        "provider": "custom",
+        "context": 131_072,
+        "price_in_hit": 0,
+        "price_in_miss": 0,
+        "price_out": 0,
+    },
 ]
 
 MODELS_BY_ID = {m["id"]: m for m in MODELS}
@@ -158,7 +230,7 @@ def _find_tts_voices() -> str:
 
 TTS_MODEL = _find_tts_model()
 TTS_VOICES = _find_tts_voices()
-TTS_DEFAULT_VOICE = os.getenv("TTS_DEFAULT_VOICE", "af_heart")
+TTS_DEFAULT_VOICE = os.getenv("TTS_DEFAULT_VOICE", "af_aoede")
 
 
 def tts_available() -> bool:

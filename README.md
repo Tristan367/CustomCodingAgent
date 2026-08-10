@@ -1,8 +1,9 @@
 # CodeAgent
 
-A personal coding agent: FastAPI + HTMX backend, DeepSeek V4 as the model, running
-against your local filesystem. Minimal by design — a small tool set, a short prompt,
-and per-session settings that don't leak into each other.
+A personal coding agent: FastAPI + HTMX, running against your local filesystem.
+DeepSeek, Anthropic, OpenRouter, or any OpenAI-compatible endpoint. Thirteen
+built-in tools, per-session settings that don't leak into each other, and a
+browser it can drive to check its own work.
 
 ## Running it
 
@@ -22,9 +23,7 @@ codeagent                   # starts the server and opens the browser
 | `codeagent open` | open a browser at one already running |
 
 Ctrl-C stops a server started in this terminal; `codeagent stop` stops one
-started elsewhere. Both run the shutdown hook, which is what unloads the vision
-model from the rig. `kill -9` skips it, and the model then sits in memory until
-Ollama expires it.
+started elsewhere.
 
 Add your DeepSeek API key on the home page (or set `DEEPSEEK_API_KEY`, which wins),
 pick a project directory, and create a session.
@@ -32,6 +31,34 @@ pick a project directory, and create a session.
 **This is a single-user tool with no authentication.** It reads and writes anywhere
 your user account can and runs arbitrary shell commands. Bind it to `127.0.0.1`
 (the default) and do not expose it to a network.
+
+## Tools
+
+Thirteen built in. `browser` drives a real Chromium from a list of `steps` in one
+call, with accessibility-tree snapshots and `expect` assertions, so a UI change
+can be proven rather than asserted in prose. `capture` screenshots the desktop for
+anything that is not a web page.
+
+Neither can describe what it captured. Looking at an image needs a GPU or a paid
+account, so this ships no `vision` tool — `examples/vision-tool.sh` is a working
+one for Ollama that you paste in on the Tools page. `browser` and `capture`
+dispatch to whatever tool is named `vision`, so a custom one wires itself in.
+
+**Custom tools** are shell scripts with a JSON Schema, called by the model.
+Arguments arrive as `$TOOL_ARG_NAME`. Which sessions may call one is chosen per
+prompt profile, on the Prompts page — every schema is sent on every request, so a
+tool a profile will never use is a standing cost.
+
+**Scripts** are the other thing: shell you run yourself from the home page, never
+shown to the model and carrying no schema. `ollama-start` and `ollama-stop` are
+the motivating examples.
+
+## Where your data lives
+
+`~/.local/share/codeagent/agent.db` (`%APPDATA%` on Windows) — API keys and every
+transcript. Outside the checkout on purpose, so `git clean -xdf` cannot take it.
+Override with `CODEAGENT_DATA_DIR`, which is also how you point a test run at a
+scratch database.
 
 ## How it works
 
@@ -45,10 +72,12 @@ agent_server/
   stt.py            whisper.cpp transcription
   providers/        one adapter per model vendor
   permissions.py    what the agent may do without asking
-  vision.py         image normalisation, browser capture, Ollama client
-  tools/            read, edit, write, bash, grep, glob, webfetch,
-                    task, vision, screenshot
-  routes/           HTTP surface
+  browser.py        Playwright engine: one context per session
+  capture.py        desktop screenshots, probed per platform
+  templating.py     the Jinja environment and its filters
+  tools/            bash, browser, capture, edit, explore, glob, grep,
+                    read, skill, task, webfetch, websearch, write
+  routes/           HTTP surface, one module per page
 web_ui/             Jinja templates, CSS, and ~4 files of vanilla JS
 ```
 
@@ -58,9 +87,9 @@ execute, and the loop repeats until the model answers. Every step is written to
 SQLite as it happens, so the stored transcript always matches what was actually
 sent to the API.
 
-Independent read-only calls (`read`, `grep`, `glob`, `webfetch`, `task`, `vision`,
-`screenshot`) run concurrently, so three subagents cost the slowest one rather than
-the sum. Anything that mutates state runs sequentially, because parallel writes to
+Independent read-only calls (`read`, `grep`, `glob`, `webfetch`, `websearch`,
+`task`, `explore`, `skill`, `capture`) run concurrently, so three subagents cost
+the slowest one rather than the sum. Anything that mutates state runs sequentially, because parallel writes to
 one file are not safe.
 
 ### Runs outlive the request
@@ -153,21 +182,20 @@ question — you do not write a vision prompt. Uploads are decoded and re-encode
 as PNG rather than trusted by extension, because browsers routinely hand over a
 WebP named `.jpg` and the Ollama backend rejects WebP outright.
 
-`screenshot` captures a running page: a single frame, a cropped selector, a full
-scrollable page, or a timed sequence (`count` and `interval_ms`) for animations
-and loading states. `actions` can click, fill, hover, press or scroll first to
-reach a particular state. It returns file paths.
+`browser` captures pages: a `shoot` step saves a frame, `record` takes a timed
+sequence for animations and loading states, and `compare` puts existing images
+alongside the new ones so a mockup and the live page are checked in one call.
+Earlier steps can click, fill, hover or press to reach a particular state first.
+`capture` does the same for anything that is not a web page.
 
-`vision` accepts several paths at once and labels each by filename, which is how
-comparison works — capture before and after, then ask what changed. Note that
-the backend only reliably sees multiple images when each is sent on its own
-message, which this client does for you.
+Both return file paths, and both can pass the frames straight to `vision` in the
+same call with an `ask`. Several paths at once are labelled by filename, which is
+how before/after comparison works.
 
-If the vision machine is switched on, Ollama is started on it automatically --
-at boot, and again on the first vision call if it went away since. That needs
-key-based SSH and runs the binary as your user, with no sudo. Switch the machine
-off and vision reports being unreachable instead of hanging; nothing else is
-affected. Set `VISION_AUTOSTART=0` to manage it yourself.
+Nothing starts your vision host automatically. The app has no business waking a
+machine on the chance an image turns up, so the shipped `vision` tool starts what
+it needs when it is called, and `ollama-start` / `ollama-stop` on the home page
+are there for doing it by hand.
 
 Vision runs against Ollama on `VISION_OLLAMA_URL` (default `vision-host.local:11434`,
 model `qwen3-vl:32b`). Browser capture uses Playwright's async API in-process.

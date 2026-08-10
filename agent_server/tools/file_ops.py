@@ -20,6 +20,44 @@ BINARY_SUFFIXES = {
 # the model cannot blindly clobber a file it has never seen.
 _read_files: dict[str, set[str]] = {}
 
+# UTF-8 BOM as raw bytes.
+_BOM = b"\xef\xbb\xbf"
+
+
+def _detect_line_ending(text: str) -> str:
+    """Return the dominant line ending: ``\\r\\n`` or ``\\n``."""
+    crlf = text.count("\r\n")
+    lf_only = text.count("\n") - crlf
+    return "\r\n" if crlf > lf_only else "\n"
+
+
+def _read_file_text(path: Path) -> tuple[str, bool, str]:
+    """Read *path* and return ``(content, has_bom, line_ending)``.
+
+    ``content`` has any leading UTF-8 BOM stripped and all line endings
+    normalised to ``\\n`` so edits operate on a canonical form.
+    """
+    raw = path.read_bytes()
+    has_bom = raw.startswith(_BOM)
+    if has_bom:
+        raw = raw[len(_BOM):]
+    text = raw.decode("utf-8")
+    line_ending = _detect_line_ending(text)
+    if line_ending == "\r\n":
+        text = text.replace("\r\n", "\n")
+    return text, has_bom, line_ending
+
+
+def _write_file_text(path: Path, content: str, has_bom: bool, line_ending: str):
+    """Write *content* to *path*, prepending a BOM and converting line endings
+    back to what the file originally used."""
+    if line_ending == "\r\n":
+        content = content.replace("\n", "\r\n")
+    data = content.encode("utf-8")
+    if has_bom:
+        data = _BOM + data
+    path.write_bytes(data)
+
 
 def _hash_line(line: str) -> str:
     """4-char content hash so edits can anchor on a line without retyping it."""
@@ -133,7 +171,7 @@ async def edit_file(
         )
 
     try:
-        content = path.read_text(encoding="utf-8")
+        content, has_bom, line_ending = _read_file_text(path)
     except Exception as e:
         return ToolResult.error(f"reading file: {e}", title)
 
@@ -165,7 +203,7 @@ async def edit_file(
             updated += "\n"
 
         try:
-            path.write_text(updated, encoding="utf-8")
+            _write_file_text(path, updated, has_bom, line_ending)
         except Exception as e:
             return ToolResult.error(f"writing file: {e}", title)
 
@@ -201,7 +239,7 @@ async def edit_file(
 
     updated = content.replace(oldString, newString) if replaceAll else content.replace(oldString, newString, 1)
     try:
-        path.write_text(updated, encoding="utf-8")
+        _write_file_text(path, updated, has_bom, line_ending)
     except Exception as e:
         return ToolResult.error(f"writing file: {e}", title)
 
@@ -233,15 +271,22 @@ async def write_file(ctx: ToolContext, *, filePath: str, content: str, **_) -> T
     previous = ""
     if existed:
         try:
-            previous = path.read_text(encoding="utf-8")
+            previous, has_bom, line_ending = _read_file_text(path)
         except Exception:
             previous = ""
-
-    try:
+            has_bom = False
+            line_ending = "\n"
         path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_text(content, encoding="utf-8")
-    except Exception as e:
-        return ToolResult.error(f"writing file: {e}", title)
+        try:
+            _write_file_text(path, content, has_bom, line_ending)
+        except Exception as e:
+            return ToolResult.error(f"writing file: {e}", title)
+    else:
+        try:
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_text(content, encoding="utf-8")
+        except Exception as e:
+            return ToolResult.error(f"writing file: {e}", title)
 
     mark_read(ctx.session_id, path)
     verb = "Overwrote" if existed else "Created"

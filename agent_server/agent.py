@@ -14,6 +14,7 @@ Responsibilities, in order of how badly they used to break:
 
 import asyncio
 import json
+import logging
 import time
 import uuid
 from collections.abc import AsyncIterator
@@ -34,6 +35,9 @@ from agent_server.system_prompt import disabled_tools, get_compact_prompt, sessi
 from agent_server.tools.base import ToolContext, ToolResult, truncate
 from agent_server.tools.registry import execute_tool, get_tool, tool_schemas
 
+log = logging.getLogger(__name__)
+
+# session_id -> abort signal for the in-flight run.
 # session_id -> abort signal for the in-flight run.
 _aborts: dict[str, asyncio.Event] = {}
 # Sessions the user chose to auto-approve for the lifetime of this process.
@@ -397,7 +401,8 @@ async def run(session_id: str) -> AsyncIterator[dict]:
     )
     _set_status(session_id, "running")
     outcome = "done"
-
+    tools_count = 0
+    log.info("turn start session=%s model=%s", session_id, session["model"])
     try:
         # Tell the client the database id of the turn it just started, so the
         # message bubble it optimistically rendered can gain its edit/retry
@@ -412,6 +417,8 @@ async def run(session_id: str) -> AsyncIterator[dict]:
                 outcome = "waiting"
             elif event["type"] == "error":
                 outcome = "error"
+            elif event["type"] == "tool_end":
+                tools_count += 1
             yield event
     except asyncio.CancelledError:
         # Client disconnected: stop quietly, transcript is already consistent.
@@ -427,6 +434,7 @@ async def run(session_id: str) -> AsyncIterator[dict]:
         else:
             _compaction_snoozed.discard(session_id)
             _set_status(session_id, "idle", notify=outcome)
+        log.info("turn end session=%s outcome=%s tools=%d", session_id, outcome, tools_count)
 
 
 async def _loop(
@@ -701,6 +709,7 @@ async def _drain_pending(session: dict, ctx: ToolContext) -> AsyncIterator[dict]
             result = ToolResult.error(_doom_message(name, _last_output_for(rows, name)), "doom-loop")
             await _record(session_id, call, result, 0)
         _doom_history.pop(session_id, None)
+        log.warning("doom-loop abort session=%s", session_id)
         yield {
             "type": "error",
             "message": (

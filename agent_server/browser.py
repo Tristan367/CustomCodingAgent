@@ -28,6 +28,7 @@ building is the point -- so it has no private-network guard, unlike `webfetch`.
 """
 
 import asyncio
+import logging
 import time
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -35,8 +36,9 @@ from typing import Any
 
 from agent_server.config import CAPTURE_DIR
 
+log = logging.getLogger(__name__)
+
 DEFAULT_VIEWPORT = (1280, 900)
-# Console output is unbounded; a page in a render loop can emit thousands of
 # lines a second. Keep the newest.
 MAX_CONSOLE = 300
 MAX_FRAMES = 24
@@ -162,6 +164,7 @@ def _wire_listeners(session: Session, page):
             if loc and loc.get("url"):
                 location = f"{loc['url']}:{loc.get('lineNumber', 0)}"
         except Exception:
+            log.debug("reading console message location failed", exc_info=True)
             location = ""
         session.note(ConsoleEntry(kind, message.text, location))
 
@@ -191,7 +194,7 @@ async def close_session(session_id: str):
     try:
         await session.context.close()
     except Exception:
-        pass
+        log.debug("closing browser context failed", exc_info=True)
 
 
 async def reap_idle():
@@ -210,13 +213,13 @@ async def close_all():
         try:
             await _browser.close()
         except Exception:
-            pass
+            log.debug("closing browser process failed", exc_info=True)
         _browser = None
     if _playwright is not None:
         try:
             await _playwright.stop()
         except Exception:
-            pass
+            log.debug("stopping playwright failed", exc_info=True)
         _playwright = None
 
 

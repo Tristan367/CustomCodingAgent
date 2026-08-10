@@ -44,7 +44,7 @@ if not DB_PATH.exists() and _LEGACY_DB.exists() and not os.getenv("CODEAGENT_DAT
         source = _LEGACY_DB.with_name(_LEGACY_DB.name + suffix)
         if source.exists():
             shutil.copy2(source, DB_PATH.with_name(DB_PATH.name + suffix))
-    print(f"[config] moved database to {DB_PATH} (old copy left at {_LEGACY_DB})")
+    print(f"[config] moved database to {DB_PATH} (old copy left at {_LEGACY_DB})")  # runs at import time, before logging is configured
 
 # tempfile.gettempdir() rather than "/tmp": the screen-capture backends are
 # chosen per platform, so the app claims to run on Windows, where /tmp is not

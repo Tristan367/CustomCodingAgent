@@ -1,6 +1,7 @@
 """FastAPI application entry point."""
 
 import asyncio
+import logging
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
@@ -8,6 +9,7 @@ from fastapi.staticfiles import StaticFiles
 
 from agent_server import agent
 from agent_server import database as db
+from agent_server.config import DATA_DIR, DB_PATH
 from agent_server.database import close as close_db
 from agent_server.database import init_db
 from agent_server.providers import load_custom_endpoint_providers
@@ -28,6 +30,8 @@ from agent_server.routes import (
 from agent_server.system_prompt import migrate_prompts
 from agent_server.templating import STATIC_DIR
 
+log = logging.getLogger(__name__)
+
 
 async def _reap_browsers():
     """Close browser contexts nobody has used lately.
@@ -43,11 +47,18 @@ async def _reap_browsers():
         try:
             await browser.reap_idle()
         except Exception:
-            pass
+            log.warning("reaping idle browsers failed", exc_info=True)
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
+    from agent_server.logging_setup import configure
+
+    configure()
+    # First line in the file after every restart. Without it an empty log is
+    # ambiguous between "nothing happened" and "logging is not working", and
+    # there is nothing to correlate a restart against.
+    log.info("codeagent starting: data=%s db=%s", DATA_DIR, DB_PATH.name)
     await init_db()
     await migrate_prompts()
     from agent_server.providers import credentials
@@ -58,7 +69,7 @@ async def lifespan(app: FastAPI):
     credentials.prime(await db.get_all_settings())
     problems = await load_custom_tools()
     for problem in problems:
-        print(f"[tools] {problem}")
+        log.warning("custom tool problem: %s", problem)
     await load_custom_endpoint_providers()
     reaper = asyncio.create_task(_reap_browsers())
 

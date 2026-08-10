@@ -15,10 +15,13 @@ Two independent gates:
 
 import fnmatch
 import json
+import logging
 import subprocess
 from pathlib import Path
 
 from agent_server import database as db
+
+log = logging.getLogger(__name__)
 
 # Tools whose target path is checked against the write allowlist.
 WRITE_TOOLS = {"edit", "write"}
@@ -85,7 +88,7 @@ def grant_scope(path: Path) -> str:
         if result.returncode == 0 and root:
             return root
     except Exception:
-        pass
+        log.debug("git rev-parse failed for %s", directory, exc_info=True)
     try:
         return str(directory.resolve())
     except OSError:

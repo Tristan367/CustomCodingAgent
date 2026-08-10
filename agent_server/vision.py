@@ -17,6 +17,7 @@ Two hard-won details about the Ollama backend, both verified against the live ri
 import asyncio
 import base64
 import io
+import logging
 import time
 from pathlib import Path
 
@@ -34,6 +35,9 @@ from agent_server.config import (
     VISION_START_TIMEOUT,
     VISION_TIMEOUT,
 )
+
+log = logging.getLogger(__name__)
+
 
 
 class VisionError(RuntimeError):
@@ -99,6 +103,7 @@ def describe_image_file(path: str | Path) -> str:
         with Image.open(Path(path).expanduser()) as im:
             return f"{im.width}x{im.height} {im.format}"
     except Exception:
+        log.debug("reading image dimensions failed", exc_info=True)
         return "image"
 
 
@@ -110,6 +115,7 @@ async def rig_available() -> bool:
             resp = await client.get(f"{VISION_OLLAMA_URL}/api/tags")
             return resp.status_code == 200
     except Exception:
+        log.debug("checking vision rig availability failed", exc_info=True)
         return False
 
 
@@ -173,7 +179,8 @@ async def unload_model():
             timeout=8,
         )
     except Exception:
-        pass  # the rig may already be gone; nothing to clean up
+        log.debug("unloading vision model failed", exc_info=True)
+        # the rig may already be gone; nothing to clean up
 
 
 async def analyze(images: list[bytes], prompt: str, labels: list[str] | None = None) -> str:

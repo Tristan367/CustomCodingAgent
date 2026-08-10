@@ -5,6 +5,7 @@ OpenAI-compatible endpoints use the base class directly.
 """
 
 import asyncio
+import logging
 from collections.abc import AsyncIterator
 
 import openai
@@ -18,6 +19,7 @@ from agent_server.providers.base import (
     normalize_finish,
 )
 
+log = logging.getLogger(__name__)
 
 class OpenAICompatibleProvider(Provider):
     """Base for any OpenAI-compatible API (DeepSeek, OpenRouter, custom, etc.)."""
@@ -73,6 +75,7 @@ class OpenAICompatibleProvider(Provider):
             yield {"type": "error", "message": _describe(e, self.name)}
             return
         except Exception as e:
+            log.warning("provider %s request failed", self.name, exc_info=True)
             yield {"type": "error", "message": f"{type(e).__name__}: {e}"}
             return
 
@@ -122,6 +125,7 @@ class OpenAICompatibleProvider(Provider):
             yield {"type": "error", "message": _describe(e, self.name)}
             return
         except Exception as e:
+            log.warning("provider %s stream failed", self.name, exc_info=True)
             yield {"type": "error", "message": f"Stream failed: {type(e).__name__}: {e}"}
             return
         finally:
@@ -152,7 +156,7 @@ async def _aclose(stream) -> None:
     try:
         await stream.close()
     except Exception:
-        pass
+        log.debug("closing stream failed", exc_info=True)
 
 
 def _describe(e: openai.APIStatusError, name: str = "API") -> str:
@@ -161,5 +165,6 @@ def _describe(e: openai.APIStatusError, name: str = "API") -> str:
         body = e.response.json()
         detail = body.get("error", {}).get("message", "")
     except Exception:
+        log.debug("reading API error detail failed", exc_info=True)
         detail = (getattr(e, "message", "") or str(e))[:400]
     return f"{name} API error {e.status_code}: {detail or 'unknown error'}"

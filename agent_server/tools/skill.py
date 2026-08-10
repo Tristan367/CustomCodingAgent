@@ -1,8 +1,11 @@
 """Skill tool — on-demand loading of SKILL.md files."""
 
+import logging
 from pathlib import Path
 
 from agent_server.tools.base import ToolContext, ToolResult
+
+log = logging.getLogger(__name__)
 
 SKILL_DIRS = [
     Path.home() / ".config" / "codeagent" / "skills",
@@ -86,5 +89,5 @@ def _first_para(p: Path) -> str:
         if lines:
             return lines[0][:80]
     except Exception:
-        pass
+        log.debug("reading skill file %s failed", p, exc_info=True)
     return "..."

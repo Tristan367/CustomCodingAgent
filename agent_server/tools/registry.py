@@ -2,6 +2,7 @@
 
 import asyncio
 import inspect
+import logging
 from collections.abc import Awaitable, Callable, Iterable
 from dataclasses import dataclass, field
 from typing import Any, Literal
@@ -45,6 +46,8 @@ class Tool:
             },
         }
 
+
+log = logging.getLogger(__name__)
 
 TOOLS: dict[str, Tool] = {}
 _custom_tool_names: set[str] = set()
@@ -516,6 +519,8 @@ async def execute_tool(
         result = ToolResult(output=str(result), title=name)
     if not result.title:
         result = ToolResult(output=result.output, is_error=result.is_error, title=name)
+    if result.is_error:
+        log.warning("tool %s failed: %s", name, result.output[:200])
     return result
 
 

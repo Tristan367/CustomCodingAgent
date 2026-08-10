@@ -19,6 +19,7 @@ a hard failure here, so the conversion below is the whole point of the module:
 """
 
 import json
+import logging
 from collections.abc import AsyncIterator
 
 import anthropic
@@ -34,6 +35,7 @@ from agent_server.providers.base import (
     normalize_finish,
 )
 
+log = logging.getLogger(__name__)
 # Which thinking parameter a model accepts. Getting this wrong is a 400, and
 # the two are mutually exclusive:
 #
@@ -208,6 +210,7 @@ class AnthropicProvider(Provider):
             yield {"type": "error", "message": _describe(e)}
             return
         except Exception as e:
+            log.warning("provider %s request failed", self.name, exc_info=True)
             yield {"type": "error", "message": f"{type(e).__name__}: {e}"}
             return
 

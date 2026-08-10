@@ -96,3 +96,34 @@ def test_forget_session_drops_the_history():
     assert "s" in agent._doom_history
     agent.forget_session("s")
     assert "s" not in agent._doom_history
+
+
+def test_loop_notice_quotes_the_result_the_model_ignored():
+    """A looping model has usually stopped reading the result, so show it."""
+    from agent_server.agent import _doom_message
+
+    msg = _doom_message("grep", "no matches found in src/")
+    assert "no matches found in src/" in msg
+    # And it must say who is speaking: an unattributed correction arriving
+    # mid-turn looks like an injected instruction.
+    assert "not a prompt injection" in msg
+    assert "system-interrupt" in msg
+
+
+def test_loop_notice_survives_having_no_previous_output():
+    from agent_server.agent import _doom_message
+
+    assert "grep" in _doom_message("grep", "")
+
+
+def test_last_output_for_picks_the_most_recent():
+    from agent_server.agent import _last_output_for
+
+    rows = [
+        {"role": "tool", "tool_name": "grep", "content": "old"},
+        {"role": "assistant", "content": "thinking"},
+        {"role": "tool", "tool_name": "read", "content": "other tool"},
+        {"role": "tool", "tool_name": "grep", "content": "newest"},
+    ]
+    assert _last_output_for(rows, "grep") == "newest"
+    assert _last_output_for(rows, "bash") == ""

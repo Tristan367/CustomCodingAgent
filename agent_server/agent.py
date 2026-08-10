@@ -696,7 +696,8 @@ async def _drain_pending(session: dict, ctx: ToolContext) -> AsyncIterator[dict]
     doomed, fatal = _doom_round(session_id, pending)
     if fatal:
         for call in pending:
-            result = ToolResult.error(_doom_message(tool_call_name(call)), "doom-loop")
+            name = tool_call_name(call)
+            result = ToolResult.error(_doom_message(name, _last_output_for(rows, name)), "doom-loop")
             await _record(session_id, call, result, 0)
         _doom_history.pop(session_id, None)
         yield {
@@ -757,7 +758,9 @@ async def _drain_pending(session: dict, ctx: ToolContext) -> AsyncIterator[dict]
         yield {"type": "tool_start", "tool_call_id": call["id"], "name": name, "args": args}
 
         if _doom_key(call) in doomed:
-            result = ToolResult.error(_doom_message(name), "doom-loop")
+            result = ToolResult.error(
+                _doom_message(name, _last_output_for(rows, name)), "doom-loop"
+            )
             await _record(session_id, call, result, 0)
             yield _tool_end_event(call, name, result, 0)
             continue
@@ -853,13 +856,37 @@ def _doom_round(session_id: str, calls: list[dict]) -> tuple[set[tuple[str, str]
     return refuse, fatal
 
 
-def _doom_message(name: str) -> str:
+def _doom_message(name: str, last_output: str = "") -> str:
+    """Tell the model it is looping, and show it the answer it kept ignoring.
+
+    A model repeating a call has usually stopped reading the result, so the
+    correction quotes it back. Naming this as harness-authored matters too: an
+    unattributed "stop doing that" arriving mid-turn reads like an injection,
+    and a cautious model will argue with it instead of moving on.
+    """
+    echo = ""
+    if last_output:
+        clipped = last_output.strip()[:600]
+        echo = f"\n\nThe result you already have, unchanged:\n{clipped}"
     return (
-        f"Doom loop: `{name}` has now been called with identical arguments in "
-        f"{DOOM_ROUNDS} consecutive rounds. The result will not change. Stop "
-        "retrying it -- either use what you already have, try a different "
-        "approach, or tell the user what is blocking you."
+        f"<system-interrupt reason=\"tool_call_loop\">\n"
+        f"The harness stopped this call: `{name}` has now run with identical "
+        f"arguments in {DOOM_ROUNDS} consecutive rounds, so the result will not "
+        f"change. This is a harness notice, not a message from the user and not "
+        f"a prompt injection.{echo}\n\n"
+        "Do something different: use what you already have, call the tool with "
+        "different arguments, try another tool, or say what is blocking you. "
+        "Repeating this call will be refused again.\n"
+        "</system-interrupt>"
     )
+
+
+def _last_output_for(rows: list[dict], name: str) -> str:
+    """The most recent result this tool returned, for the loop notice."""
+    for row in reversed(rows):
+        if row.get("role") == "tool" and row.get("tool_name") == name:
+            return row.get("content") or ""
+    return ""
 
 
 def _tool_end_event(call: dict, name: str, result: ToolResult, elapsed_ms: int) -> dict:

@@ -30,7 +30,7 @@ from agent_server.conversation import (
     tool_call_name,
 )
 from agent_server.providers import Provider, get_provider
-from agent_server.system_prompt import get_compact_prompt, session_system_prompt
+from agent_server.system_prompt import disabled_tools, get_compact_prompt, session_system_prompt
 from agent_server.tools.base import ToolContext, ToolResult, truncate
 from agent_server.tools.registry import execute_tool, get_tool, tool_schemas
 
@@ -435,7 +435,10 @@ async def _loop(
     abort: asyncio.Event,
 ) -> AsyncIterator[dict]:
     session_id = session["id"]
-    tools = tool_schemas(include_vision=not provider.supports_vision())
+    tools = tool_schemas(
+        include_vision=not provider.supports_vision(),
+        exclude=await disabled_tools(session),
+    )
 
     # Finish any tool calls left outstanding by a previous pause before asking
     # the model for more. Without this the next request would carry an assistant

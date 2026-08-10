@@ -76,3 +76,36 @@ def test_drift_names_the_replacement_for_a_removed_tool():
 
 def test_drift_ignores_tools_that_still_exist():
     assert sp.prompt_drift("Use `read` then `edit`, and `browser` to check.") == []
+
+
+async def test_disabled_tools_survive_a_body_edit(clean_prompts):
+    """Saving the text must not clear the profile's tool selection.
+
+    save_prompt defaulted disabled_tools to "" and the upsert wrote it every
+    time, so editing the prompt -- or the startup refresh touching it -- reset
+    the selection to "everything on" without saying so.
+    """
+    await db.save_prompt("default", "body one", "system", "capture,websearch")
+    await db.save_prompt("default", "body two")
+
+    row = await db.get_prompt("default")
+    assert row["body"] == "body two"
+    assert row["disabled_tools"] == "capture,websearch"
+
+
+async def test_disabled_tools_reaches_the_schema_list(clean_prompts):
+    from agent_server.tools.registry import tool_schemas
+
+    await db.save_prompt("default", "b", "system", "capture,websearch")
+    off = await sp.disabled_tools({"id": "s", "prompt_profile": "default", "prompt_custom": 0})
+
+    names = {s["function"]["name"] for s in tool_schemas(exclude=off)}
+    assert "capture" not in names
+    assert "websearch" not in names
+    assert "read" in names
+
+
+async def test_a_session_with_its_own_prompt_keeps_every_tool(clean_prompts):
+    await db.save_prompt("default", "b", "system", "capture")
+    off = await sp.disabled_tools({"id": "s", "prompt_profile": "default", "prompt_custom": 1})
+    assert off == set()

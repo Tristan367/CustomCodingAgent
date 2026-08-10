@@ -1590,3 +1590,23 @@ kbd {
 }
 .drift-banner p { margin: 0; }
 .drift-banner p + p { margin-top: var(--s1); }
+
+/* ── Per-profile tool selection ──────────────────────────────────────────── */
+.tool-toggles { margin-top: var(--s3); }
+.tool-toggles > summary {
+  cursor: pointer;
+  font-size: var(--fs-small);
+  color: var(--text-dim);
+  padding: var(--s2) 0;
+}
+.tool-toggles > summary:hover { color: var(--text); }
+.tool-toggles > summary .hint { margin-left: var(--s2); }
+.tool-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(200px, 1fr));
+  gap: var(--s1) var(--s3);
+  margin-top: var(--s2);
+}
+.tool-grid .checkbox-label { display: flex; align-items: baseline; gap: var(--s2); }
+.tool-grid code { color: var(--accent); }
+.tool-grid .hint { margin: 0; }

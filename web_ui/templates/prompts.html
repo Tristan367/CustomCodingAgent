@@ -46,6 +46,33 @@
         </div>
         <textarea name="body" id="prompt-body" rows="20" class="prompt-textarea"
                   spellcheck="false">{{ body }}</textarea>
+
+        {% if selected.startswith('system:') %}
+        {% set off = disabled_tools.get(selected, []) %}
+        <details class="tool-toggles" {% if off %}open{% endif %}>
+            <summary>
+                Tools for this profile
+                <span class="hint">
+                    {{ tools | length - off | length }} of {{ tools | length }} on
+                </span>
+            </summary>
+            <p class="hint">
+                Every schema is sent on every request, so a tool this profile will
+                never use costs tokens each turn and is one more thing to pick
+                wrongly.
+            </p>
+            <div class="tool-grid">
+                {% for t in tools %}
+                <label class="checkbox-label" title="{{ t.description[:160] }}">
+                    <input type="checkbox" name="tool" value="{{ t.name }}"
+                           {% if t.name not in off %}checked{% endif %}>
+                    <code>{{ t.name }}</code>
+                    <span class="hint">~{{ t.tokens }}t{% if t.pause %} · asks{% endif %}</span>
+                </label>
+                {% endfor %}
+            </div>
+        </details>
+        {% endif %}
     </form>
     <script>
         /* A prompt is never overwritten once edited, so it can keep describing

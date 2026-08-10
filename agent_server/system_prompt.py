@@ -298,6 +298,21 @@ def prompt_drift(body: str) -> list[str]:
 
 
 
+async def disabled_tools(session: dict) -> set[str]:
+    """Tool names the session's prompt profile switches off.
+
+    Every tool's schema is sent on every request, so a tool nobody in this
+    profile will ever use is a standing charge on each turn and one more option
+    for the model to pick wrongly. The column has existed since the prompts
+    table was created and nothing ever read it.
+    """
+    if session.get("prompt_custom"):
+        return set()
+    row = await db.get_prompt(session.get("prompt_profile") or PROTECTED_PROMPT)
+    raw = (row or {}).get("disabled_tools") or ""
+    return {name.strip() for name in raw.split(",") if name.strip()}
+
+
 async def prompt_body(name: str, kind: str = SYSTEM) -> str:
     """The text of a named prompt, falling back to `default` if it is gone."""
     row = await db.get_prompt(name, kind)

@@ -759,16 +759,22 @@ async def get_prompt(name: str, kind: str = "system") -> dict | None:
     )
 
 
-async def save_prompt(name: str, body: str, kind: str = "system", disabled_tools: str = ""):
+async def save_prompt(
+    name: str, body: str, kind: str = "system", disabled_tools: str | None = None
+):
     # Textareas submit CRLF per the HTML spec; storing that would make an
     # untouched round-trip through the editor look like an edit.
     body = body.replace("\r\n", "\n").strip()
+    # None means "leave the tool selection alone". It used to default to "",
+    # and the upsert wrote that unconditionally, so saving an edit to the text
+    # -- or the startup refresh touching an unedited prompt -- silently cleared
+    # which tools the profile had switched off.
     await _execute(
         "INSERT INTO prompts (kind, name, body, disabled_tools, updated_at) VALUES (?,?,?,?,?)"
         " ON CONFLICT(kind, name) DO UPDATE SET body = excluded.body,"
-        " disabled_tools = excluded.disabled_tools,"
+        " disabled_tools = COALESCE(?, prompts.disabled_tools),"
         " updated_at = excluded.updated_at",
-        (kind, name, body, disabled_tools, _now()),
+        (kind, name, body, disabled_tools or "", _now(), disabled_tools),
     )
 
 

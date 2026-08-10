@@ -80,8 +80,14 @@ async def _prompts_context(
                 "pause": t.pause or "",
                 "tokens": len(json.dumps(t.schema())) // 4,
             }
-            for t in TOOLS.values()
+            for t in sorted(TOOLS.values(), key=lambda t: t.name)
         ],
+        "disabled_tools": {
+            f"{p['kind']}:{p['name']}": [
+                n.strip() for n in (p["disabled_tools"] or "").split(",") if n.strip()
+            ]
+            for p in prompts
+        },
         "saved": saved,
         "moved": moved,
         "sound_enabled": await _sound_enabled(),
@@ -104,9 +110,14 @@ async def save_prompts(request: Request):
     name = name.strip()
     body = str(form.get("body", "")).strip()
 
+    # Unchecked boxes are simply absent from the form, so the set of tools to
+    # switch off is everything the registry has minus everything ticked.
+    enabled = {str(v) for v in form.getlist("tool")}
+    off = ",".join(sorted(n for n in TOOLS if n not in enabled))
+
     moved = 0
     if name and body and kind in (SYSTEM, COMPACTION):
-        await db.save_prompt(name, body, kind, "")
+        await db.save_prompt(name, body, kind, off if kind == SYSTEM else None)
         if kind == SYSTEM:
             moved = await _propagate(name)
 

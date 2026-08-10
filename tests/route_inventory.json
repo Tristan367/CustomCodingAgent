@@ -63,13 +63,6 @@
     "name": "delete_secret"
   },
   {
-    "path": "/_init",
-    "methods": [
-      "POST"
-    ],
-    "name": "init_project"
-  },
-  {
     "path": "/_messages/{session_id}",
     "methods": [
       "GET"

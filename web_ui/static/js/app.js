@@ -1579,29 +1579,6 @@ async function uploadSound(input) {
   input.value = '';
 }
 
-async function initProject() {
-  const dir = await ui.prompt('Which directory should be scanned?', {
-    title: 'Generate project rules',
-    value: '~/',
-    placeholder: '~/projects/thing',
-    confirmLabel: 'Scan',
-  });
-  if (dir === null) return;
-  const form = new FormData();
-  form.append('dir', dir || '~/');
-  try {
-    const r = await fetch('/_init', { method: 'POST', body: form });
-    const data = await r.json();
-    if (data.ok) {
-      ui.alert('Wrote ' + data.path + '\n\n' + data.preview, 'AGENTS.md written');
-    } else {
-      ui.alert(data.error || 'Failed', 'Could not write AGENTS.md');
-    }
-  } catch (e) {
-    ui.alert(String(e), 'Could not write AGENTS.md');
-  }
-}
-
 /* ── Drafts and scroll position ──────────────────────────────────────────── */
 
 const Persist = {

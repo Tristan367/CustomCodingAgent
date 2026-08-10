@@ -8,7 +8,7 @@ offset and could split a group; this one only ever cuts on a group boundary.
 """
 
 from agent_server import database as db
-from agent_server.config import MODELS
+from agent_server.config import model_info
 from agent_server.conversation import (
     build_messages,
     normalize_tool_calls,
@@ -144,10 +144,7 @@ async def _summariser_messages(
 
 
 def _context_limit(session: dict) -> int:
-    for m in MODELS:
-        if m["id"] == session.get("model"):
-            return m["context"]
-    return 128_000
+    return model_info(session.get("model", ""))["context"]
 
 
 async def drop_closed_reasoning(kept: list[dict]) -> int:

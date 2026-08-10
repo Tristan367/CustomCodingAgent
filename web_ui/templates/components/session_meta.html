@@ -78,7 +78,14 @@
                     <form onsubmit="event.preventDefault();applySessionSettings(this)">
                         <label>Model
                             <select name="model">
-                                {% for m in models %}
+                                {# A session may be running a model this list no longer
+                                   offers -- a custom endpoint's, or one whose key was
+                                   removed. Show it rather than silently reassigning the
+                                   session to whatever happens to be first. #}
+                                {% if session.model not in models | map(attribute='id') | list %}
+                                <option value="{{ session.model }}" selected>{{ session.model }} (current)</option>
+                                {% endif %}
+                                {% for m in models if not m.needs_model_id %}
                                 <option value="{{ m.id }}" {% if session.model == m.id %}selected{% endif %}>{{ m.name }}</option>
                                 {% endfor %}
                             </select>

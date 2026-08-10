@@ -58,10 +58,33 @@ function initSession() {
 document.addEventListener('DOMContentLoaded', () => {
   Notifier.init();
   initSession();
+  initHomePage();
   refreshTabBar();
   Notifier.poll();
   setInterval(() => Notifier.tick(), 1000);
 });
+
+/* Home-page wiring. Separate from initSession because the two pages never
+   coexist, and because this must re-run after an htmx swap replaces the form. */
+function initHomePage() {
+  const select = document.getElementById('model-select');
+  if (!select || select.dataset.bound) return;
+  select.dataset.bound = '1';
+
+  // A custom endpoint knows its own model ids; nothing here can list them.
+  const customModel = document.getElementById('custom-model-input');
+  const sync = () => {
+    const opt = select.selectedOptions[0];
+    const needed = opt && opt.dataset.needsModelId === '1';
+    customModel.hidden = !needed;
+    customModel.required = !!needed;
+  };
+  select.addEventListener('change', () => {
+    sync();
+    if (!customModel.hidden) customModel.focus();
+  });
+  sync();
+}
 
 window.addEventListener('focus', () => {
   markSessionSeen();
@@ -84,6 +107,9 @@ document.addEventListener('htmx:afterSwap', (e) => {
     initSession();
     if (id === 'main-content') refreshTabBar();
   }
+  // The home page is re-rendered wholesale by every settings save, which
+  // replaces the model select and drops its listener with it.
+  if (id === 'main-content' || id === 'home-page') initHomePage();
 });
 
 /* Pull the transcript fresh from the server. Used after following a run that

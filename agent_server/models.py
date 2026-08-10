@@ -13,6 +13,7 @@ class SessionCreate(BaseModel):
     provider: str = DEFAULT_PROVIDER
     model: str = DEFAULT_MODEL
     prompt_profile: str = "default"
+    compact_profile: str = "default"
     thinking_effort: str | None = None
 
 
@@ -22,7 +23,12 @@ class SessionUpdate(BaseModel):
     model: str | None = None
     thinking_effort: str | None = None
     prompt_profile: str | None = None
+    # Was missing, so the session settings form's Summariser dropdown posted a
+    # field pydantic dropped on the floor: the control looked like it worked
+    # and changed nothing. database.SESSION_FIELDS accepted it all along.
+    compact_profile: str | None = None
     bash_auto_approve: int | None = None
+    auto_compact: int | None = None
     is_archived: int | None = None
 
 

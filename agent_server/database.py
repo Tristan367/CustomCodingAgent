@@ -542,10 +542,10 @@ def _price(usage_json: str, pricing: dict) -> tuple[dict, float]:
 
 async def get_session_usage(session_id: str) -> dict:
     """Token totals, spend, and live context size for one session."""
-    from agent_server.config import COMPACT_THRESHOLD_TOKENS, MODELS_BY_ID
+    from agent_server.config import COMPACT_THRESHOLD_TOKENS, model_info
 
     session = await get_session(session_id)
-    pricing = MODELS_BY_ID.get((session or {}).get("model", ""), {})
+    pricing = model_info((session or {}).get("model", ""))
     rows = await _fetchall(
         "SELECT usage FROM messages WHERE session_id = ? AND usage IS NOT NULL",
         (session_id,),
@@ -611,7 +611,10 @@ async def get_session_usage(session_id: str) -> dict:
 
     totals["context"] = context
     totals["threshold"] = (session or {}).get("compact_threshold") or COMPACT_THRESHOLD_TOKENS
-    totals["max_context"] = pricing.get("context", 1_000_000)
+    totals["max_context"] = pricing["context"]
+    # A custom endpoint can serve anything, so its cost is an unpriced zero
+    # rather than a measured one. The UI has to be able to tell them apart.
+    totals["priced"] = pricing["priced"]
     totals["percent"] = round(100 * context / totals["threshold"], 1) if totals["threshold"] else 0
     totals["cache_hit_rate"] = (
         round(100 * totals["cached"] / totals["input"], 1) if totals["input"] else 0

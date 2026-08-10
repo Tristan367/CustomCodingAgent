@@ -12,11 +12,19 @@ _providers: dict[str, Provider] = {
 
 
 def get_provider(name: str) -> Provider:
-    # custom:N name prefix
-    if name.startswith("custom:"):
-        return _providers.get(name, _providers["deepseek"])
+    """The adapter for a provider key, or ValueError.
+
+    An unknown `custom:` key used to fall back to DeepSeek, which silently sent
+    the conversation to a different vendor, on a different key, and billed it.
+    A missing endpoint is a configuration error and has to say so.
+    """
     provider = _providers.get(name)
     if provider is None:
+        if name.startswith("custom:"):
+            raise ValueError(
+                f"No custom endpoint named '{name.removeprefix('custom:')}'. "
+                "Add it on the home page, or point this session at another model."
+            )
         raise ValueError(f"Unknown provider: {name}")
     return provider
 
@@ -31,12 +39,24 @@ def get_provider_settings_fields() -> list[dict]:
 
 
 async def load_custom_endpoint_providers():
-    """Called at startup to register saved custom endpoints."""
+    """(Re)register every saved custom endpoint.
+
+    Built into a separate dict and swapped in at the end, so there is never a
+    moment when a saved endpoint is missing from the registry. Rebuilding in
+    place left a window in which an in-flight turn could not find its provider.
+    """
     from agent_server import database as db_async
-    for row in await db_async.list_custom_endpoints():
-        if row["base_url"]:
-            key = f"custom:{row['name']}"
-            _providers[key] = CustomOpenAIProvider(row["name"], row["base_url"])
+
+    fresh = {
+        f"custom:{row['name']}": CustomOpenAIProvider(
+            row["name"], row["base_url"], row["api_key"]
+        )
+        for row in await db_async.list_custom_endpoints()
+        if row["base_url"]
+    }
+    for key in [k for k in _providers if k.startswith("custom:")]:
+        del _providers[key]
+    _providers.update(fresh)
 
 
 __all__ = [

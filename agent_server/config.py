@@ -9,9 +9,11 @@ from dotenv import load_dotenv
 load_dotenv()
 
 BASE_DIR = Path(__file__).resolve().parent.parent
-DATA_DIR = BASE_DIR / "data"
-DATA_DIR.mkdir(exist_ok=True)
-DB_PATH = DATA_DIR / "agent.db"
+# Overridable so the app can be run against a scratch database -- smoke-testing
+# a change otherwise means pointing it at the real conversation history.
+DATA_DIR = Path(os.getenv("CODEAGENT_DATA_DIR") or BASE_DIR / "data")
+DATA_DIR.mkdir(parents=True, exist_ok=True)
+DB_PATH = Path(os.getenv("CODEAGENT_DB") or DATA_DIR / "agent.db")
 
 UPLOAD_DIR = Path(os.getenv("UPLOAD_DIR", "/tmp/codeagent_uploads"))
 UPLOAD_DIR.mkdir(parents=True, exist_ok=True)
@@ -108,18 +110,56 @@ MODELS = [
         "price_in_miss": 0.80,
         "price_out": 4.0,
     },
-    {
-        "id": "custom",
-        "name": "Custom (type model ID)",
-        "provider": "custom",
-        "context": 131_072,
-        "price_in_hit": 0,
-        "price_in_miss": 0,
-        "price_out": 0,
-    },
 ]
 
 MODELS_BY_ID = {m["id"]: m for m in MODELS}
+
+# What a model whose pricing we do not know is assumed to cost and hold. A
+# custom endpoint can serve anything, so the honest answer is "unknown"; these
+# keep the context ring and the cost figure from reading as authoritative zeros.
+UNKNOWN_MODEL = {
+    "context": 131_072,
+    "price_in_hit": 0.0,
+    "price_in_miss": 0.0,
+    "price_out": 0.0,
+    "priced": False,
+}
+
+
+def model_info(model_id: str) -> dict:
+    """Context window and pricing for a model, or the unknown-model defaults."""
+    entry = MODELS_BY_ID.get(model_id)
+    return {**entry, "priced": True} if entry else {**UNKNOWN_MODEL, "id": model_id}
+
+
+def provider_for_model(model_id: str) -> str:
+    """Which provider serves this model.
+
+    The provider is a property of the model, not a separate choice. Recording
+    them independently is how a session came to hold `claude-opus-5` alongside
+    `provider="deepseek"`: the creation form had a Model dropdown, no provider
+    field at all, and the database default filled in the rest.
+    """
+    entry = MODELS_BY_ID.get(model_id)
+    return entry["provider"] if entry else DEFAULT_PROVIDER
+
+
+def resolve_model_choice(choice: str, custom_model: str = "") -> tuple[str, str]:
+    """Turn the Model dropdown's value into a (provider, model) pair.
+
+    Built-in models post their own id. A custom endpoint posts `custom:NAME`
+    and carries the model id in a free-text field beside it, because only the
+    endpoint's operator knows what it serves.
+    """
+    choice = (choice or "").strip()
+    if choice.startswith("custom:"):
+        model = custom_model.strip()
+        if not model:
+            raise ValueError("Type the model id the custom endpoint expects.")
+        return choice, model
+    if choice not in MODELS_BY_ID:
+        raise ValueError(f"Unknown model: {choice}")
+    return MODELS_BY_ID[choice]["provider"], choice
 
 # Offer compaction once a session's live context passes this many tokens.
 # Overridable per session; the ceiling is the model's context window.

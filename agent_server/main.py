@@ -22,6 +22,7 @@ from agent_server.config import (
     MODELS,
     REASONING_EFFORTS,
     THRESHOLD_STEPS,
+    resolve_model_choice,
     stt_available,
 )
 from agent_server.conversation import (
@@ -32,7 +33,12 @@ from agent_server.conversation import (
 )
 from agent_server.database import close as close_db
 from agent_server.database import init_db
-from agent_server.providers import get_provider, get_provider_settings_fields, list_providers
+from agent_server.providers import (
+    _providers,
+    get_provider,
+    get_provider_settings_fields,
+    list_providers,
+)
 from agent_server.routes import chat, sessions, tts
 from agent_server.stt import availability as stt_availability
 from agent_server.system_prompt import (
@@ -260,7 +266,9 @@ async def _session_context(session: dict) -> dict:
         "session": session,
         "messages": messages,
         "compactions": await db.get_compactions(session["id"]),
-        "models": MODELS,
+        # Only models that can actually authenticate, so switching to one does
+        # not produce a session that fails on its next message.
+        "models": _offerable_models(),
         "profiles": await list_prompt_names(),
         "compact_profiles": await list_prompt_names(COMPACTION),
         "efforts": REASONING_EFFORTS,
@@ -348,27 +356,8 @@ async def _home_context(error: str = "", clone_id: str = "") -> dict:
             f_list.append(dict(f, value=("\u2022" * 12), has_value=bool(raw) and is_pw, preview=preview))
         provider_settings.append({"name": ps["name"], "fields": f_list})
 
-    # Filter models: only show models for providers that have a key set
-    has_key = {}
-    for p in get_provider_settings_fields():
-        key_name = p["fields"][0]["key"]
-        db_val = bool(settings.get(key_name))
-        # DeepSeek and OpenRouter check both env var and DB
-        if p["key"] == "deepseek":
-            has_key["deepseek"] = bool(os.getenv("DEEPSEEK_API_KEY", "")) or db_val
-        elif p["key"] == "anthropic":
-            has_key["anthropic"] = bool(os.getenv("ANTHROPIC_API_KEY", "")) or db_val
-        else:
-            has_key[p["key"]] = db_val
     custom_endpoints = await db.list_custom_endpoints()
-    custom_has_key = any(ep["base_url"] for ep in custom_endpoints)
-    filtered_models = [m for m in MODELS if
-        (m["provider"] == "deepseek" and has_key.get("deepseek")) or
-        (m["provider"] == "openrouter" and has_key.get("openrouter")) or
-        (m["provider"] == "anthropic" and has_key.get("anthropic")) or
-        (m["provider"] == "custom" and custom_has_key) or
-        m["provider"] not in ("deepseek", "openrouter", "anthropic", "custom")
-    ]
+    filtered_models = _offerable_models()
 
     return {
         "sessions": await db.list_sessions(),
@@ -701,6 +690,39 @@ async def save_tts_settings(
     return {"ok": True}
 
 
+def _offerable_models() -> list[dict]:
+    """Models that can actually be run right now, newest-configured last.
+
+    A model is offered only when its provider has credentials, because picking
+    one that cannot authenticate produces a session that fails on its first
+    message with no hint as to why. Each configured custom endpoint contributes
+    one entry: the provider is a property of the choice, so the form asks for
+    one thing rather than letting a model and a provider disagree.
+
+    The credential test is the provider's own `has_credentials`, which already
+    knows about environment variables, so this no longer restates the mapping
+    from provider name to env var and gets it wrong for new providers.
+    """
+    offered = []
+    for model in MODELS:
+        try:
+            provider = get_provider(model["provider"])
+        except ValueError:
+            continue
+        if provider.has_credentials():
+            offered.append(model)
+
+    for key, provider in _providers.items():
+        if key.startswith("custom:") and provider.has_credentials():
+            offered.append({
+                "id": key,
+                "name": f"{provider.name} (custom endpoint)",
+                "provider": key,
+                "needs_model_id": True,
+            })
+    return offered
+
+
 def _clamp(raw: str, low: float, high: float, fallback: float) -> float:
     try:
         return min(max(float(raw), low), high)
@@ -725,10 +747,20 @@ async def create_session_form(
             request=request, name="index_content.html",
             context=await _home_context(f"Not a directory: {project_dir}"),
         )
-    effective_model = custom_model.strip() if model == "custom" and custom_model.strip() else model
+    # The provider comes from the model. Leaving it to the database default is
+    # how picking Claude produced a session that sent `claude-opus-5` to
+    # api.deepseek.com -- this form never sent a provider at all.
+    try:
+        provider, effective_model = resolve_model_choice(model, custom_model)
+    except ValueError as e:
+        return templates.TemplateResponse(
+            request=request, name="index_content.html",
+            context=await _home_context(str(e)),
+        )
     session = await db.create_session(
         name=name.strip() or directory.name,
         project_dir=str(directory.resolve()),
+        provider=provider,
         model=effective_model,
         prompt_profile=prompt_profile,
         compact_profile=compact_profile,

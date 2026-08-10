@@ -12,7 +12,7 @@ from agent_server import database as db
 from agent_server import stt as stt_service
 from agent_server import vision as vision_engine
 from agent_server.compaction import compact_session_events, should_offer_compaction
-from agent_server.config import MIN_COMPACT_THRESHOLD, MODELS_BY_ID, UPLOAD_DIR
+from agent_server.config import MIN_COMPACT_THRESHOLD, UPLOAD_DIR, model_info
 from agent_server.models import ChatRequest, CompactProfileRequest, ResolveRequest
 from agent_server.system_prompt import (
     COMPACTION,
@@ -354,7 +354,7 @@ async def set_compact_threshold(
 ):
     """Raise or lower the point at which compaction is offered."""
     session = await _require_session(session_id)
-    ceiling = MODELS_BY_ID.get(session["model"], {}).get("context", 1_000_000)
+    ceiling = model_info(session["model"])["context"]
     value = max(MIN_COMPACT_THRESHOLD, min(int(threshold), ceiling))
     await db.update_session(session_id, compact_threshold=value)
     agent.snooze_compaction(session_id)

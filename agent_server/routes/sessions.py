@@ -4,10 +4,10 @@ from fastapi import APIRouter, HTTPException
 
 from agent_server import agent
 from agent_server import database as db
-from agent_server.config import MODELS_BY_ID, REASONING_EFFORTS
+from agent_server.config import MODELS_BY_ID, REASONING_EFFORTS, provider_for_model
 from agent_server.models import SessionCreate, SessionUpdate
 from agent_server.providers import list_providers
-from agent_server.system_prompt import list_prompt_names
+from agent_server.system_prompt import COMPACTION, list_prompt_names
 
 router = APIRouter(prefix="/api/sessions", tags=["sessions"])
 
@@ -15,10 +15,25 @@ router = APIRouter(prefix="/api/sessions", tags=["sessions"])
 async def _validate(body: SessionCreate | SessionUpdate):
     if body.provider and body.provider not in list_providers():
         raise HTTPException(400, f"Unknown provider: {body.provider}")
-    if body.model and body.model not in MODELS_BY_ID:
+    # A custom endpoint serves whatever its operator configured, so its model
+    # ids cannot be checked against the built-in table. Everything else must be
+    # a model this app knows how to price and size a context window for.
+    known_model = body.model in MODELS_BY_ID
+    custom_provider = (body.provider or "").startswith("custom:")
+    if body.model and not known_model and not custom_provider:
         raise HTTPException(400, f"Unknown model: {body.model}")
+    # A model implies its provider. Letting the two be set independently is how
+    # a session ends up asking DeepSeek for an Anthropic model.
+    if known_model and body.provider and MODELS_BY_ID[body.model]["provider"] != body.provider:
+        raise HTTPException(
+            400,
+            f"{body.model} is served by {MODELS_BY_ID[body.model]['provider']}, "
+            f"not {body.provider}.",
+        )
     if body.prompt_profile and body.prompt_profile not in await list_prompt_names():
         raise HTTPException(400, f"Unknown prompt profile: {body.prompt_profile}")
+    if body.compact_profile and body.compact_profile not in await list_prompt_names(COMPACTION):
+        raise HTTPException(400, f"Unknown summariser profile: {body.compact_profile}")
     if body.thinking_effort and body.thinking_effort not in REASONING_EFFORTS:
         raise HTTPException(400, f"Unknown thinking effort: {body.thinking_effort}")
 
@@ -29,9 +44,10 @@ async def create_session(body: SessionCreate):
     return await db.create_session(
         name=body.name.strip() or "Untitled",
         project_dir=body.project_dir,
-        provider=body.provider,
+        provider=body.provider or provider_for_model(body.model),
         model=body.model,
         prompt_profile=body.prompt_profile,
+        compact_profile=body.compact_profile,
         thinking_effort=body.thinking_effort,
     )
 
@@ -55,6 +71,12 @@ async def update_session(session_id: str, body: SessionUpdate):
         raise HTTPException(404, "Session not found")
     await _validate(body)
     updates = {k: v for k, v in body.model_dump(exclude_unset=True).items() if v is not None}
+    # Switching model switches provider with it. The settings form only sends a
+    # model, so without this a session moved to Claude kept asking DeepSeek for
+    # it -- the same mismatch the creation form used to produce.
+    if updates.get("model") and "provider" not in updates:
+        if updates["model"] in MODELS_BY_ID:
+            updates["provider"] = provider_for_model(updates["model"])
     # An empty thinking_effort means "fall back to the default".
     if "thinking_effort" in updates and not updates["thinking_effort"]:
         updates["thinking_effort"] = None

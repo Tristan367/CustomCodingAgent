@@ -21,7 +21,7 @@ from datetime import UTC, datetime
 
 from agent_server import cache_guard, permissions
 from agent_server import database as db
-from agent_server.config import CACHE_WARN_TOKENS, MAX_TOOL_RESULT_CHARS, MODELS_BY_ID
+from agent_server.config import CACHE_WARN_TOKENS, MAX_TOOL_RESULT_CHARS, model_info
 from agent_server.conversation import (
     build_messages,
     normalize_tool_calls,
@@ -494,7 +494,7 @@ async def _loop(
             and not expected
             and session_id not in _cache_warning_ack
         ):
-            model = MODELS_BY_ID.get(session["model"], {})
+            model = model_info(session["model"])
             yield {
                 "type": "cache_warning",
                 "lost": forecast["billable"],

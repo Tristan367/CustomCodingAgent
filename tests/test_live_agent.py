@@ -3,7 +3,9 @@
 Skipped unless a key is configured. These exercise the exact paths that used to
 fail: a plain greeting, and a multi-round tool loop.
 
-Run: .venv/bin/python -m pytest tests/test_live_agent.py -q -s
+These bill a real account, so they are marked `live` and excluded by default.
+
+Run: .venv/bin/python -m pytest -m live tests/test_live_agent.py -q -s
 """
 
 import shutil
@@ -20,7 +22,7 @@ from agent_server import database as db
 from agent_server.conversation import build_messages
 from agent_server.providers import get_provider
 
-pytestmark = pytest.mark.asyncio
+pytestmark = [pytest.mark.asyncio, pytest.mark.live]
 
 
 @pytest.fixture

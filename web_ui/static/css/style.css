@@ -1575,3 +1575,18 @@ kbd {
   background: var(--bg-inset);
   color: var(--text);
 }
+
+/* A prompt describing tools that no longer exist. Not an error -- the prompt
+   still works -- but the model is being told to call something that is not
+   there, and the only other symptom is that it quietly behaves worse. */
+.drift-banner {
+  padding: var(--s2) var(--s3);
+  margin-bottom: var(--s2);
+  background: rgba(184, 144, 74, 0.08);
+  border: 1px solid var(--warn);
+  border-radius: var(--radius);
+  font-size: var(--fs-small);
+  color: var(--warn);
+}
+.drift-banner p { margin: 0; }
+.drift-banner p + p { margin-top: var(--s1); }

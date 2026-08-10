@@ -14,6 +14,7 @@ platform.
 import hashlib
 import os
 import platform
+import re
 import subprocess
 from pathlib import Path
 
@@ -221,27 +222,78 @@ _SHIPPED_HASHES = {
 }
 
 
-async def _refresh_untouched_builtins():
-    """Carry an improved built-in through to installs that never edited it.
+def _digest(body: str) -> str:
+    return hashlib.sha256(body.strip().encode()).hexdigest()
 
-    Seeding once meant a built-in froze at whatever shipped the day the database
-    was created, so later wording never reached anyone but new installs. A body
-    still matching something this app shipped was not written by the user and is
-    safe to move forward; anything else is theirs and is left alone.
+
+async def _refresh_one(name: str, starter: str, kind: str = SYSTEM):
+    """Move a built-in prompt forward unless the user has edited it.
+
+    "Untouched" is decided by remembering what this app last wrote, rather than
+    by checking the body against a hand-maintained list of hashes of everything
+    ever shipped. That list was the bug: a body it did not recognise was assumed
+    to be the user's, so an install whose prompt predated the list -- or was
+    edited once, years ago -- never received another improvement, silently. The
+    prompt in use here was still advertising a `screenshot` tool two rewrites
+    after it was deleted, and nothing anywhere said so.
     """
-    row = await db.get_prompt(PROTECTED_PROMPT, COMPACTION)
+    marker_key = f"prompt_shipped:{kind}:{name}"
+    row = await db.get_prompt(name, kind)
     if row is None:
-        await db.save_prompt(PROTECTED_PROMPT, COMPACT_PROMPT_DEFAULT.strip(), COMPACTION)
+        await db.save_prompt(name, starter.strip(), kind)
+        await db.set_setting(marker_key, _digest(starter))
+        return
 
+    body = row["body"]
+    marker = await db.get_setting(marker_key, "")
+    # _is_shipped is the bridge for databases created before markers existed.
+    untouched = _digest(body) == marker or (not marker and _is_shipped(body))
+    if untouched and body.strip() != starter.strip():
+        await db.save_prompt(name, starter.strip(), kind)
+    if untouched:
+        await db.set_setting(marker_key, _digest(starter))
+
+
+async def _refresh_untouched_builtins():
+    """Carry improved built-ins through to installs that never edited them."""
+    await _refresh_one(PROTECTED_PROMPT, COMPACT_PROMPT_DEFAULT, COMPACTION)
     for name, starter in STARTER_PROMPTS.items():
-        row = await db.get_prompt(name)
-        if row is None or (_is_shipped(row["body"]) and row["body"].strip() != starter.strip()):
-            await db.save_prompt(name, starter.strip())
+        await _refresh_one(name, starter)
 
 
 def _is_shipped(body: str) -> bool:
-    digest = hashlib.sha256(body.strip().encode()).hexdigest()
-    return digest in _SHIPPED_HASHES
+    return _digest(body) in _SHIPPED_HASHES
+
+
+# Tools this app used to have. A prompt naming one was written against a build
+# where it existed and has been left behind by an upgrade.
+RETIRED_TOOLS = {
+    "screenshot": "capture (desktop) or browser with a `shoot` step (web pages)",
+    "browser-goto": "browser, as a `goto` step",
+    "browser-click": "browser, as a `click` step",
+    "browser-fill": "browser, as a `fill` step",
+    "browser-screenshot": "browser, as a `shoot` step",
+    "browser-steps": "browser",
+}
+
+
+def prompt_drift(body: str) -> list[str]:
+    """Names in a prompt that the tool registry no longer answers to.
+
+    An edited prompt is never overwritten, which is correct -- but it also means
+    a prompt can go on describing tools that were removed, and nothing says so.
+    The model is then told to call something that does not exist, and the only
+    symptom is worse behaviour. This was not hypothetical: the prompt in use
+    here still advertised `screenshot` two rewrites after it was deleted.
+    """
+    from agent_server.tools.registry import TOOLS
+
+    found = set(re.findall(r"`([a-z][a-z0-9_-]*)`", body or ""))
+    return [
+        f"`{name}` no longer exists — use {RETIRED_TOOLS[name]}"
+        for name in sorted(found & RETIRED_TOOLS.keys())
+        if name not in TOOLS
+    ]
 
 
 

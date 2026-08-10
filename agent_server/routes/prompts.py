@@ -12,6 +12,7 @@ from agent_server.system_prompt import (
     PROTECTED_PROMPT,
     SYSTEM,
     build_system_prompt,
+    prompt_drift,
 )
 from agent_server.templating import templates
 from agent_server.tools.registry import TOOLS
@@ -64,6 +65,9 @@ async def _prompts_context(
         "groups": groups,
         "bodies": bodies,
         "selected": selected,
+        # Keyed by the same "kind:name" the picker uses, so the warning can
+        # follow the selection without another round trip.
+        "drift": {k: prompt_drift(v) for k, v in bodies.items() if prompt_drift(v)},
         "body": bodies.get(selected, ""),
         "protected": PROTECTED_PROMPT,
         # Subagent defaults

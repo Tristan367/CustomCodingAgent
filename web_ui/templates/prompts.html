@@ -41,9 +41,28 @@
             <button type="button" class="btn-danger" onclick="deletePrompt()"
                     id="delete-prompt">Delete</button>
         </div>
+        <div id="prompt-drift" class="drift-banner" {% if selected not in drift %}hidden{% endif %}>
+            {% if selected in drift %}{% for d in drift[selected] %}<p>{{ d }}</p>{% endfor %}{% endif %}
+        </div>
         <textarea name="body" id="prompt-body" rows="20" class="prompt-textarea"
                   spellcheck="false">{{ body }}</textarea>
     </form>
+    <script>
+        /* A prompt is never overwritten once edited, so it can keep describing
+           tools that have since been removed. Nothing else would say so. */
+        const PROMPT_DRIFT = {{ drift | tojson }};
+        function showDrift(key) {
+            const box = document.getElementById('prompt-drift');
+            const items = PROMPT_DRIFT[key];
+            box.textContent = '';
+            box.hidden = !items;
+            (items || []).forEach((text) => {
+                const p = document.createElement('p');
+                p.textContent = text;
+                box.appendChild(p);
+            });
+        }
+    </script>
 
     <section class="panel" style="margin-top:16px">
         <h2>Subagent defaults <span class="hint" style="font-weight:400">(applies to all sessions)</span></h2>
@@ -106,6 +125,7 @@
             lastSaved = bodyBox.value;
             pickerPrevious = picker.value;
             syncDelete();
+            showDrift(picker.value);
         });
 
         /* New prompts are of whichever kind is on screen, seeded from that

@@ -5,35 +5,28 @@ OpenAI-compatible endpoints use the base class directly.
 """
 
 import asyncio
-import os
 from collections.abc import AsyncIterator
 
 import openai
 from openai import AsyncOpenAI
 
-from agent_server.providers.base import Provider, StreamEvent, estimate_tokens
+from agent_server.providers.base import (
+    Provider,
+    StreamEvent,
+    blank_usage,
+    estimate_tokens,
+    normalize_finish,
+)
 
 
 class OpenAICompatibleProvider(Provider):
     """Base for any OpenAI-compatible API (DeepSeek, OpenRouter, custom, etc.)."""
 
-    base_url: str = ""          # set by subclass
-    env_key: str = ""           # DEEPSEEK_API_KEY, OPENROUTER_API_KEY, etc.
-    settings_key: str = ""      # DB settings row key
+    base_url: str = ""  # set by subclass
 
     def __init__(self):
         self._client: AsyncOpenAI | None = None
         self._client_key: str = ""
-
-    # ── credentials ────────────────────────────────────────────────────────
-    def api_key(self) -> str:
-        key = os.getenv(self.env_key, "").strip() if self.env_key else ""
-        if key:
-            return key
-        return _cached_db_key(self.settings_key)
-
-    def has_credentials(self) -> bool:
-        return bool(self.api_key())
 
     def _get_client(self) -> AsyncOpenAI:
         key = self.api_key()
@@ -45,12 +38,6 @@ class OpenAICompatibleProvider(Provider):
     # ── capabilities ───────────────────────────────────────────────────────
     def supports_vision(self) -> bool:
         return False
-
-    def settings_fields(self) -> list[dict]:
-        return []
-
-    def invalidate_key_cache(self):
-        _key_cache.pop(self.settings_key, None)
 
     def count_tokens(self, messages: list[dict]) -> int:
         return estimate_tokens(messages)
@@ -93,19 +80,7 @@ class OpenAICompatibleProvider(Provider):
         try:
             async for chunk in stream:
                 if getattr(chunk, "usage", None):
-                    u = chunk.usage
-                    details = getattr(u, "prompt_tokens_details", None)
-                    completion_details = getattr(u, "completion_tokens_details", None)
-                    yield {
-                        "type": "usage",
-                        "usage": {
-                            "prompt_tokens": u.prompt_tokens or 0,
-                            "completion_tokens": u.completion_tokens or 0,
-                            "total_tokens": u.total_tokens or 0,
-                            "cached_tokens": getattr(details, "cached_tokens", 0) or 0,
-                            "reasoning_tokens": getattr(completion_details, "reasoning_tokens", 0) or 0,
-                        },
-                    }
+                    yield {"type": "usage", "usage": _usage(chunk.usage)}
 
                 if not chunk.choices:
                     continue
@@ -113,7 +88,14 @@ class OpenAICompatibleProvider(Provider):
                 delta = choice.delta
 
                 if delta is not None:
-                    reasoning = getattr(delta, "reasoning_content", None)
+                    # OpenRouter reports reasoning as `reasoning`; DeepSeek and
+                    # the OpenAI-compatible convention use `reasoning_content`.
+                    # Only checking the latter silently discarded every
+                    # reasoning token from anything routed through OpenRouter.
+                    reasoning = (
+                        getattr(delta, "reasoning_content", None)
+                        or getattr(delta, "reasoning", None)
+                    )
                     if reasoning:
                         yield {"type": "reasoning", "text": reasoning}
                     if delta.content:
@@ -135,7 +117,6 @@ class OpenAICompatibleProvider(Provider):
                 if choice.finish_reason:
                     finish_reason = choice.finish_reason
         except asyncio.CancelledError:
-            await _aclose(stream)
             raise
         except openai.APIStatusError as e:
             yield {"type": "error", "message": _describe(e, self.name)}
@@ -143,8 +124,28 @@ class OpenAICompatibleProvider(Provider):
         except Exception as e:
             yield {"type": "error", "message": f"Stream failed: {type(e).__name__}: {e}"}
             return
+        finally:
+            # Covers the abort path too. `agent._loop` breaks out of its own
+            # iteration when the user stops a run, which abandons this
+            # generator without cancelling it, leaving the HTTP response and
+            # its connection to be closed by the garbage collector.
+            await _aclose(stream)
 
-        yield {"type": "finish", "reason": finish_reason or "stop"}
+        yield {"type": "finish", "reason": normalize_finish(finish_reason)}
+
+
+def _usage(u) -> dict:
+    prompt_details = getattr(u, "prompt_tokens_details", None)
+    completion_details = getattr(u, "completion_tokens_details", None)
+    usage = blank_usage()
+    usage.update(
+        prompt_tokens=u.prompt_tokens or 0,
+        completion_tokens=u.completion_tokens or 0,
+        total_tokens=u.total_tokens or 0,
+        cached_tokens=getattr(prompt_details, "cached_tokens", 0) or 0,
+        reasoning_tokens=getattr(completion_details, "reasoning_tokens", 0) or 0,
+    )
+    return usage
 
 
 async def _aclose(stream) -> None:
@@ -162,30 +163,3 @@ def _describe(e: openai.APIStatusError, name: str = "API") -> str:
     except Exception:
         detail = (getattr(e, "message", "") or str(e))[:400]
     return f"{name} API error {e.status_code}: {detail or 'unknown error'}"
-
-
-_key_cache: dict[str, str] = {}
-
-
-def _cached_db_key(settings_key: str) -> str:
-    if settings_key in _key_cache:
-        return _key_cache[settings_key]
-    value = ""
-    try:
-        import sqlite3
-
-        from agent_server.config import DB_PATH
-
-        if DB_PATH.exists():
-            conn = sqlite3.connect(str(DB_PATH))
-            try:
-                row = conn.execute(
-                    "SELECT value FROM settings WHERE key = ?", (settings_key,)
-                ).fetchone()
-                value = (row[0] if row else "").strip()
-            finally:
-                conn.close()
-    except Exception:
-        value = ""
-    _key_cache[settings_key] = value
-    return value

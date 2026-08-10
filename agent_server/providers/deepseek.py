@@ -17,9 +17,6 @@ class DeepSeekProvider(OpenAICompatibleProvider):
     env_key = "DEEPSEEK_API_KEY"
     settings_key = "deepseek_api_key"
 
-    def settings_fields(self) -> list[dict]:
-        return [{"key": self.settings_key, "label": "API Key", "kind": "password"}]
-
     def _build_kwargs(self, messages, tools, model, thinking_effort=None):
         kwargs = super()._build_kwargs(messages, tools, model, thinking_effort)
         effort = thinking_effort or DEFAULT_THINKING_EFFORT

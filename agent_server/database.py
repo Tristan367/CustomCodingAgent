@@ -521,21 +521,41 @@ async def mark_messages_compacted(session_id: str, message_ids: list[int]):
     )
 
 
+# Anthropic charges 1.25x the base input rate to write a prompt into its cache.
+# Providers that do not bill cache writes separately report zero of them.
+CACHE_WRITE_MULTIPLIER = 1.25
+
+
 def _price(usage_json: str, pricing: dict) -> tuple[dict, float]:
-    """Split one usage record into token counts and its dollar cost."""
+    """Split one usage record into token counts and its dollar cost.
+
+    `prompt_tokens` is inclusive of cached reads on every provider -- the
+    Anthropic adapter adds its separately-reported parts back together -- so
+    the uncached remainder is the difference.
+    """
     try:
         u = json.loads(usage_json)
     except (json.JSONDecodeError, TypeError):
         return {}, 0.0
-    if not pricing:
+    if not pricing.get("priced"):
         return u, 0.0
     cached = u.get("cached_tokens", 0) or 0
+    written = u.get("cache_write_tokens", 0) or 0
     prompt = u.get("prompt_tokens", 0) or 0
     completion = u.get("completion_tokens", 0) or 0
+    # Reasoning is billed as output. DeepSeek reports it separately from
+    # completion_tokens, so leaving it out understated spend by the entire
+    # thinking volume -- which at high effort is most of the output.
+    reasoning = u.get("reasoning_tokens", 0) or 0
+    if reasoning and reasoning <= completion:
+        # Already inside completion_tokens; do not charge for it twice.
+        reasoning = 0
+    uncached = max(prompt - cached - written, 0)
     cost = (
         cached * pricing["price_in_hit"]
-        + max(prompt - cached, 0) * pricing["price_in_miss"]
-        + completion * pricing["price_out"]
+        + written * pricing["price_in_miss"] * CACHE_WRITE_MULTIPLIER
+        + uncached * pricing["price_in_miss"]
+        + (completion + reasoning) * pricing["price_out"]
     ) / 1_000_000
     return u, cost
 

@@ -83,32 +83,52 @@ MODELS = [
         "price_in_miss": 0.20,
         "price_out": 0.60,
     },
+    # Anthropic, per platform.claude.com/docs/en/about-claude/models/overview
+    # and /pricing, checked 2026-08-10. A cache read is 0.1x the base input
+    # rate and a cache write 1.25x; the previous entries had the write rate in
+    # the hit column and Opus's context and output ceiling were both wrong by
+    # a factor of five, which fed straight into the compaction threshold.
     {
-        "id": "claude-sonnet-5",
-        "name": "Claude Sonnet 5",
+        "id": "claude-fable-5",
+        "name": "Claude Fable 5",
         "provider": "anthropic",
-        "context": 200_000,
-        "price_in_hit": 1.25,
-        "price_in_miss": 3.0,
-        "price_out": 15.0,
+        "context": 1_000_000,
+        "max_output": 128_000,
+        "price_in_hit": 1.0,
+        "price_in_miss": 10.0,
+        "price_out": 50.0,
     },
     {
         "id": "claude-opus-5",
         "name": "Claude Opus 5",
         "provider": "anthropic",
-        "context": 200_000,
-        "price_in_hit": 3.75,
-        "price_in_miss": 15.0,
-        "price_out": 75.0,
+        "context": 1_000_000,
+        "max_output": 128_000,
+        "price_in_hit": 0.5,
+        "price_in_miss": 5.0,
+        "price_out": 25.0,
+    },
+    {
+        "id": "claude-sonnet-5",
+        "name": "Claude Sonnet 5",
+        "provider": "anthropic",
+        "context": 1_000_000,
+        "max_output": 128_000,
+        # Introductory pricing of $2/$10 runs to 2026-08-31; the standard rate
+        # is $3/$15. Listed at the standard rate so spend is never understated.
+        "price_in_hit": 0.3,
+        "price_in_miss": 3.0,
+        "price_out": 15.0,
     },
     {
         "id": "claude-haiku-4-5",
         "name": "Claude Haiku 4.5",
         "provider": "anthropic",
         "context": 200_000,
-        "price_in_hit": 0.25,
-        "price_in_miss": 0.80,
-        "price_out": 4.0,
+        "max_output": 64_000,
+        "price_in_hit": 0.1,
+        "price_in_miss": 1.0,
+        "price_out": 5.0,
     },
 ]
 
@@ -119,17 +139,22 @@ MODELS_BY_ID = {m["id"]: m for m in MODELS}
 # keep the context ring and the cost figure from reading as authoritative zeros.
 UNKNOWN_MODEL = {
     "context": 131_072,
+    "max_output": 8_192,
     "price_in_hit": 0.0,
     "price_in_miss": 0.0,
     "price_out": 0.0,
     "priced": False,
 }
 
+DEFAULT_MAX_OUTPUT = 8_192
+
 
 def model_info(model_id: str) -> dict:
-    """Context window and pricing for a model, or the unknown-model defaults."""
+    """Context window, output ceiling and pricing, or the unknown defaults."""
     entry = MODELS_BY_ID.get(model_id)
-    return {**entry, "priced": True} if entry else {**UNKNOWN_MODEL, "id": model_id}
+    if not entry:
+        return {**UNKNOWN_MODEL, "id": model_id}
+    return {"max_output": DEFAULT_MAX_OUTPUT, **entry, "priced": True}
 
 
 def provider_for_model(model_id: str) -> str:

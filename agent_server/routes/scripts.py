@@ -28,14 +28,6 @@ log = logging.getLogger(__name__)
 router = APIRouter()
 
 
-async def _scripts_context(edit_script: str = "", saved: bool = False, error: str = "") -> dict:
-    scripts_list = await db.list_scripts()
-    return {
-        "scripts": scripts_list,
-        "edit_script": edit_script,
-        "saved": saved,
-        "error": error,
-    }
 
 
 @router.post("/_save_script")

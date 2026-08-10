@@ -189,13 +189,6 @@
     "name": "save_settings"
   },
   {
-    "path": "/_settings/bash_rules",
-    "methods": [
-      "POST"
-    ],
-    "name": "save_bash_rules"
-  },
-  {
     "path": "/_settings/sound",
     "methods": [
       "POST"

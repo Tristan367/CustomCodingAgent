@@ -7,7 +7,6 @@ and ask what changed.
 """
 
 
-from agent_server import vision as engine
 from agent_server.tools.base import ToolContext, ToolResult
 
 MAX_IMAGES = 6
@@ -22,52 +21,6 @@ DEFAULT_PROMPT = (
 )
 
 
-async def vision(
-    ctx: ToolContext,
-    *,
-    prompt: str | None = None,
-    paths: list[str] | str | None = None,
-    **_,
-) -> ToolResult:
-    if isinstance(paths, str):
-        paths = [paths]
-    paths = [p for p in (paths or []) if p]
-
-    if not paths:
-        return ToolResult.error(
-            "`paths` is required: the image files to look at. To capture a web "
-            "page first use `browser` with a `shoot` step; for anything else use "
-            "`capture`.",
-            "vision",
-        )
-    if len(paths) > MAX_IMAGES:
-        return ToolResult.error(
-            f"at most {MAX_IMAGES} images per call, got {len(paths)}", "vision"
-        )
-
-    images: list[bytes] = []
-    labels: list[str] = []
-    described: list[str] = []
-    for raw in paths:
-        path = ctx.resolve(raw)
-        try:
-            images.append(engine.load_image(path))
-        except engine.VisionError as e:
-            return ToolResult.error(str(e), "vision")
-        labels.append(path.name)
-        described.append(f"{path.name} ({engine.describe_image_file(path)})")
-
-    try:
-        answer = await engine.analyze(images, prompt or DEFAULT_PROMPT, labels)
-    except engine.VisionError as e:
-        return ToolResult.error(str(e), "vision")
-
-    plural = "s" if len(images) != 1 else ""
-    header = f"Looked at {len(images)} image{plural}: " + ", ".join(labels)
-    return ToolResult(
-        output=f"{header}\n\n{answer}",
-        title=f"vision: {', '.join(described)[:90]}",
-    )
 
 
 async def capture(

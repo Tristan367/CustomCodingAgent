@@ -74,6 +74,7 @@ agent_server/
   permissions.py    what the agent may do without asking
   browser.py        Playwright engine: one context per session
   capture.py        desktop screenshots, probed per platform
+  images.py         decode, downscale and describe image files
   templating.py     the Jinja environment and its filters
   tools/            bash, browser, capture, edit, explore, glob, grep,
                     read, skill, task, webfetch, websearch, write

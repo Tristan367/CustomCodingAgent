@@ -281,9 +281,6 @@ VISION_NUM_CTX = int(os.getenv("VISION_NUM_CTX", "8192"))
 VISION_MAX_PIXELS = int(os.getenv("VISION_MAX_PIXELS", str(1600 * 1600)))
 
 
-def vision_configured() -> bool:
-    """Whether an image-capable endpoint has been pointed at."""
-    return bool(VISION_OLLAMA_URL)
 
 WHISPER_BIN = os.getenv("WHISPER_BIN") or shutil.which("whisper-cli") or shutil.which("whisper")
 

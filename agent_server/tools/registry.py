@@ -10,11 +10,11 @@ from typing import Any, Literal
 from agent_server.tools.base import ToolContext, ToolResult
 from agent_server.tools.bash import run_bash
 from agent_server.tools.browser import browser as browser_tool
+from agent_server.tools.capture import capture
 from agent_server.tools.file_ops import edit_file, read_file, write_file
 from agent_server.tools.search import glob_search, grep_search
 from agent_server.tools.skill import load_skill
 from agent_server.tools.task import run_task
-from agent_server.tools.vision import capture
 from agent_server.tools.web import webfetch, websearch
 
 Handler = Callable[..., Awaitable[ToolResult]]

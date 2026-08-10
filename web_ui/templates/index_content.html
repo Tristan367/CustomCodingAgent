@@ -189,12 +189,6 @@ async function stopCodeAgent(button) {
                 </span>
             </label>
         </div>
-        <label class="field-label" style="margin-top:12px">Bash rules
-            <span class="hint">One per line: <code>PATTERN &rarr; allow|deny|ask</code></span>
-            <textarea id="bash-rules" rows="4" spellcheck="false"
-                      placeholder="git push* &#8594; ask&#10;npm test* &#8594; allow&#10;rm -rf * &#8594; deny"
-                      onchange="saveBashRules()">{{ settings.get('bash_rules', '[]') | render_bash_rules }}</textarea>
-        </label>
         <p style="margin-top:12px">
             <button type="button" class="btn-sm" onclick="initProject()">Generate project rules</button>
             <span class="hint">Scans a directory and writes AGENTS.md</span>

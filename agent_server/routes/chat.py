@@ -7,10 +7,9 @@ from pathlib import Path
 from fastapi import APIRouter, Body, File, Form, HTTPException, Request, UploadFile
 from fastapi.responses import FileResponse, JSONResponse, StreamingResponse
 
-from agent_server import agent, permissions
+from agent_server import agent, images, permissions
 from agent_server import database as db
 from agent_server import stt as stt_service
-from agent_server import vision as vision_engine
 from agent_server.compaction import compact_session_events, should_offer_compaction
 from agent_server.config import MIN_COMPACT_THRESHOLD, UPLOAD_DIR, model_info
 from agent_server.models import ChatRequest, CompactProfileRequest, ResolveRequest
@@ -117,7 +116,7 @@ async def chat_with_image(
             raise HTTPException(400, f"Could not read {upload.filename}: {e}") from e
 
     lines = [
-        f"[Image attached: {path} ({vision_engine.describe_image_file(path)})]"
+        f"[Image attached: {path} ({images.describe_image_file(path)})]"
         for path in saved
     ]
     noun = "image" if len(saved) == 1 else "images"
@@ -388,7 +387,7 @@ async def serve_image(path: str):
     Restricted to the directories this app writes into, so a crafted path cannot
     turn the endpoint into an arbitrary file read.
     """
-    from agent_server.vision import CAPTURE_DIR
+    from agent_server.images import CAPTURE_DIR
 
     try:
         resolved = Path(path).expanduser().resolve()
@@ -434,8 +433,8 @@ async def _save_image(session_id: str, upload: UploadFile) -> str:
         raise HTTPException(400, "Image is larger than 40 MB")
 
     try:
-        data = await vision_engine.normalize_in_thread(raw)
-    except vision_engine.VisionError as e:
+        data = await images.normalize_in_thread(raw)
+    except images.ImageError as e:
         raise HTTPException(400, str(e)) from e
 
     directory = UPLOAD_DIR / session_id

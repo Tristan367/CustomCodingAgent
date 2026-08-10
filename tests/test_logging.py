@@ -88,17 +88,17 @@ class TestFileHandler:
 class TestSwallowedException:
     def test_describe_image_file_logs_on_failure(self, caplog):
         """describe_image_file swallows exceptions and logs at debug."""
-        from agent_server.vision import describe_image_file
+        from agent_server.images import describe_image_file
 
         # Both the child and root loggers must allow DEBUG to pass through.
         logging.getLogger().setLevel(logging.DEBUG)
-        logging.getLogger("agent_server.vision").setLevel(logging.DEBUG)
+        logging.getLogger("agent_server.images").setLevel(logging.DEBUG)
         caplog.set_level(logging.DEBUG)
 
         result = describe_image_file("/nonexistent/not-an-image.xyz")
         assert result == "image"
 
-        records = [r for r in caplog.records if r.name == "agent_server.vision"]
+        records = [r for r in caplog.records if r.name == "agent_server.images"]
         assert len(records) >= 1, "expected at least one log record from vision module"
         assert records[0].levelno == logging.DEBUG
         assert "reading image dimensions" in records[0].message

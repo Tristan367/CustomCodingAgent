@@ -1,6 +1,5 @@
 """Application settings: providers, bash rules, sound control, and TTS."""
 
-import json
 
 from fastapi import APIRouter, Form, Request
 
@@ -33,13 +32,6 @@ async def save_settings(request: Request):
     return templates.TemplateResponse(
         request=request, name="index_content.html", context=await _home_context()
     )
-
-
-@router.post("/_settings/bash_rules")
-async def save_bash_rules(request: Request):
-    data = await request.json()
-    await db.set_setting("bash_rules", json.dumps(data))
-    return {"ok": True}
 
 
 @router.post("/_settings/sound")

@@ -1556,16 +1556,6 @@ async function saveSoundSetting() {
   await fetch('/_settings/sound', { method: 'POST', body: form });
 }
 
-function saveBashRules() {
-  const text = document.getElementById('bash-rules').value;
-  const rules = text.split('\n').filter(l => l.trim()).map(line => {
-    const m = line.match(/^(.+?)\s*[→>]\s*(allow|deny|ask)$/);
-    if (m) return { pattern: m[1].trim(), action: m[2] };
-    return null;
-  }).filter(Boolean);
-  fetch('/_settings/bash_rules', { method: 'POST', body: JSON.stringify(rules), headers: {'Content-Type': 'application/json'} });
-}
-
 async function uploadSound(input) {
   const file = input.files[0];
   if (!file) return;

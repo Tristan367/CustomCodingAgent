@@ -13,8 +13,6 @@ Two independent gates:
   `~/.ssh/config`. Grants are per-directory and per-session.
 """
 
-import fnmatch
-import json
 import logging
 import subprocess
 from pathlib import Path
@@ -128,26 +126,6 @@ async def check(
 
     if name == "bash":
         command = args.get("command", "")
-        # Pattern-based rules take precedence over read-only/shell_auto checks.
-        rules = json.loads(await db.get_setting("bash_rules", "[]"))
-        for rule in rules:
-            if fnmatch.fnmatch(command, rule.get("pattern", "")):
-                action = rule.get("action", "ask")
-                if action == "allow":
-                    return None
-                if action == "deny":
-                    return {
-                        "kind": "denied",
-                        "tool": name,
-                        "command": command,
-                        "message": f"Matched bash rule '{rule['pattern']}' → denied.",
-                    }
-                return {
-                    "kind": "shell",
-                    "tool": name,
-                    "command": command,
-                    "workdir": args.get("workdir") or project_dir,
-                }
         if is_read_only(command) or shell_auto_approve:
             return None
         return {

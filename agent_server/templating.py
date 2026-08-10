@@ -6,7 +6,6 @@ FastAPI object and the route modules own the handlers; both need `templates`,
 which makes it neither's property.
 """
 
-import json
 import re
 from datetime import UTC, datetime
 from pathlib import Path
@@ -135,13 +134,3 @@ templates.env.filters["diffstat"] = diffstat_counts
 templates.env.filters["duration"] = duration_label
 
 
-def _render_bash_rules(raw: str) -> str:
-    """Format bash rules JSON for the human-readable textarea."""
-    try:
-        rules = json.loads(raw or "[]")
-        return "\n".join(f"{r['pattern']} → {r['action']}" for r in rules)
-    except Exception:
-        return raw
-
-
-templates.env.filters["render_bash_rules"] = _render_bash_rules

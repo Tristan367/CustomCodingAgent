@@ -36,7 +36,9 @@ def test_the_overlapping_browser_tools_are_gone():
                  "browser-screenshot", "browser-steps", "screenshot"):
         assert name not in TOOLS, f"{name} should have been folded into `browser`"
     assert "browser" in TOOLS
-    assert "vision" in TOOLS
+    # `vision` is deliberately not built in: describing an image needs hardware
+    # or an account this app cannot assume. It ships as a custom tool.
+    assert "vision" not in TOOLS
 
 
 def test_a_whole_flow_fits_in_one_call():
@@ -48,11 +50,10 @@ def test_a_whole_flow_fits_in_one_call():
 # ── Capabilities that must survive ──────────────────────────────────────────
 
 def test_a_page_can_be_checked_against_a_local_image_in_one_call():
-    """`vision` used to capture a URL itself so a mockup and a live page could
-    be compared in a single call. Capture moved to `browser`, so `shoot` takes
-    the reference images instead -- otherwise this costs a round trip."""
+    """A mockup and a live page compared in a single call. Capture moved into
+    `browser`, so `shoot` takes the reference images itself -- otherwise this
+    costs a round trip."""
     assert "compare" in step_props()
-    assert "paths" in props("vision")
 
 
 def test_frames_can_be_captured_without_paying_to_describe_them():
@@ -110,11 +111,11 @@ def test_a_flow_can_be_started_from_a_clean_browser():
 
 # ── Everything else ─────────────────────────────────────────────────────────
 
-def test_vision_no_longer_captures_anything():
-    """One capturer, one looker. Two tools that could both capture is how the
+def test_capture_is_the_only_desktop_capturer():
+    """One capturer per domain. Two tools that could both capture is how the
     old surface ended up with two browsers that did not share state."""
-    assert props("vision") == {"prompt", "paths"}
-
+    assert "capture" in TOOLS
+    assert "screenshot" not in TOOLS
 
 def test_the_question_tool_stays_removed():
     """Deliberate: the model asks in prose and the user answers in the box."""

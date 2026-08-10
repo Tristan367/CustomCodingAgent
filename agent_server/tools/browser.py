@@ -112,7 +112,7 @@ async def _run(ctx, session, steps, stop_on_error) -> ToolResult:
                 lines.append(_indent(detail["text"]))
             if detail.get("ask") and analysed < MAX_ANALYSES:
                 analysed += 1
-                answer = await _describe(detail["ask"], detail.get("images", []))
+                answer = await _describe(ctx, detail["ask"], detail.get("images", []))
                 analyses.append(f"[step {number}] {answer}")
         elif detail:
             lines.append(_indent(str(detail)))
@@ -272,17 +272,16 @@ def _with_comparisons(ctx, shots, compare) -> list[tuple[str, bytes]]:
     """Prepend files from disk so one question spans them and the new frames."""
     if not compare:
         return shots
-    from agent_server import vision
-
     if isinstance(compare, str):
         compare = [compare]
     reference = []
     for raw in compare[:4]:
         path = ctx.resolve(raw)
-        try:
-            reference.append((str(path), vision.load_image(path)))
-        except vision.VisionError as e:
-            raise engine.BrowserError(f"compare: {e}") from e
+        if not path.is_file():
+            raise engine.BrowserError(f"compare: no such file: {path}")
+        # Only the path travels now; whichever `vision` tool is installed reads
+        # the file itself.
+        reference.append((str(path), b""))
     return reference + shots
 
 
@@ -390,31 +389,31 @@ async def _diagnostics(ctx, session, frames) -> str:
     return "\n\n".join(chunks)
 
 
-async def _describe(question: str, images: list[tuple[str, bytes]]) -> str:
+async def _describe(ctx, question: str, images: list[tuple[str, bytes]]) -> str:
+    """Answer a question about the frames, using whatever `vision` is installed.
+
+    Dispatched through the registry by name rather than calling the vision
+    module, so a `vision` supplied as a custom tool -- pointed at whatever
+    server the user actually has -- works here exactly as a built-in would.
+    Looking at an image needs hardware or an account that not every install
+    has, so this harness does not ship one.
+    """
     if not images:
         return "(nothing captured to look at)"
-    from agent_server import vision
-    from agent_server.config import vision_configured
+    from agent_server.tools.registry import TOOLS, execute_tool
 
-    # `ask` is opt-in per step, so an unconfigured install should be told the
-    # frame was still saved rather than have the whole step fail.
-    if not vision_configured():
+    if "vision" not in TOOLS:
+        saved = ", ".join(p for p, _ in images)
         return (
-            "(no vision endpoint configured, so the screenshot was saved but not "
-            "described -- set VISION_OLLAMA_URL to enable `ask`)"
+            "(no `vision` tool is installed, so the frames were saved but not "
+            f"described: {saved}. Add one on the Tools page to enable `ask`.)"
         )
 
-    try:
-        return await vision.analyze(
-            [data for _, data in images[:6]],
-            question,
-            [Path(p).name for p, _ in images[:6]],
-        )
-    except Exception as e:
-        return (
-            f"(could not look at it: {e}) "
-            f"The frames were still saved: {', '.join(p for p, _ in images)}"
-        )
+    paths = [p for p, _ in images[:6]]
+    result = await execute_tool("vision", {"prompt": question, "paths": paths}, ctx)
+    if result.is_error:
+        return f"(could not look at it: {result.output}) Frames saved: {', '.join(paths)}"
+    return result.output
 
 
 def _label(action: str, step: dict) -> str:

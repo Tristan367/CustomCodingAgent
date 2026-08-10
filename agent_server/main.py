@@ -28,22 +28,6 @@ from agent_server.system_prompt import migrate_prompts
 from agent_server.templating import STATIC_DIR
 
 
-async def _warm_vision():
-    """Bring the vision rig up in the background if its machine is switched on.
-
-    Deliberately quiet: if vision-host is off there is nothing to report and nothing to
-    retry, and the first vision call will try again anyway.
-    """
-    from agent_server import vision
-
-    try:
-        ready, note = await vision.ensure_rig()
-        if ready and note:
-            print(f"[vision] {note}")
-    except Exception:
-        pass
-
-
 async def _reap_browsers():
     """Close browser contexts nobody has used lately.
 
@@ -75,15 +59,11 @@ async def lifespan(app: FastAPI):
     for problem in problems:
         print(f"[tools] {problem}")
     await load_custom_endpoint_providers()
-    # Background: startup must not wait on a machine that may be off.
-    warm = asyncio.create_task(_warm_vision())
     reaper = asyncio.create_task(_reap_browsers())
 
     yield
 
-    warm.cancel()
     reaper.cancel()
-    from agent_server import vision
     from agent_server.tools import browser
 
     # Stop in-flight turns before closing the database underneath them. A run
@@ -91,8 +71,6 @@ async def lifespan(app: FastAPI):
     # connection that had just been closed, losing the assistant message and
     # raising into a background task nobody was watching.
     await agent.shutdown()
-    await vision.unload_model()
-    await vision.close_client()
     await browser.close_browser()
     await close_db()
 

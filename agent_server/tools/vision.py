@@ -6,7 +6,6 @@ before/after comparison work: capture, act, capture, then pass both paths here
 and ask what changed.
 """
 
-from pathlib import Path
 
 from agent_server import vision as engine
 from agent_server.tools.base import ToolContext, ToolResult
@@ -103,15 +102,26 @@ async def capture(
             title=f"capture ({len(paths)} frame{plural})",
         )
 
-    try:
-        images = [engine.load_image(p) for p in paths[:MAX_IMAGES]]
-        answer = await engine.analyze(
-            images, prompt or DEFAULT_PROMPT, [Path(p).name for p in paths[:MAX_IMAGES]]
-        )
-        body += f"\n\n{answer}"
-    except engine.VisionError as e:
+    # Dispatched by name so a `vision` supplied as a custom tool answers here
+    # too. Describing an image needs hardware or an account this app cannot
+    # assume every install has, so it does not ship one.
+    from agent_server.tools.registry import TOOLS, execute_tool
+
+    if "vision" not in TOOLS:
         body += (
-            f"\n\n(could not describe it: {e})\n"
+            "\n\nNot described: no `vision` tool is installed. "
+            "Add one on the Tools page, or ask about these paths another way."
+        )
+        return ToolResult(output=body, title=f"capture ({len(paths)} frame{plural})")
+
+    result = await execute_tool(
+        "vision", {"prompt": prompt or DEFAULT_PROMPT, "paths": paths[:MAX_IMAGES]}, ctx
+    )
+    if result.is_error:
+        body += (
+            f"\n\n(could not describe it: {result.output})\n"
             "The frames above were still saved; retry `vision` on them."
         )
+    else:
+        body += f"\n\n{result.output}"
     return ToolResult(output=body, title=f"capture ({len(paths)} frame{plural})")

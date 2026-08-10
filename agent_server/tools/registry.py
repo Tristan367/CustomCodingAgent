@@ -6,7 +6,6 @@ from collections.abc import Awaitable, Callable, Iterable
 from dataclasses import dataclass, field
 from typing import Any, Literal
 
-from agent_server.config import vision_configured
 from agent_server.tools.base import ToolContext, ToolResult
 from agent_server.tools.bash import run_bash
 from agent_server.tools.browser import browser as browser_tool
@@ -14,7 +13,7 @@ from agent_server.tools.file_ops import edit_file, read_file, write_file
 from agent_server.tools.search import glob_search, grep_search
 from agent_server.tools.skill import load_skill
 from agent_server.tools.task import run_task
-from agent_server.tools.vision import capture, vision
+from agent_server.tools.vision import capture
 from agent_server.tools.web import webfetch, websearch
 
 Handler = Callable[..., Awaitable[ToolResult]]
@@ -302,47 +301,6 @@ register(Tool(
     handler=run_task,
     parallel_safe=True,
 ))
-
-_VISION_TOOL = Tool(
-    name="vision",
-    description=(
-        "Look at images and get a description back. You cannot see images yourself; "
-        "this is the only way. Pass `paths` for image files on disk -- screenshots, "
-        "photos, diagrams, anything the user attached or the `browser` tool saved. "
-        "Each image is labelled by its filename, so passing two and asking what "
-        "differs is how a before/after comparison works. Always say what you need "
-        "to know in `prompt`: a specific question is answered far faster, and far "
-        "better, than 'describe this'. To capture a web page first, use `browser` "
-        "with a `shoot` step; to capture something that is not a web page, use "
-        "`capture`."
-    ),
-    parameters={
-        "type": "object",
-        "properties": {
-            "prompt": {
-                "type": "string",
-                "description": "What to find out, e.g. 'what error is shown?' or "
-                               "'what differs between these two?'",
-            },
-            "paths": {
-                "type": "array",
-                "items": {"type": "string"},
-                "description": "Image files to look at, in order (max 6)",
-            },
-        },
-        "required": ["prompt", "paths"],
-    },
-    handler=vision,
-    parallel_safe=True,
-    vision_only=True,
-)
-
-# Registered only when an image endpoint is configured. A tool that is in the
-# schema but cannot work costs tokens on every request and invites the model to
-# keep calling it; the harness advertising a capability it does not have is
-# worse than not having it.
-if vision_configured():
-    register(_VISION_TOOL)
 
 register(Tool(
     name="capture",

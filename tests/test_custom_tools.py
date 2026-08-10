@@ -1,7 +1,7 @@
 """Custom tools may not stand in for built-in ones, and one bad row may not
 take the rest down with it.
 
-Registration is a dict assignment, so a custom tool named `vision` replaced the
+Registration is a dict assignment, so a custom tool named `browser` replaced the
 built-in outright -- and deleting the custom tool then removed the built-in too,
 for the life of the process. An old seeder created exactly that situation on
 every fresh install, with two tools whose shell scripts had unbalanced quotes
@@ -45,21 +45,21 @@ def test_the_built_in_names_are_discovered_not_listed():
     """The hardcoded list had gone stale -- it was missing websearch, explore,
     skill and every browser tool, all of which were therefore shadowable."""
     for name in ("read", "edit", "write", "bash", "grep", "glob", "webfetch",
-                 "websearch", "task", "explore", "skill", "vision", "browser"):
+                 "websearch", "task", "explore", "skill", "capture", "browser"):
         assert name in BUILT_IN_NAMES, name
 
 
 def test_a_custom_tool_cannot_take_a_built_in_name():
-    original = TOOLS["vision"]
-    error = register_custom(noop_tool("vision"))
+    original = TOOLS["browser"]
+    error = register_custom(noop_tool("browser"))
     assert "built-in" in error
-    assert TOOLS["vision"] is original, "the built-in was replaced"
+    assert TOOLS["browser"] is original, "the built-in was replaced"
 
 
 def test_unregistering_never_removes_a_built_in():
-    custom.unregister_custom({"read", "vision", "browser"})
+    custom.unregister_custom({"read", "capture", "browser"})
     assert "read" in TOOLS
-    assert "vision" in TOOLS
+    assert "capture" in TOOLS
     assert "browser" in TOOLS
 
 
@@ -76,13 +76,18 @@ async def test_the_seeded_shadow_tools_are_removed_on_startup(clean_db):
 
 
 async def test_a_users_own_tool_of_that_name_is_not_deleted(clean_db):
-    """Refused registration, with a warning -- not silently destroyed."""
+    """The migration deletes the old seeder's rows, not anything of the user's.
+
+    `vision` is no longer a built-in, so a tool of that name is now perfectly
+    legal -- which is the point of shipping it as a custom tool. It must
+    survive startup and register.
+    """
     await db.save_custom_tool("vision", "mine", "{}", "echo hi", True, True)
     await db.init_db()
 
     assert [t["name"] for t in await db.list_custom_tools()] == ["vision"]
     problems = await custom.load_custom_tools()
-    assert any("built-in" in p for p in problems)
+    assert not [p for p in problems if "built-in" in p]
 
 
 async def test_one_unparseable_row_does_not_disable_the_others(clean_db):

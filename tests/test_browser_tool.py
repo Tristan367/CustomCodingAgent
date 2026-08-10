@@ -251,3 +251,44 @@ async def test_two_sessions_do_not_share_a_browser(ctx, page):
         assert not result.is_error, result.output
     finally:
         await engine.close_session(other.session_id)
+
+
+async def test_ask_degrades_when_no_vision_tool_is_installed(monkeypatch):
+    """`vision` ships as a custom tool, so it may simply not be there.
+
+    The frame is still captured and its path still returned; only the
+    description is missing. Failing the whole step would throw away the work.
+    """
+    from agent_server.tools import browser as browser_tool
+    from agent_server.tools.base import ToolContext
+    from agent_server.tools.registry import TOOLS
+
+    monkeypatch.delitem(TOOLS, "vision", raising=False)
+    ctx = ToolContext(session_id="s", project_dir="/tmp")
+
+    answer = await browser_tool._describe(ctx, "what is this?", [("/tmp/a.png", b"")])
+    assert "no `vision` tool is installed" in answer
+    assert "/tmp/a.png" in answer, "the saved path must survive"
+
+
+async def test_ask_uses_whatever_vision_tool_is_registered(monkeypatch):
+    """Dispatch is by name, so a user-supplied `vision` is used unchanged."""
+    from agent_server.tools import browser as browser_tool
+    from agent_server.tools.base import ToolContext, ToolResult
+    from agent_server.tools.registry import TOOLS, Tool
+
+    seen = {}
+
+    async def fake(ctx, *, prompt="", paths=None, **_):
+        seen["prompt"], seen["paths"] = prompt, paths
+        return ToolResult(output="a red button", title="vision")
+
+    monkeypatch.setitem(TOOLS, "vision", Tool(
+        name="vision", description="d", parameters={"type": "object"}, handler=fake,
+    ))
+    ctx = ToolContext(session_id="s", project_dir="/tmp")
+
+    answer = await browser_tool._describe(ctx, "what is this?", [("/tmp/a.png", b"")])
+    assert answer == "a red button"
+    assert seen["paths"] == ["/tmp/a.png"]
+    assert seen["prompt"] == "what is this?"

@@ -47,14 +47,35 @@ class Tool:
 
 TOOLS: dict[str, Tool] = {}
 _custom_tool_names: set[str] = set()
+# Filled in once every built-in has been registered, at the bottom of this
+# module. A custom tool may not take one of these names: registration is a
+# plain dict assignment, so shadowing replaced the built-in outright, and
+# deleting the custom tool then removed the built-in with it for the life of
+# the process. A shadowing tool also inherited nothing of the built-in's
+# safety properties while inheriting its name in every policy check.
+BUILT_IN_NAMES: frozenset[str] = frozenset()
 
 
 def register(tool: Tool):
     TOOLS[tool.name] = tool
 
 
+def register_custom(tool: Tool) -> str:
+    """Register a user-defined tool. Returns an error message, or "" on success."""
+    if tool.name in BUILT_IN_NAMES:
+        return (
+            f"'{tool.name}' is the name of a built-in tool. "
+            "Rename the custom tool -- it cannot replace one."
+        )
+    TOOLS[tool.name] = tool
+    _custom_tool_names.add(tool.name)
+    return ""
+
+
 def unregister_custom(names: set[str]):
     for name in names:
+        if name in BUILT_IN_NAMES:
+            continue
         TOOLS.pop(name, None)
     _custom_tool_names.difference_update(names)
 
@@ -86,20 +107,24 @@ register(Tool(
     name="edit",
     description=(
         "Apply changes to an existing file. Prefer the hashline mode: call `read` first, "
-        "note the `N|hh|` hashes on the lines you want to replace, then pass hashStart "
-        "(required) and hashEnd (optional, for ranges) with the replacement text in newText. "
-        "If the file changed since you read it the hashes will not match and the edit is "
-        "rejected — just read it again. Fallback: oldString/newString for exact text replacement "
-        "(use only when hashline is impractical)."
+        "then for the lines you want to replace pass their line numbers as startLine/endLine "
+        "AND their hashes as hashStart/hashEnd, with the replacement in newText. "
+        "`read` prints both: a line shown as `42|a3f9| return x` is startLine 42, hashStart a3f9. "
+        "The line number says which lines you mean; the hash proves the file has not changed "
+        "underneath you. Blank lines and lines like `}` all share a hash, so a hash without a "
+        "line number is rejected as ambiguous. If the file has genuinely changed, read it again. "
+        "Fallback: oldString/newString for exact text replacement."
     ),
     parameters={
         "type": "object",
         "properties": {
             "filePath": {"type": "string", "description": "Path to the file"},
-            "hashStart": {"type": "string", "description": "4-char hash of the first line to replace (preferred)"},
-            "hashEnd": {"type": "string", "description": "4-char hash of the last line to replace (for ranges)"},
-            "newText": {"type": "string", "description": "Replacement lines"},
-            "oldString": {"type": "string", "description": "Exact text to replace (fallback, avoid when possible)"},
+            "startLine": {"type": "integer", "description": "1-indexed first line to replace, from `read`"},
+            "endLine": {"type": "integer", "description": "1-indexed last line to replace (omit for a single line)"},
+            "hashStart": {"type": "string", "description": "4-char hash shown against startLine"},
+            "hashEnd": {"type": "string", "description": "4-char hash shown against endLine"},
+            "newText": {"type": "string", "description": "Replacement lines (omit to delete the range)"},
+            "oldString": {"type": "string", "description": "Exact text to replace (fallback)"},
             "newString": {"type": "string", "description": "Replacement text for oldString mode"},
             "replaceAll": {"type": "boolean", "description": "Replace every occurrence"},
         },
@@ -463,6 +488,11 @@ register(Tool(
     parallel_safe=True,
     vision_only=True,
 ))
+
+
+# Every name registered above. Anything added after this point is a custom
+# tool and is held to register_custom's rules.
+BUILT_IN_NAMES = frozenset(TOOLS)
 
 
 def tool_schemas(names: Iterable[str] | None = None, include_vision: bool = True, exclude: set[str] | None = None) -> list[dict]:

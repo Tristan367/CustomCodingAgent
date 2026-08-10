@@ -283,6 +283,19 @@ def forget_session(session_id: str):
     _unseen.pop(session_id, None)
 
 
+async def shutdown(timeout: float = 5.0):
+    """Stop every in-flight run before the database closes underneath it."""
+    tasks = [r.task for r in _runs.values() if r.task is not None and not r.task.done()]
+    for session_id in list(_aborts):
+        request_abort(session_id)
+    if tasks:
+        await asyncio.wait(tasks, timeout=timeout)
+    for task in tasks:
+        if not task.done():
+            task.cancel()
+    _runs.clear()
+
+
 def start_run(session_id: str) -> _Run:
     """Start a turn, or return the one already in progress."""
     existing = _runs.get(session_id)

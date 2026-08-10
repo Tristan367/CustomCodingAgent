@@ -1,6 +1,7 @@
 """FastAPI application: page routes, HTMX partials, and settings."""
 
 import asyncio
+import html
 import json
 import os
 import re
@@ -76,17 +77,30 @@ async def _warm_vision():
 async def lifespan(app: FastAPI):
     await init_db()
     await migrate_prompts()
-    from agent_server.providers import load_custom_endpoint_providers
+    from agent_server.providers import credentials, load_custom_endpoint_providers
     from agent_server.tools.custom import load_custom_tools
-    await load_custom_tools()
+
+    # Fill the key cache from the async connection, so no provider has to open
+    # its own blocking sqlite handle on the event loop to find its key.
+    credentials.prime(await db.get_all_settings())
+    problems = await load_custom_tools()
+    for problem in problems:
+        print(f"[tools] {problem}")
     await load_custom_endpoint_providers()
     # Background: startup must not wait on a machine that may be off.
     warm = asyncio.create_task(_warm_vision())
+
     yield
+
     warm.cancel()
     from agent_server import vision
     from agent_server.tools import browser
 
+    # Stop in-flight turns before closing the database underneath them. A run
+    # is a server-owned task, so shutdown used to leave them writing into a
+    # connection that had just been closed, losing the assistant message and
+    # raising into a background task nobody was watching.
+    await agent.shutdown()
     await vision.unload_model()
     await vision.close_client()
     await browser.close_browser()
@@ -879,78 +893,87 @@ def _slug(raw: str) -> str:
 # ── Custom tools editor ─────────────────────────────────────────────────────
 
 
-@app.get("/tools")
-async def tools_page(request: Request, saved: bool = False):
-    edit_tool = request.query_params.get("edit", "")
+async def _tools_context(edit_tool: str = "", saved: bool = False, error: str = "") -> dict:
+    """Everything custom_tools.html needs.
+
+    The error branches used to build a context of four keys, so the template's
+    loop over `secrets` raised UndefinedError and the intended inline message
+    came back as a 500 instead.
+    """
     schemas = tool_schemas()
     tools_list = await db.list_custom_tools()
     edit_tool_data = next((t for t in tools_list if t["name"] == edit_tool), None)
+    return {
+        "tools": tools_list,
+        "saved": saved,
+        "error": error,
+        "edit_tool": edit_tool,
+        "secrets": await db.list_secrets(),
+        "tool_schemas_json": json.dumps(schemas, indent=2),
+        "tool_count": len(schemas),
+        # The page claimed "N tokens" and was given the number of tools. The
+        # schemas go out on every single request, so their real size is the
+        # number worth showing.
+        "tool_schema_tokens": len(json.dumps(schemas, separators=(",", ":"))) // 4,
+        "tool_warnings": _tool_param_warnings(edit_tool_data) if edit_tool_data else [],
+        "default_test_args": _default_test_args(edit_tool_data),
+    }
+
+
+@app.get("/tools")
+async def tools_page(request: Request, saved: bool = False):
     return templates.TemplateResponse(
         request=request, name="custom_tools.html",
-        context={
-            "tools": tools_list,
-            "saved": saved,
-            "edit_tool": edit_tool,
-            "secrets": await db.list_secrets(),
-            "tool_schemas_json": json.dumps(schemas, indent=2),
-            "tool_schemas_count": sum(1 for _ in schemas),
-            "tool_warnings": _tool_param_warnings(edit_tool_data) if edit_tool_data else [],
-            "default_test_args": _default_test_args(edit_tool_data),
-        },
+        context=await _tools_context(request.query_params.get("edit", ""), saved),
     )
 
 
 @app.post("/_save_custom_tool")
 async def save_custom_tool(request: Request):
     from agent_server.tools.custom import reload_custom_tools
+    from agent_server.tools.registry import BUILT_IN_NAMES
 
     form = await request.form()
     name = _slug(str(form.get("name", "")))
     description = str(form.get("description", "")).strip()
-    parameters = str(form.get("parameters", "")).strip()
+    parameters = str(form.get("parameters", "")).strip() or "{}"
     script = str(form.get("script", ""))
     enabled = str(form.get("enabled", "")).lower() in ("1", "true", "on")
     ask_permission = str(form.get("ask_permission", "")).lower() in ("1", "true", "on")
 
-    if not name:
+    async def refuse(message: str):
         return templates.TemplateResponse(
             request=request, name="custom_tools.html",
-            context={"tools": await db.list_custom_tools(), "saved": False, "error": "Name is required"},
-        )
-    if name in {"read", "edit", "write", "bash", "grep", "glob", "webfetch", "websearch", "task", "explore", "skill", "vision", "screenshot", "browser-goto", "browser-click", "browser-fill", "browser-screenshot", "browser-steps"}:
-        return templates.TemplateResponse(
-            request=request, name="custom_tools.html",
-            context={"tools": await db.list_custom_tools(), "saved": False, "error": f"'{name}' is a built-in tool name"},
-        )
-    if len(description) > 1000:
-        return templates.TemplateResponse(
-            request=request, name="custom_tools.html",
-            context={"tools": await db.list_custom_tools(), "saved": False, "error": "Description too long (max 1000 chars)"},
-        )
-    if len(parameters) > 8000:
-        return templates.TemplateResponse(
-            request=request, name="custom_tools.html",
-            context={"tools": await db.list_custom_tools(), "saved": False, "error": "Parameters too long (max 8000 chars)"},
-        )
-    if len(script) > 32000:
-        return templates.TemplateResponse(
-            request=request, name="custom_tools.html",
-            context={"tools": await db.list_custom_tools(), "saved": False, "error": "Script too long (max 32000 chars)"},
+            context=await _tools_context(name, error=message),
         )
 
-    if parameters:
-        try:
-            params_json = json.loads(parameters)
-            if not isinstance(params_json, dict):
-                raise ValueError("parameters must be a JSON object")
-        except (json.JSONDecodeError, ValueError) as e:
-            return templates.TemplateResponse(
-                request=request, name="custom_tools.html",
-                context={"tools": await db.list_custom_tools(), "saved": False, "error": f"Invalid JSON in parameters: {e}"},
-            )
+    if not name:
+        return await refuse("Name is required")
+    if name in BUILT_IN_NAMES:
+        return await refuse(f"'{name}' is a built-in tool name")
+    if len(description) > 1000:
+        return await refuse("Description too long (max 1000 chars)")
+    if len(parameters) > 8000:
+        return await refuse("Parameters too long (max 8000 chars)")
+    if len(script) > 32000:
+        return await refuse("Script too long (max 32000 chars)")
+
+    # Always validated, including when the field was left blank. Skipping the
+    # check for an empty value stored "", which json.loads then choked on at
+    # load time -- and because loading deregisters everything before parsing,
+    # one such row disabled every custom tool and made the next startup fail
+    # before the app could serve the page needed to fix it.
+    try:
+        params_json = json.loads(parameters)
+    except json.JSONDecodeError as e:
+        return await refuse(f"Invalid JSON in parameters: {e}")
+    if not isinstance(params_json, dict):
+        return await refuse("Parameters must be a JSON object")
 
     await db.save_custom_tool(name, description, parameters, script, enabled, ask_permission)
-    await reload_custom_tools()
+    problems = await reload_custom_tools()
+    if problems:
+        return await refuse("; ".join(problems))
 
     return RedirectResponse(f"/tools?edit={name}&saved=true", status_code=303)
 
@@ -1016,6 +1039,8 @@ async def delete_custom_tool(request: Request):
 
 @app.post("/_new_custom_tool")
 async def new_custom_tool(request: Request):
+    from agent_server.tools.custom import reload_custom_tools
+
     form = await request.form()
     name = _slug(str(form.get("new_name", "")))
     if not name:
@@ -1110,17 +1135,41 @@ async def test_custom_tool(request: Request):
         out = stdout.decode("utf-8", errors="replace")[:5000]
         err = stderr.decode("utf-8", errors="replace")[:2000]
         if proc.returncode != 0:
-            return HTMLResponse(f"<div class='notice-error'><strong>Exit code {proc.returncode}</strong><pre>{err or out}</pre></div>")
-        return HTMLResponse(f"<pre class='test-output'>{out or '(no output)'}</pre>")
+            return _test_output(err or out, f"Exit code {proc.returncode}")
+        return _test_output(out or "(no output)")
     except TimeoutError:
-        try:
-            proc.kill()
-            await proc.wait()
-        except Exception:
-            pass
-        return HTMLResponse("<div class='notice-error'>Timed out after 30s</div>")
+        await _kill(proc)
+        return _test_output("", "Timed out after 30s")
     except Exception as e:
-        return HTMLResponse(f"<div class='notice-error'>{type(e).__name__}: {e}</div>")
+        # The subprocess outlives a non-timeout failure otherwise.
+        await _kill(proc)
+        return _test_output("", f"{type(e).__name__}: {e}")
+
+
+async def _kill(proc):
+    try:
+        proc.kill()
+        await proc.wait()
+    except (ProcessLookupError, AttributeError):
+        pass
+
+
+def _test_output(body: str, error: str = "") -> HTMLResponse:
+    """Render a tool test result.
+
+    The output is whatever the script printed, so it is escaped. It used to be
+    interpolated into an f-string and written to innerHTML, which made any tool
+    that echoes markup -- or is handed a crafted argument -- script running in
+    this page, with the secrets store one fetch away.
+    """
+    safe = html.escape(body)
+    if error:
+        return HTMLResponse(
+            f'<div class="notice-error"><strong>{html.escape(error)}</strong>'
+            + (f"<pre>{safe}</pre>" if body else "")
+            + "</div>"
+        )
+    return HTMLResponse(f'<pre class="test-output">{safe}</pre>')
 
 
 # ── Custom endpoints ────────────────────────────────────────────────────────

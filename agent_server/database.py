@@ -203,7 +203,35 @@ async def init_db():
             await db.execute(f"ALTER TABLE {table} ADD COLUMN {column} {decl}")
     await _rekey_prompts(db)
     await db.commit()
-    await seed_default_custom_tools()
+    # The seeder used to write custom tools literally named `vision` and
+    # `screenshot`, which load_custom_tools then registered over the built-ins
+    # of the same name. Their scripts had unbalanced quotes and could not run,
+    # and deleting one took the built-in with it. Nothing replaces it: the
+    # built-in tools are the feature it was badly duplicating.
+    await _drop_seeded_shadow_tools(db)
+
+
+async def _drop_seeded_shadow_tools(db):
+    """Remove the broken `vision`/`screenshot` rows an old seeder wrote.
+
+    Only the exact scripts that were seeded are removed. A tool of that name
+    the user wrote themselves is left alone -- it will simply be refused
+    registration, with a warning on the tools page, rather than deleted.
+    """
+    cur = await db.execute(
+        "SELECT name, script FROM custom_tools WHERE name IN ('vision', 'screenshot')"
+    )
+    doomed = [
+        row[0] for row in await cur.fetchall()
+        # The seeded pair are recognisable by the unbalanced quote that made
+        # them unrunnable in the first place.
+        if "from agent_server.vision import" in (row[1] or "")
+    ]
+    if doomed:
+        await db.executemany(
+            "DELETE FROM custom_tools WHERE name = ?", [(n,) for n in doomed]
+        )
+        await db.commit()
 
 
 async def _rekey_prompts(db):
@@ -785,84 +813,4 @@ async def delete_custom_tool(name: str):
     await _execute("DELETE FROM custom_tools WHERE name = ?", (name,))
 
 
-async def seed_default_custom_tools():
-    """Populate custom_tools with vision/screenshot on first run."""
-    existing = await _fetchall("SELECT name FROM custom_tools")
-    if existing:
-        return
-
-    vision_script = (
-        'python3 -c "'
-        "import asyncio, json, sys, os; "
-        "from agent_server.vision import analyze, load_image; "
-        "async def main(): "
-        "  paths = json.loads(os.environ.get('TOOL_ARG_PATHS','[]') or sys.argv[1]); "
-        "  prompt = os.environ.get('TOOL_ARG_PROMPT','') or sys.argv[2]; "
-        "  images = [load_image(p) for p in paths]; "
-        "  print(await analyze(images, prompt)); "
-        "asyncio.run(main())"
-        '" "$TOOL_ARG_PATHS" "$TOOL_ARG_PROMPT'
-    )
-
-    screenshot_script = (
-        'python3 -c "'
-        "import asyncio, json, sys, os; "
-        "from agent_server.vision import capture, analyze; "
-        "async def main(): "
-        "  url = os.environ.get('TOOL_ARG_URL','') or sys.argv[1]; "
-        "  w = os.environ.get('TOOL_ARG_WIDTH'); h = os.environ.get('TOOL_ARG_HEIGHT'); "
-        "  img = await capture(url, width=int(w) if w else None, height=int(h) if h else None); "
-        "  prompt = os.environ.get('TOOL_ARG_PROMPT','') or sys.argv[2] if len(sys.argv) > 2 else 'Describe this page.'; "
-        "  print(await analyze([img], prompt)); "
-        "asyncio.run(main())"
-        '" "$TOOL_ARG_URL" "$TOOL_ARG_PROMPT'
-    )
-
-    vision_params = json.dumps({
-        "type": "object",
-        "properties": {
-            "paths": {
-                "type": "array",
-                "items": {"type": "string"},
-                "description": "Paths to image files to analyse"
-            },
-            "prompt": {
-                "type": "string",
-                "description": "What to ask about the images"
-            },
-        },
-        "required": ["paths", "prompt"],
-    })
-
-    screenshot_params = json.dumps({
-        "type": "object",
-        "properties": {
-            "url": {
-                "type": "string",
-                "description": "URL to capture"
-            },
-            "width": {
-                "type": "integer",
-                "description": "Viewport width (default: 1280)"
-            },
-            "height": {
-                "type": "integer",
-                "description": "Viewport height (default: 720)"
-            },
-            "prompt": {
-                "type": "string",
-                "description": "What to ask about the screenshot"
-            },
-        },
-        "required": ["url"],
-    })
-
-    await save_custom_tool(
-        "vision", "Look at images with a vision model. Pass paths to image files and a prompt.",
-        vision_params, vision_script, True, True,
-    )
-    await save_custom_tool(
-        "screenshot", "Capture a web page and analyse it with a vision model.",
-        screenshot_params, screenshot_script, True, True,
-    )
 

@@ -115,6 +115,8 @@ async def edit_file(
     replaceAll: bool = False,
     hashStart: str = "",
     hashEnd: str = "",
+    startLine: int = 0,
+    endLine: int = 0,
     newText: str = "",
     **_,
 ) -> ToolResult:
@@ -135,25 +137,25 @@ async def edit_file(
     except Exception as e:
         return ToolResult.error(f"reading file: {e}", title)
 
-    # ── hashline mode: anchor edits on 2-char content hashes ──
+    # ── hashline mode: anchor edits on 4-char content hashes ──
     if hashStart:
         lines = content.splitlines()
-        start_idx = _find_hash(lines, hashStart)
-        if start_idx < 0:
-            return ToolResult.error(
-                f"hash {hashStart} not found in {path}. "
-                "The file changed since you read it — read it again.",
-                title,
+        try:
+            start_idx = _resolve_hash(lines, hashStart, startLine, "hashStart")
+            end_idx = (
+                _resolve_hash(lines, hashEnd, endLine, "hashEnd")
+                if hashEnd else start_idx
             )
-        end_idx = _find_hash(lines, hashEnd) if hashEnd else start_idx
-        if end_idx < 0:
-            return ToolResult.error(
-                f"hash {hashEnd} not found in {path}. "
-                "The file changed since you read it — read it again.",
-                title,
-            )
+        except _HashError as e:
+            return ToolResult.error(f"{e} (in {path})", title)
+
         if end_idx < start_idx:
-            start_idx, end_idx = end_idx, start_idx
+            # Silently swapping these deleted a span the caller never named.
+            return ToolResult.error(
+                f"hashEnd is at line {end_idx + 1}, above hashStart at line "
+                f"{start_idx + 1}. Give them in the order they appear.",
+                title,
+            )
 
         replaced_lines = end_idx - start_idx + 1
         replacement_lines = newText.count("\n") + 1 if newText else 0
@@ -254,14 +256,67 @@ async def write_file(ctx: ToolContext, *, filePath: str, content: str, **_) -> T
     )
 
 
-def _find_hash(lines: list[str], target: str) -> int:
-    """Return the index of the line whose 4-char hash matches `target`, or -1."""
-    if not target:
-        return -1
-    for i, line in enumerate(lines):
-        if _hash_line(line) == target:
-            return i
-    return -1
+class _HashError(Exception):
+    """A hash anchor that cannot be resolved to exactly one line."""
+
+
+# How far from a stated line number to look for the hash. An edit earlier in
+# the same file shifts everything below it, and re-reading the whole file to
+# recover four characters that have not changed is pure waste.
+_DRIFT = 40
+
+
+def _resolve_hash(lines: list[str], target: str, line_no: int, label: str) -> int:
+    """The single line index `target` refers to.
+
+    The hash is of the line's content alone, so every blank line in a file
+    shares one, as does every `}` and every `    return`. Returning the first
+    match -- which is what this did -- meant an anchor on a repeated line
+    silently rewrote the first occurrence in the file rather than the one the
+    caller had read. Ambiguity is now an error, and `startLine`/`endLine`
+    resolve it.
+    """
+    matches = [i for i, line in enumerate(lines) if _hash_line(line) == target]
+
+    if line_no:
+        index = line_no - 1
+        # Exact hit first: the stated line still holds what was read.
+        if 0 <= index < len(lines) and _hash_line(lines[index]) == target:
+            return index
+        # Otherwise the nearest match, so an earlier edit shifting the file
+        # does not force a re-read of something that has not changed.
+        near = [i for i in matches if abs(i - index) <= _DRIFT]
+        if len(near) == 1:
+            return near[0]
+        if len(near) > 1:
+            return min(near, key=lambda i: abs(i - index))
+        if not matches:
+            raise _HashError(
+                f"{label} {target} does not match line {line_no} or anything "
+                f"within {_DRIFT} lines of it. The file changed since you read "
+                "it -- read it again."
+            )
+        raise _HashError(
+            f"{label} {target} is nowhere near line {line_no}; it matches "
+            f"line{'s' if len(matches) > 1 else ''} "
+            f"{', '.join(str(i + 1) for i in matches[:8])}. Read the file again."
+        )
+
+    if not matches:
+        raise _HashError(
+            f"{label} {target} not found. The file changed since you read it "
+            "-- read it again."
+        )
+    if len(matches) > 1:
+        where = ", ".join(str(i + 1) for i in matches[:8])
+        more = f" and {len(matches) - 8} more" if len(matches) > 8 else ""
+        raise _HashError(
+            f"{label} {target} matches {len(matches)} identical lines "
+            f"({where}{more}) -- blank lines and lines like `}}` all hash the "
+            f"same. Pass {label.replace('hash', '').lower() or 'start'}Line "
+            "with the line number you meant, or anchor on a unique line."
+        )
+    return matches[0]
 
 
 def _display(path: Path, ctx: ToolContext) -> str:

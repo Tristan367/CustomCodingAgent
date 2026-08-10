@@ -1,3 +1,5 @@
+"""User-defined tools: a JSON Schema and a shell script, stored in the database."""
+
 import json
 from typing import Any
 
@@ -5,47 +7,61 @@ from agent_server import database as db
 from agent_server.tools.base import ToolContext, ToolResult
 from agent_server.tools.bash import run_bash
 from agent_server.tools.registry import (
+    BUILT_IN_NAMES,
     Tool,
     _custom_tool_names,
-    register,
+    register_custom,
     unregister_custom,
 )
 
-BUILT_IN_NAMES = frozenset({
-    "read", "edit", "write", "bash", "grep", "glob",
-    "webfetch", "task", "vision", "screenshot",
-})
+__all__ = ["BUILT_IN_NAMES", "load_custom_tools", "reload_custom_tools"]
 
 
 def _make_handler(script: str):
     async def _run(ctx: ToolContext, **kwargs: Any) -> ToolResult:
         env_vars = {f"TOOL_ARG_{k.upper()}": json.dumps(v) for k, v in kwargs.items()}
-        secrets = await db.load_secrets_dict()
-        env_vars.update(secrets)
+        env_vars.update(await db.load_secrets_dict())
         return await run_bash(ctx, command=script, env=env_vars)
     return _run
 
 
-async def load_custom_tools():
-    """Register every enabled custom tool from the database."""
+async def load_custom_tools() -> list[str]:
+    """Register every enabled custom tool. Returns any problems, for the UI.
+
+    A row that cannot be loaded is skipped rather than raised. Loading used to
+    deregister everything first and then parse, so one row with unparseable
+    parameters -- which the save path allowed, because it skipped validation
+    when the field was empty -- left *every* custom tool deregistered and made
+    the next startup fail before the app could serve a page to fix it with.
+    """
+    problems: list[str] = []
     unregister_custom(_custom_tool_names.copy())
-    _custom_tool_names.clear()
+
     for row in await db.list_custom_tools():
         if not row["enabled"]:
             continue
         name = row["name"]
-        handler = _make_handler(row["script"])
-        pause = "permission" if row["ask_permission"] else None
-        register(Tool(
+        try:
+            parameters = json.loads(row["parameters"] or "{}")
+        except json.JSONDecodeError as e:
+            problems.append(f"{name}: parameters are not valid JSON ({e})")
+            continue
+        if not isinstance(parameters, dict):
+            problems.append(f"{name}: parameters must be a JSON object")
+            continue
+
+        error = register_custom(Tool(
             name=name,
             description=row["description"],
-            parameters=json.loads(row["parameters"]),
-            handler=handler,
-            pause=pause,
+            parameters=parameters,
+            handler=_make_handler(row["script"]),
+            pause="permission" if row["ask_permission"] else None,
         ))
-        _custom_tool_names.add(name)
+        if error:
+            problems.append(error)
+    return problems
 
 
-async def reload_custom_tools():
-    """Re-register after a save/deletion."""
-    await load_custom_tools()
+async def reload_custom_tools() -> list[str]:
+    """Re-register after a save or deletion."""
+    return await load_custom_tools()

@@ -540,10 +540,17 @@ async function stopStreaming() {
 
 /* ── Message rendering ───────────────────────────────────────────────────── */
 
-function el(tag, className, html) {
+/* Text, never markup. Every caller passes plain text, but this used to assign
+   to innerHTML, and several of those strings are written by the model: a tool
+   name, a summary interpolating args.command or args.filePath, a subagent
+   prompt. A page fetched by `webfetch` could therefore put script into the
+   transcript, and the tool summary is rendered *before* the call is approved.
+   Markdown is the only thing that legitimately produces HTML here, and it goes
+   through md.render at its own call sites. */
+function el(tag, className, text) {
   const node = document.createElement(tag);
   if (className) node.className = className;
-  if (html !== undefined) node.innerHTML = html;
+  if (text !== undefined) node.textContent = text;
   return node;
 }
 
@@ -804,7 +811,7 @@ function completeToolCall(event) {
   }
   const result = el('div', 'tool-result');
   result.appendChild(el('div', 'tool-result-label', event.is_error ? 'error' : 'output'));
-  result.appendChild(el('pre', 'tool-raw', md.escapeHtml(event.output || '(no output)')));
+  result.appendChild(el('pre', 'tool-raw', event.output || '(no output)'));
   details.appendChild(result);
   autoscroll();
 }
@@ -887,7 +894,7 @@ function appendNotice(kind, text) {
   const node = el('div', `message notice notice-${kind}`);
   node.appendChild(roleEl(kind));
   const body = el('div', 'msg-content');
-  body.appendChild(el('div', 'content-text', md.escapeHtml(text)));
+  body.appendChild(el('div', 'content-text', text));
   node.appendChild(body);
   App.els.messages.appendChild(node);
   autoscroll();

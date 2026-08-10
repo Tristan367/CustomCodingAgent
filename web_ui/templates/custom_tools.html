@@ -123,7 +123,7 @@
     </table>
 
     <h2>Tool definitions (what the AI sees)</h2>
-    <p class="hint">{{ tool_schemas_count }} tokens across all tools, sent with every request.</p>
+    <p class="hint">{{ tool_count }} tools, about {{ '{:,}'.format(tool_schema_tokens) }} tokens of schema sent with every request.</p>
     <pre class="schema-preview">{{ tool_schemas_json | default('') | safe }}</pre>
 
     <h2>Secrets (env vars for custom tools)</h2>

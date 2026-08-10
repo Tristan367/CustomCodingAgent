@@ -25,7 +25,12 @@ router = APIRouter()
 @router.get("/")
 async def index(request: Request, clone: str = ""):
     return templates.TemplateResponse(
-        request=request, name="index.html", context=await _home_context(clone_id=clone)
+        request=request, name="index.html",
+        context=await _home_context(
+            clone_id=clone,
+            edit_script=request.query_params.get("script", ""),
+            saved=request.query_params.get("saved") == "true",
+        )
     )
 
 

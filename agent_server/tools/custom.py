@@ -26,7 +26,7 @@ def _make_handler(script: str):
 
 
 async def load_custom_tools() -> list[str]:
-    """Register every enabled custom tool. Returns any problems, for the UI.
+    """Register every custom tool. Returns any problems, for the UI.
 
     A row that cannot be loaded is skipped rather than raised. Loading used to
     deregister everything first and then parse, so one row with unparseable
@@ -38,8 +38,6 @@ async def load_custom_tools() -> list[str]:
     unregister_custom(_custom_tool_names.copy())
 
     for row in await db.list_custom_tools():
-        if not row["enabled"]:
-            continue
         name = row["name"]
         try:
             parameters = json.loads(row["parameters"] or "{}")

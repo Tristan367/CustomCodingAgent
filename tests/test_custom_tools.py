@@ -115,10 +115,16 @@ async def test_an_empty_parameters_field_means_no_parameters(clean_db):
     assert TOOLS["bare"].parameters == {}
 
 
-async def test_a_disabled_tool_is_not_registered(clean_db):
-    await db.save_custom_tool("off", "", "{}", "echo", False, False)
-    await custom.load_custom_tools()
-    assert "off" not in TOOLS
+async def test_every_custom_tool_registers(clean_db):
+    """There is no global on/off any more.
+
+    A tool used to carry an `enabled` flag *and* be selectable per prompt
+    profile, so a tool could read as "on" and still be missing from the session
+    that needed it. Availability is the profile's business alone now.
+    """
+    await db.save_custom_tool("mine", "d", "{}", "echo hi", True, False)
+    assert await custom.load_custom_tools() == []
+    assert "mine" in TOOLS
 
 
 async def test_reloading_drops_tools_that_were_deleted(clean_db):

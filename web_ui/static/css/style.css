@@ -766,12 +766,12 @@ button:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
 /* The scroll container spans the full window so its scrollbar sits against the
    edge of the screen. Centring is done on the children instead; putting the
    max-width on the scroller itself parked the scrollbar in mid-air. */
-#home-page, #prompts-page, #tools-page, #scripts-page {
+#home-page, #prompts-page, #tools-page {
   width: 100%;
   padding: 22px 20px 60px;
   overflow-y: auto;
 }
-#home-page > *, #prompts-page > *, #tools-page > *, #scripts-page > * {
+#home-page > *, #prompts-page > *, #tools-page > * {
   max-width: 860px;
   margin-inline: auto;
 }
@@ -844,7 +844,8 @@ button:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
 .sound-row > label:first-child { flex: 3; }
 .sound-row > label:last-child { flex: 2; }
 
-input[type="text"], input[type="password"], input[type="number"], select, textarea {
+input:not([type]), input[type="text"], input[type="password"], input[type="number"],
+input[type="search"], input[type="url"], input[type="email"], select, textarea {
   padding: 0 var(--s2);
   min-height: var(--control-h);
   background: var(--bg-inset);
@@ -1311,7 +1312,13 @@ input[type="checkbox"] { accent-color: var(--accent); }
 /* Breathing room under the prompts form so the save button isn't flush. */
 #prompts-page form { margin-bottom: 34px; }
 #prompts-page .save-btn:last-of-type { margin-bottom: 12px; }
-#tools-page .hint { margin-bottom: 14px; }
+#tools-page .hint { margin-bottom: var(--s4); }
+/* Chips wrap onto a second line in a narrow column, and with no row gap they
+   sat flush against each other. */
+.tools-table td .chip { display: inline-block; }
+.tools-table td { line-height: 1.9; }
+.panel .hint { margin-bottom: var(--s3); }
+#scripts-panel .prompt-bar { margin-top: var(--s3); }
 #tools-page h2 { margin-top: 24px; }
 #tools-page .schema-preview {
   display: block;
@@ -1544,12 +1551,18 @@ input:disabled, textarea:disabled { opacity: 0.6; background: var(--bg-inset); }
 .vol-pop input[type="range"] {
   writing-mode: vertical-lr;
   direction: rtl;                 /* full volume at the top */
-  width: 14px;
+  /* The thumb is round and about 16px across, so a 14px box clipped a slice
+     off each side and left it looking rectangular. Give it room and keep the
+     track thin instead. */
+  width: 22px;
   height: 78px;
   margin: 2px 0 0;
+  background: transparent;
   accent-color: var(--accent);
   cursor: pointer;
 }
+.vol-pop input[type="range"]::-webkit-slider-runnable-track { width: 4px; }
+.vol-pop input[type="range"]::-moz-range-track { width: 4px; }
 
 @media (max-width: 640px) {
   /* No hover on a touch screen, so the control is always shown and the slider

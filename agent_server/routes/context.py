@@ -201,7 +201,9 @@ async def _session_context(session: dict) -> dict:
     }
 
 
-async def _home_context(error: str = "", clone_id: str = "") -> dict:
+async def _home_context(
+    error: str = "", clone_id: str = "", edit_script: str = "", saved: bool = False
+) -> dict:
     settings = await db.get_all_settings()
     clone_defaults = {}
     if clone_id:
@@ -244,6 +246,11 @@ async def _home_context(error: str = "", clone_id: str = "") -> dict:
 
     return {
         "sessions": await db.list_sessions(),
+        # Scripts are a home-page panel rather than a page of their own: they
+        # are a handful of buttons, not a destination.
+        "scripts": await db.list_scripts(),
+        "edit_script": edit_script,
+        "saved": saved,
         "sound_enabled": await _sound_enabled(),
         "uploaded_sounds": _list_uploaded_sounds(),
         "stt": stt_availability(),

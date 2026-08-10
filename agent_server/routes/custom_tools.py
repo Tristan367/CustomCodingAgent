@@ -10,9 +10,20 @@ from fastapi.responses import HTMLResponse, RedirectResponse
 from agent_server import database as db
 from agent_server.routes.context import _slug
 from agent_server.templating import templates
-from agent_server.tools.registry import TOOLS, tool_schemas
+from agent_server.tools.registry import BUILT_IN_NAMES, TOOLS, tool_schemas
 
 router = APIRouter()
+
+
+def _page_or_body(request, page: str, body: str) -> str:
+    """Which template to render for this request.
+
+    An HTMX swap replaces one element. Returning the full page -- navbar,
+    <head> and all -- put a second copy of the chrome inside the element being
+    swapped, which is why saving a tool or a secret grew another navbar.
+    """
+    return body if request.headers.get("HX-Request") else page
+
 
 
 async def _tools_context(edit_tool: str = "", saved: bool = False, error: str = "") -> dict:
@@ -42,6 +53,7 @@ async def _tools_context(edit_tool: str = "", saved: bool = False, error: str = 
             ),
         }
         for tool in sorted(TOOLS.values(), key=lambda t: t.name)
+        if tool.name in BUILT_IN_NAMES
     ]
     return {
         "tools": tools_list,
@@ -136,7 +148,7 @@ def _test_output(body: str, error: str = "") -> HTMLResponse:
 @router.get("/tools")
 async def tools_page(request: Request, saved: bool = False):
     return templates.TemplateResponse(
-        request=request, name="custom_tools.html",
+        request=request, name=_page_or_body(request, "custom_tools.html", "custom_tools_body.html"),
         context=await _tools_context(request.query_params.get("edit", ""), saved),
     )
 
@@ -151,12 +163,11 @@ async def save_custom_tool(request: Request):
     description = str(form.get("description", "")).strip()
     parameters = str(form.get("parameters", "")).strip() or "{}"
     script = str(form.get("script", ""))
-    enabled = str(form.get("enabled", "")).lower() in ("1", "true", "on")
     ask_permission = str(form.get("ask_permission", "")).lower() in ("1", "true", "on")
 
     async def refuse(message: str):
         return templates.TemplateResponse(
-            request=request, name="custom_tools.html",
+            request=request, name=_page_or_body(request, "custom_tools.html", "custom_tools_body.html"),
             context=await _tools_context(name, error=message),
         )
 
@@ -183,7 +194,10 @@ async def save_custom_tool(request: Request):
     if not isinstance(params_json, dict):
         return await refuse("Parameters must be a JSON object")
 
-    await db.save_custom_tool(name, description, parameters, script, enabled, ask_permission)
+    # Always stored enabled. Which sessions may call it is decided per prompt
+    # profile on the Prompts page, and a second global switch only created a
+    # state where a tool was "on" and still absent from the session.
+    await db.save_custom_tool(name, description, parameters, script, True, ask_permission)
     problems = await reload_custom_tools()
     if problems:
         return await refuse("; ".join(problems))

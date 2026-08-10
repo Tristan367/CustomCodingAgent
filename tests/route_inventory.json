@@ -553,13 +553,6 @@
     "name": "redoc_html"
   },
   {
-    "path": "/scripts",
-    "methods": [
-      "GET"
-    ],
-    "name": "scripts_page"
-  },
-  {
     "path": "/sessions/{session_id}",
     "methods": [
       "GET"

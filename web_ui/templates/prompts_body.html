@@ -1,0 +1,182 @@
+<div id="prompts-page">
+    <h2>Prompts</h2>
+    {% if saved %}
+    <div class="success-banner">
+        Saved.
+        {%- if moved %}
+        {{ moved }} session{{ '' if moved == 1 else 's' }} using it will pick it up at their next compaction.
+        {%- else %}
+        New sessions will use it.
+        {%- endif %}
+    </div>
+    {% endif %}
+    <p class="hint">
+        A <strong>system prompt</strong> tells the agent how to work; a
+        <strong>summarising prompt</strong> is used when a long conversation is compacted.
+        A session picks one of each, independently. Editing a system prompt reaches the
+        sessions using it at their next compaction, which is when the prefix is rebuilt
+        anyway; sessions with a prompt of their own are left alone.
+    </p>
+
+    <form method="POST" action="/_save_prompts" class="stack" id="prompt-form">
+        <div class="prompt-bar">
+            <select id="prompt-picker" name="name" aria-label="Prompt"
+                    onchange="window.location='/prompts?selected=' + encodeURIComponent(this.value)">
+                {% for label, keys in groups.items() %}
+                {% if keys %}
+                <optgroup label="{{ label }}">
+                    {% for key in keys %}
+                    <option value="{{ key }}" {% if key == selected %}selected{% endif %}>
+                        {{ key.split(':')[1] }}
+                    </option>
+                    {% endfor %}
+                </optgroup>
+                {% endif %}
+                {% endfor %}
+            </select>
+            <button type="submit" class="btn-primary">Save</button>
+            <button type="button" class="btn-secondary" onclick="newPrompt()">New</button>
+            <button type="button" class="btn-danger" onclick="deletePrompt()"
+                    id="delete-prompt">Delete</button>
+        </div>
+        <div id="prompt-drift" class="drift-banner" {% if selected not in drift %}hidden{% endif %}>
+            {% if selected in drift %}{% for d in drift[selected] %}<p>{{ d }}</p>{% endfor %}{% endif %}
+        </div>
+        <textarea name="body" id="prompt-body" rows="20" class="prompt-textarea"
+                  spellcheck="false">{{ body }}</textarea>
+
+        {% if selected.startswith('system:') %}
+        {% set off = disabled_tools.get(selected, []) %}
+        <details class="tool-toggles" {% if off %}open{% endif %}>
+            <summary>
+                Tools for this profile
+                <span class="hint">
+                    {{ tools | length - off | length }} of {{ tools | length }} on
+                </span>
+            </summary>
+            <p class="hint">
+                Every schema is sent on every request, so a tool this profile will
+                never use costs tokens each turn and is one more thing to pick
+                wrongly.
+            </p>
+            <div class="tool-grid">
+                {% for t in tools %}
+                <label class="checkbox-label" title="{{ t.description[:160] }}">
+                    <input type="checkbox" name="tool" value="{{ t.name }}"
+                           {% if t.name not in off %}checked{% endif %}>
+                    <code>{{ t.name }}</code>
+                    <span class="hint">~{{ t.tokens }}t{% if t.pause %} · asks{% endif %}</span>
+                </label>
+                {% endfor %}
+            </div>
+        </details>
+        {% endif %}
+    </form>
+    <script>
+        /* A prompt is never overwritten once edited, so it can keep describing
+           tools that have since been removed. Nothing else would say so. */
+        const PROMPT_DRIFT = {{ drift | tojson }};
+        function showDrift(key) {
+            const box = document.getElementById('prompt-drift');
+            const items = PROMPT_DRIFT[key];
+            box.textContent = '';
+            box.hidden = !items;
+            (items || []).forEach((text) => {
+                const p = document.createElement('p');
+                p.textContent = text;
+                box.appendChild(p);
+            });
+        }
+    </script>
+
+    <section class="panel" style="margin-top:16px">
+        <h2>Subagent prompt <span class="hint" style="font-weight:400">(applies to all sessions)</span></h2>
+        <p class="hint">
+            The model a session's subagents run on is chosen per session, on the
+            session itself &mdash; it depends on the work in front of you, not on
+            which prompt you happen to be editing.
+        </p>
+        <form hx-post="/_save_subagent" hx-target="#prompts-page" hx-swap="outerHTML" class="stack">
+            <label class="checkbox-label">
+                <input type="checkbox" name="use_system_prompt" value="1"
+                       {% if not sa_prompt %}checked{% endif %}
+                       onchange="document.getElementById('sa-prompt-area').hidden=this.checked">
+                Same as system prompt
+            </label>
+            <textarea name="prompt" id="sa-prompt-area" rows="6" class="prompt-textarea"
+                      spellcheck="false" {% if not sa_prompt %}hidden{% endif %}
+                      placeholder="Custom subagent prompt...">{{ sa_prompt }}</textarea>
+            <button type="submit" class="btn-primary" style="align-self:flex-start">Save</button>
+        </form>
+    </section>
+
+    <form method="POST" action="/_new_prompt" id="new-prompt-form" hidden>
+        <input name="new_name" id="new-prompt-name">
+        <input name="kind" id="new-prompt-kind">
+    </form>
+    <form method="POST" action="/_delete_prompt" id="delete-prompt-form" hidden>
+        <input name="name" id="delete-prompt-name">
+    </form>
+
+    <script>
+        const PROMPT_BODIES = {{ bodies | tojson }};
+        const PROTECTED_PROMPT = {{ protected | tojson }};
+        const picker = document.getElementById('prompt-picker');
+        const bodyBox = document.getElementById('prompt-body');
+        let lastSaved = bodyBox.value;
+        let pickerPrevious = picker.value;
+
+        const kindOf = (key) => key.split(':')[0];
+        const nameOf = (key) => key.split(':')[1];
+
+        function syncDelete() {
+            const del = document.getElementById('delete-prompt');
+            del.disabled = nameOf(picker.value) === PROTECTED_PROMPT;
+            del.title = del.disabled
+                ? 'The default cannot be deleted -- sessions fall back to it'
+                : '';
+        }
+
+        picker.addEventListener('change', async () => {
+            if (bodyBox.value !== lastSaved) {
+                const ok = await ui.confirm('Your edits to this prompt have not been saved.',
+                    { title: 'Discard changes?', confirmLabel: 'Discard' });
+                if (!ok) { picker.value = pickerPrevious; return; }
+            }
+            bodyBox.value = PROMPT_BODIES[picker.value] ?? '';
+            lastSaved = bodyBox.value;
+            pickerPrevious = picker.value;
+            syncDelete();
+            showDrift(picker.value);
+        });
+
+        /* New prompts are of whichever kind is on screen, seeded from that
+           kind's default -- a blank box is a worse start than one to edit down. */
+        async function newPrompt() {
+            const kind = kindOf(picker.value);
+            const label = kind === 'compaction' ? 'summarising prompt' : 'system prompt';
+            const name = await ui.prompt(`It will start as a copy of the default ${label}.`, {
+                title: `New ${label}`,
+                placeholder: 'terse',
+                confirmLabel: 'Create',
+            });
+            if (!name) return;
+            document.getElementById('new-prompt-name').value = name;
+            document.getElementById('new-prompt-kind').value = kind;
+            document.getElementById('new-prompt-form').submit();
+        }
+
+        async function deletePrompt() {
+            if (nameOf(picker.value) === PROTECTED_PROMPT) return;
+            const ok = await ui.confirm(
+                `Sessions using "${nameOf(picker.value)}" will fall back to the default.`,
+                { title: 'Delete prompt', confirmLabel: 'Delete' });
+            if (!ok) return;
+            document.getElementById('delete-prompt-name').value = picker.value;
+            document.getElementById('delete-prompt-form').submit();
+        }
+
+        document.getElementById('prompt-form').addEventListener('submit', () => { lastSaved = bodyBox.value; });
+        syncDelete();
+    </script>
+</div>

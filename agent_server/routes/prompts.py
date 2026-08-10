@@ -20,6 +20,17 @@ from agent_server.tools.registry import TOOLS
 router = APIRouter()
 
 
+def _page_or_body(request, page: str, body: str) -> str:
+    """Which template to render for this request.
+
+    An HTMX swap replaces one element. Returning the full page -- navbar,
+    <head> and all -- put a second copy of the chrome inside the element being
+    swapped, which is why saving a tool or a secret grew another navbar.
+    """
+    return body if request.headers.get("HX-Request") else page
+
+
+
 async def _propagate(name: str) -> int:
     """Queue the edited prompt onto the sessions that share it.
 
@@ -97,7 +108,7 @@ async def _prompts_context(
 @router.get("/prompts")
 async def prompts_page(request: Request, selected: str = ""):
     return templates.TemplateResponse(
-        request=request, name="prompts.html", context=await _prompts_context(selected)
+        request=request, name=_page_or_body(request, "prompts.html", "prompts_body.html"), context=await _prompts_context(selected)
     )
 
 
@@ -122,7 +133,7 @@ async def save_prompts(request: Request):
 
     return templates.TemplateResponse(
         request=request,
-        name="prompts.html",
+        name=_page_or_body(request, "prompts.html", "prompts_body.html"),
         context=await _prompts_context(selected=f"{kind}:{name}", saved=True, moved=moved),
     )
 
@@ -147,7 +158,7 @@ async def save_subagent(request: Request):
     await db.set_setting("subagent_prompt", prompt)
 
     return templates.TemplateResponse(
-        request=request, name="prompts.html", context=await _prompts_context(saved=True),
+        request=request, name=_page_or_body(request, "prompts.html", "prompts_body.html"), context=await _prompts_context(saved=True),
     )
 
 

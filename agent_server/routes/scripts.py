@@ -15,10 +15,10 @@ from fastapi.responses import HTMLResponse, RedirectResponse
 from agent_server import database as db
 from agent_server.config import BASE_DIR
 from agent_server.routes.context import _slug
-from agent_server.templating import templates
 from agent_server.tools.bash import _collect, _kill
 
 RUN_TIMEOUT_SEC = 120
+MAX_SCRIPT_CHARS = 32000
 MAX_OUTPUT_CHARS = 5000
 
 router = APIRouter()
@@ -34,14 +34,6 @@ async def _scripts_context(edit_script: str = "", saved: bool = False, error: st
     }
 
 
-@router.get("/scripts")
-async def scripts_page(request: Request, saved: bool = False):
-    return templates.TemplateResponse(
-        request=request, name="scripts.html",
-        context=await _scripts_context(request.query_params.get("edit", ""), saved),
-    )
-
-
 @router.post("/_save_script")
 async def save_script(request: Request):
     form = await request.form()
@@ -49,18 +41,12 @@ async def save_script(request: Request):
     body = str(form.get("body", ""))
 
     if not name:
-        return templates.TemplateResponse(
-            request=request, name="scripts.html",
-            context=await _scripts_context(name, error="Name is required"),
-        )
-    if len(body) > 32000:
-        return templates.TemplateResponse(
-            request=request, name="scripts.html",
-            context=await _scripts_context(name, error="Script too long (max 32000 chars)"),
-        )
+        return RedirectResponse("/", status_code=303)
+    if len(body) > MAX_SCRIPT_CHARS:
+        return RedirectResponse(f"/?script={name}&error=toolong", status_code=303)
 
     await db.save_script(name, body)
-    return RedirectResponse(f"/scripts?edit={name}&saved=true", status_code=303)
+    return RedirectResponse(f"/?script={name}&saved=true", status_code=303)
 
 
 @router.post("/_delete_script")
@@ -69,7 +55,7 @@ async def delete_script(request: Request):
     name = str(form.get("name", "")).strip()
     if name:
         await db.delete_script(name)
-    return RedirectResponse("/scripts", status_code=303)
+    return RedirectResponse("/", status_code=303)
 
 
 @router.post("/_new_script")
@@ -77,9 +63,9 @@ async def new_script(request: Request):
     form = await request.form()
     name = _slug(str(form.get("new_name", "")))
     if not name:
-        return RedirectResponse("/scripts", status_code=303)
+        return RedirectResponse("/", status_code=303)
     await db.save_script(name, "")
-    return RedirectResponse(f"/scripts?edit={name}", status_code=303)
+    return RedirectResponse(f"/?script={name}", status_code=303)
 
 
 @router.post("/_run_script")

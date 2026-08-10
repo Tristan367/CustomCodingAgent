@@ -1,7 +1,4 @@
-{% extends "base.html" %}
-{% block content %}
-<div id="scripts-page">
-    <h2>Scripts</h2>
+<h2>Scripts</h2>
     {% if saved %}<div class="success-banner">Saved.</div>{% endif %}
     {% if error %}<div class="error-banner">{{ error }}</div>{% endif %}
     <p class="hint">
@@ -120,5 +117,4 @@
     </script>
     {% endif %}
     {% endif %}
-</div>
-{% endblock %}
+

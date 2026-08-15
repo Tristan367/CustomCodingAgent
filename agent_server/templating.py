@@ -92,23 +92,49 @@ def strip_attachments(content: str) -> str:
     return text.strip()
 
 
-def difflines(diff: str) -> list[tuple[str, str]]:
-    """Tag each diff line with a CSS class, matching renderDiff() in app.js so a
-    reloaded transcript looks identical to the streamed one."""
+_HUNK_RE = re.compile(r"^@@ -(\d+)(?:,(\d+))? \+(\d+)(?:,(\d+))? @@")
+
+
+def difflines(diff: str) -> tuple[int, list[tuple[str, str, str]]]:
+    """Tag each diff line with a CSS class and its file line number, matching
+    renderDiff() in app.js so a reloaded transcript looks identical to the
+    streamed one. The leading + / - / space marker is dropped: the class carries
+    the colour, the number feeds the gutter, and the text gets syntax-highlighted.
+
+    Returns (gutter_width, lines) where gutter_width is the digit count of the
+    largest line number, so every number column lines up.
+    """
     out = []
+    old_num = new_num = 0
+    max_num = 0
     for line in (diff or "").rstrip("\n").split("\n"):
-        if line.startswith("@@"):
-            cls = "diff-hunk"
-        elif line.startswith(("+++", "---")):
-            cls = "diff-meta"
-        elif line.startswith("+"):
+        m = _HUNK_RE.match(line)
+        if m:
+            old_num = int(m.group(1))
+            new_num = int(m.group(3))
+            continue
+        if line.startswith(("+++", "---")):
+            continue
+        if line.startswith("+"):
             cls = "diff-add"
+            text = line[1:]
+            num = new_num
+            new_num += 1
         elif line.startswith("-"):
             cls = "diff-del"
+            text = line[1:]
+            num = old_num
+            old_num += 1
         else:
             cls = "diff-ctx"
-        out.append((cls, line))
-    return out
+            text = line[1:] if line.startswith(" ") else line
+            num = new_num
+            old_num += 1
+            new_num += 1
+        max_num = max(max_num, num)
+        out.append((cls, str(num), text))
+    lnw = len(str(max_num)) if max_num else 1
+    return lnw, out
 
 
 def diffstat_counts(diff: str) -> tuple[int, int]:
@@ -132,5 +158,24 @@ templates.env.filters["toolcalls"] = normalize_tool_calls
 templates.env.filters["difflines"] = difflines
 templates.env.filters["diffstat"] = diffstat_counts
 templates.env.filters["duration"] = duration_label
+
+
+# ── Theme ────────────────────────────────────────────────────────────────────
+# The accent colour family is a global visual preference. Cached so every page
+# render can reach it without an async DB read per request; seeded at startup
+# and updated when the user picks a new one.
+_theme = "green"
+
+
+def set_theme(value: str) -> None:
+    global _theme
+    _theme = value
+
+
+def current_theme() -> str:
+    return _theme
+
+
+templates.env.globals["current_theme"] = current_theme
 
 

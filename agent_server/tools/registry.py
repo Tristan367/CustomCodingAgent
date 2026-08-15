@@ -13,7 +13,7 @@ from agent_server.tools.browser import browser as browser_tool
 from agent_server.tools.capture import capture
 from agent_server.tools.file_ops import edit_file, read_file, write_file
 from agent_server.tools.search import glob_search, grep_search
-from agent_server.tools.skill import load_skill
+from agent_server.tools.send_message import send_message
 from agent_server.tools.task import run_task
 from agent_server.tools.web import webfetch, websearch
 
@@ -268,25 +268,6 @@ register(Tool(
 ))
 
 register(Tool(
-    name="skill",
-    description=(
-        "Load reusable Markdown instructions for a technology, framework, or workflow. "
-        "Call without `name` to list available skills. Call with `name` to load one. "
-        "Skills live in ~/.config/codeagent/skills/ as .md files. Use this instead of "
-        "guessing at API signatures or conventions you might misremember."
-    ),
-    parameters={
-        "type": "object",
-        "properties": {
-            "name": {"type": "string", "description": "Skill filename without .md extension, or leave blank to list"},
-        },
-        "required": [],
-    },
-    handler=load_skill,
-    parallel_safe=True,
-))
-
-register(Tool(
     name="explore",
     description=(
         "Dispatch a narrow subagent to search the codebase for specific facts — "
@@ -308,6 +289,26 @@ register(Tool(
     },
     handler=run_task,
     parallel_safe=True,
+))
+
+register(Tool(
+    name="send_message",
+    description=(
+        "Send a message to another agent session by name. The target receives it when "
+        "it finishes its current work and replies with the same tool. Returns immediately."
+    ),
+    parameters={
+        "type": "object",
+        "properties": {
+            "session": {
+                "type": "string",
+                "description": "Name of the target session (not its id)",
+            },
+            "message": {"type": "string", "description": "The message to send"},
+        },
+        "required": ["session", "message"],
+    },
+    handler=send_message,
 ))
 
 register(Tool(
@@ -347,8 +348,9 @@ register(Tool(
     description=(
         "Drive a real browser to build, inspect and TEST a web UI. Give it a list of "
         "`steps`; each is reported with its outcome. The browser is kept between calls "
-        "in this session, so a login persists and a long flow can be split across "
-        "several calls.\n"
+        "in this session, and its login (cookies/localStorage) is saved to disk so it "
+        "survives the browser restarting -- a long flow can be split across several "
+        "calls and still stay signed in.\n"
         "\n"
         "Start with `snapshot`. It returns the page's accessibility tree, which tells "
         "you exactly what is on the page and what to address it as -- do not guess CSS "
@@ -359,11 +361,15 @@ register(Tool(
         "\n"
         "Actions: goto(url) click fill(text) press(key) hover select(value) check "
         "uncheck upload(paths) scroll(to) wait(ms|at|until) back forward reload "
-        "resize(width,height) snapshot eval(js) shoot record expect.\n"
+        "resize(width,height) snapshot eval(js) network shoot record expect.\n"
         "\n"
         "`expect` is an assertion and fails the call if it does not hold -- use it "
         "instead of claiming something works. One of: visible, hidden, text, url, "
         "count, console_clean.\n"
+        "\n"
+        "`network` reports the requests the page has made (method, status, url), newest "
+        "last -- the tab that says whether a click actually hit the endpoint. Narrow "
+        "with `filter` (a substring, or /regex/) and `count`.\n"
         "\n"
         "`shoot` saves a screenshot and returns its path; add `ask` to have it "
         "described in the same call. `record` takes a burst of frames, which is how "
@@ -400,7 +406,7 @@ register(Tool(
                                 "goto", "click", "fill", "press", "hover", "select",
                                 "check", "uncheck", "upload", "scroll", "wait",
                                 "back", "forward", "reload", "resize",
-                                "snapshot", "eval", "shoot", "record", "expect",
+                                "snapshot", "eval", "network", "shoot", "record", "expect",
                             ],
                         },
                         "at": {
@@ -429,7 +435,13 @@ register(Tool(
                         "count": {
                             "type": "integer",
                             "description": "expect: how many `at` should match; "
-                                           "on record: how many frames",
+                                           "on record: how many frames; "
+                                           "on network: how many requests to show",
+                        },
+                        "filter": {
+                            "type": "string",
+                            "description": "On network: keep only requests whose URL matches "
+                                           "this substring, or /regex/.",
                         },
                         "console_clean": {
                             "type": "boolean",
@@ -460,7 +472,8 @@ register(Tool(
             },
             "reset": {
                 "type": "boolean",
-                "description": "Throw away cookies and history and start a clean browser first.",
+                "description": "Throw away cookies, history and the saved login, and start "
+                               "a clean browser first.",
             },
         },
         "required": ["steps"],
@@ -521,9 +534,9 @@ async def execute_tool(
         return ToolResult.error(f"{name} failed: {type(e).__name__}: {e}", name)
 
     if not isinstance(result, ToolResult):
-        result = ToolResult(output=str(result), title=name)
+        result = ToolResult(output=str(result))
     if not result.title:
-        result = ToolResult(output=result.output, is_error=result.is_error, title=name)
+        result = ToolResult(output=result.output, is_error=result.is_error)
     if result.is_error:
         log.warning("tool %s failed: %s", name, result.output[:200])
     return result

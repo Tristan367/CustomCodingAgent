@@ -2,6 +2,7 @@
 
 import html
 import re
+from urllib.parse import urlparse
 
 import httpx
 
@@ -15,6 +16,7 @@ from agent_server.tools.base import ToolContext, ToolResult, truncate
 
 TIMEOUT = WEBFETCH_TIMEOUT
 MAX_BYTES = WEBFETCH_MAX_BYTES
+MAX_REDIRECTS = 10
 
 
 def _is_private(host: str) -> bool:
@@ -45,43 +47,63 @@ def _is_private(host: str) -> bool:
 
 
 async def webfetch(ctx: ToolContext, *, url: str, **_) -> ToolResult:
-    title = f"fetch {url[:80]}"
+    title = url[:80]
     if not url.startswith(("http://", "https://")):
         return ToolResult.error(f"invalid URL (must be http/https): {url}", title)
 
-    if not WEBFETCH_ALLOW_PRIVATE:
-        from urllib.parse import urlparse
-
-        if _is_private(urlparse(url).hostname or ""):
-            return ToolResult.error(
-                "refusing to fetch a local or private-network address. "
-                "Set WEBFETCH_ALLOW_PRIVATE=1 if that is genuinely wanted.",
-                title,
-            )
+    if not WEBFETCH_ALLOW_PRIVATE and _is_private(urlparse(url).hostname or ""):
+        return ToolResult.error(
+            "refusing to fetch a local or private-network address. "
+            "Set WEBFETCH_ALLOW_PRIVATE=1 if that is genuinely wanted.",
+            title,
+        )
 
     try:
         async with httpx.AsyncClient(
             timeout=TIMEOUT,
-            follow_redirects=True,
+            follow_redirects=False,
             headers={
                 "User-Agent": "Mozilla/5.0 (compatible; CodeAgent/1.0)",
                 "Accept": "text/html,application/xhtml+xml,text/plain,*/*",
             },
         ) as client:
             resp = await client.get(url)
+            # Follow redirects by hand so the private-network guard is re-checked
+            # on every hop, not just the first URL. httpx's follow_redirects
+            # would happily carry the request to localhost or cloud metadata.
+            current = url
+            for _ in range(MAX_REDIRECTS):
+                if resp.status_code not in (301, 302, 303, 307, 308):
+                    break
+                location = resp.headers.get("location")
+                if not location:
+                    return ToolResult.error(
+                        f"redirect from {current} with no Location header", title
+                    )
+                next_url = str(httpx.URL(current).join(location))
+                if not WEBFETCH_ALLOW_PRIVATE and _is_private(urlparse(next_url).hostname or ""):
+                    return ToolResult.error(
+                        "refusing to follow a redirect to a local or private-network "
+                        "address. Set WEBFETCH_ALLOW_PRIVATE=1 if that is genuinely wanted.",
+                        title,
+                    )
+                current = next_url
+                resp = await client.get(next_url)
+            if resp.status_code in (301, 302, 303, 307, 308):
+                return ToolResult.error(f"too many redirects for {url}", title)
     except httpx.TimeoutException:
         return ToolResult.error(f"request timed out after {TIMEOUT}s: {url}", title)
     except Exception as e:
         return ToolResult.error(f"fetching {url}: {e}", title)
 
     if resp.status_code >= 400:
-        return ToolResult.error(f"HTTP {resp.status_code} from {url}", title)
+        return ToolResult.error(f"HTTP {resp.status_code} from {current}", title)
 
     content_type = resp.headers.get("content-type", "").lower()
     if len(resp.content) > MAX_BYTES:
         return ToolResult.error(f"response too large ({len(resp.content):,} bytes)", title)
     if not any(t in content_type for t in ("text/", "json", "xml", "javascript")):
-        return ToolResult.error(f"unsupported content-type '{content_type}' for {url}", title)
+        return ToolResult.error(f"unsupported content-type '{content_type}' for {current}", title)
 
     text = resp.text
     if "html" in content_type:
@@ -89,7 +111,7 @@ async def webfetch(ctx: ToolContext, *, url: str, **_) -> ToolResult:
 
     text = text.strip()
     if not text:
-        return ToolResult(output=f"(empty response from {url}, HTTP {resp.status_code})", title=title)
+        return ToolResult(output=f"(empty response from {current}, HTTP {resp.status_code})", title=title)
 
     return ToolResult(
         output=truncate(text, MAX_TOOL_RESULT_CHARS, "page", spill=True),
@@ -120,7 +142,7 @@ def _html_to_text(raw: str) -> str:
 
 async def websearch(ctx: ToolContext, *, query: str, **_) -> ToolResult:
     """Search the web via DuckDuckGo Lite (no API key needed)."""
-    title = f"search: {query[:60]}"
+    title = query[:60]
     try:
         async with httpx.AsyncClient(
             timeout=TIMEOUT,

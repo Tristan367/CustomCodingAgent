@@ -17,6 +17,42 @@ BINARY_SUFFIXES = {
     ".wav", ".ogg", ".woff", ".woff2", ".ttf", ".sqlite", ".db",
 }
 
+# File extension -> highlight.js language. Keys are lowercase with the dot.
+# Unknown extensions fall back to "" so the UI just shows plain text.
+_EXT_LANG = {
+    ".py": "python", ".pyw": "python",
+    ".js": "javascript", ".mjs": "javascript", ".cjs": "javascript",
+    ".jsx": "javascript", ".ts": "typescript", ".tsx": "typescript",
+    ".json": "json", ".jsonc": "json",
+    ".sh": "bash", ".bash": "bash", ".zsh": "bash", ".fish": "bash",
+    ".html": "xml", ".htm": "xml", ".xml": "xml", ".svg": "xml",
+    ".css": "css", ".scss": "css", ".sass": "css", ".less": "css",
+    ".md": "markdown", ".markdown": "markdown",
+    ".go": "go", ".rs": "rust", ".c": "c", ".h": "c",
+    ".cpp": "cpp", ".cc": "cpp", ".cxx": "cpp", ".hpp": "cpp", ".hh": "cpp",
+    ".java": "java", ".kt": "kotlin", ".kts": "kotlin",
+    ".sql": "sql", ".yaml": "yaml", ".yml": "yaml",
+    ".toml": "ini", ".ini": "ini", ".cfg": "ini", ".conf": "ini",
+    ".dockerfile": "dockerfile", ".rb": "ruby", ".php": "php",
+    ".cs": "csharp", ".swift": "swift", ".scala": "scala",
+    ".lua": "lua", ".r": "r", ".pl": "perl", ".vim": "vim",
+    ".makefile": "makefile", ".cmake": "cmake", ".gradle": "gradle",
+    ".graphql": "graphql", ".proto": "protobuf", ".diff": "diff", ".patch": "diff",
+    ".nix": "nix", ".hs": "haskell", ".ex": "elixir", ".exs": "elixir",
+    ".erl": "erlang", ".clj": "clojure", ".dart": "dart",
+    ".tf": "hcl", ".tfvars": "hcl",
+}
+
+
+def lang_for_path(path: Path) -> str:
+    """highlight.js language for a file, so reads/diffs render highlighted."""
+    name = path.name.lower()
+    if name == "dockerfile":
+        return "dockerfile"
+    if name == "makefile":
+        return "makefile"
+    return _EXT_LANG.get(path.suffix.lower(), "")
+
 # Files the model has read this session; `edit`/`write` require a prior read so
 # the model cannot blindly clobber a file it has never seen.
 _read_files: dict[str, set[str]] = {}
@@ -134,7 +170,7 @@ async def read_file(
     **_,
 ) -> ToolResult:
     path = ctx.resolve(filePath)
-    title = f"read {_display(path, ctx)}"
+    title = _title_path(path)
 
     if not path.exists():
         suggestion = _suggest(path)
@@ -146,7 +182,7 @@ async def read_file(
             return ToolResult.error(f"permission denied reading directory: {path}", title)
         return ToolResult(
             output=f"{path} is a directory. Contents:\n" + "\n".join(entries[:200]),
-            title=f"list {_display(path, ctx)}",
+            title=_title_path(path),
         )
     if path.suffix.lower() in BINARY_SUFFIXES:
         return ToolResult.error(f"cannot read binary file as text: {path}", title)
@@ -156,7 +192,7 @@ async def read_file(
         )
 
     try:
-        content = path.read_text(encoding="utf-8", errors="replace")
+        content, _bom, _le = _read_file_text(path)
     except Exception as e:
         return ToolResult.error(f"reading file: {e}", title)
 
@@ -175,11 +211,13 @@ async def read_file(
     end = min(total, start + limit)
 
     numbered = []
+    code_lines = []
     for idx in range(start, end):
         line = lines[idx]
         if len(line) > MAX_LINE_CHARS:
             line = line[:MAX_LINE_CHARS] + "... [line truncated]"
         numbered.append(f"{idx + 1}: {line}")
+        code_lines.append(line)
 
     tag = _record_snapshot(ctx.session_id, path, content, set(range(start + 1, end + 1)))
 
@@ -195,7 +233,15 @@ async def read_file(
         )
 
     mark_read(ctx.session_id, path)
-    return ToolResult(output=output, title=f"{title} ({total} lines)")
+    return ToolResult(
+        output=output,
+        title=f"{title} ({total} lines)",
+        # Display-only: the file's contents without the header or line numbers,
+        # so the UI can syntax-highlight it. `output` above stays model-facing.
+        code="\n".join(code_lines),
+        code_start=start + 1,
+        lang=lang_for_path(path),
+    )
 
 
 def _shift_seen(snapshot, start: int, replaced: int, inserted: int) -> set[int]:
@@ -292,7 +338,7 @@ async def edit_file(
     **_,
 ) -> ToolResult:
     path = ctx.resolve(filePath)
-    title = f"edit {_display(path, ctx)}"
+    title = _title_path(path)
 
     if not path.exists():
         return ToolResult.error(f"file not found: {path}. Use `write` to create it.", title)
@@ -319,7 +365,7 @@ async def edit_file(
         end_idx = (endLine or startLine) - 1
 
         replaced_lines = end_idx - start_idx + 1
-        replacement_lines = newText.count("\n") + 1 if newText else 0
+        replacement_lines = len(newText.splitlines()) if newText else 0
         new_lines = (
             lines[:start_idx] + (newText.splitlines() if newText else []) + lines[end_idx + 1:]
         )
@@ -339,7 +385,6 @@ async def edit_file(
         new_tag = _record_snapshot(ctx.session_id, path, updated, seen)
 
         diff = unified_diff(content, updated, _display(path, ctx))
-        added, removed = diff_stats(diff)
         summary = (
             f"Edited {path}: replaced {replaced_lines} line"
             f"{'s' if replaced_lines != 1 else ''} at {startLine}"
@@ -352,7 +397,10 @@ async def edit_file(
                 f"\nLines below {startLine} have moved by {shift:+d}; the numbers above "
                 "are already adjusted."
             )
-        return ToolResult(output=summary, title=f"{title} (+{added}/-{removed})", diff=diff)
+        return ToolResult(
+            output=summary, title=title,
+            diff=diff, lang=lang_for_path(path),
+        )
 
     # ── exact-string mode ──
     if not oldString:
@@ -383,17 +431,17 @@ async def edit_file(
     replaced = count if replaceAll else 1
     line_no = content[: content.index(oldString)].count("\n") + 1
     diff = unified_diff(content, updated, _display(path, ctx))
-    added, removed = diff_stats(diff)
     return ToolResult(
         output=f"Edited {path} ({replaced} replacement{'s' if replaced != 1 else ''} at line ~{line_no}).",
-        title=f"{title} (+{added}/-{removed})",
+        title=title,
         diff=diff,
+        lang=lang_for_path(path),
     )
 
 
 async def write_file(ctx: ToolContext, *, filePath: str, content: str, **_) -> ToolResult:
     path = ctx.resolve(filePath)
-    title = f"write {_display(path, ctx)}"
+    title = _title_path(path)
 
     existed = path.exists()
     if existed and path.is_dir():
@@ -434,19 +482,14 @@ async def write_file(ctx: ToolContext, *, filePath: str, content: str, **_) -> T
     return ToolResult(
         output=f"{verb} {path} ({lines} lines).",
         title=summary,
+        # `diff` feeds the change-summary only. The inline block renders `code`
+        # as plain content -- a write is the whole file, so nothing is "added"
+        # against a previous version worth colouring green.
         diff=diff,
+        code=content,
+        code_start=1,
+        lang=lang_for_path(path),
     )
-
-
-class _HashError(Exception):
-    """A hash anchor that cannot be resolved to exactly one line."""
-
-
-# How far from a stated line number to look for the hash. An edit earlier in
-# the same file shifts everything below it, and re-reading the whole file to
-# recover four characters that have not changed is pure waste.
-_DRIFT = 40
-
 
 
 def _display(path: Path, ctx: ToolContext) -> str:
@@ -454,6 +497,14 @@ def _display(path: Path, ctx: ToolContext) -> str:
         return str(path.relative_to(ctx.project_dir))
     except ValueError:
         return str(path)
+
+
+def _title_path(path: Path) -> str:
+    """Full absolute path, left-truncated so the filename always shows."""
+    full = str(path)
+    if len(full) > 60:
+        return "\u2026" + full[-59:]
+    return full
 
 
 def _suggest(path: Path) -> str:

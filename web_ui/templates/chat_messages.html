@@ -30,29 +30,54 @@
          data-tool-call-id="{{ m.tool_call_id or '' }}">
         <div class="msg-role" title="{{ m.tool_name or 'result' }}">{{ m.tool_name or 'result' }}</div>
         <div class="msg-content">
-            {% if m.diff %}
-            {# Diffs are the one tool result worth showing unprompted, so this
-               opens by default. Everything else stays folded. #}
-            <details class="tool-details diff-details" open>
+            {% set input_text = tool_inputs.get(m.tool_call_id) %}
+            {% if m.diff and m.tool_name == 'edit' %}
+            {# Open by default only for the tools the user chose to auto-expand. #}
+            <details class="tool-details diff-details"{% if m.tool_name in expand_tools %} open{% endif %}>
                 {% set added, removed = m.diff | diffstat %}
+                {% set lnw, dlines = m.diff | difflines %}
                 <summary class="tool-summary">
                     <span class="tool-label">{{ m.tool_title or (m.content.splitlines()[0] if m.content else 'diff') }}</span>
                     <span class="diff-stat"><span class="diff-stat-add">+{{ added }}</span><span class="diff-stat-del">&minus;{{ removed }}</span></span>
                 </summary>
+                {% if input_text %}
+                <div class="tool-result">
+                    <div class="tool-result-label">input</div>
+                    <pre class="tool-raw">{{ input_text }}</pre>
+                </div>
+                {% endif %}
                 {# No newline between spans: they are display:block, so a literal newline
    inside the <pre> would double every line's height. #}
-                <pre class="diff-block">{%- for cls, line in m.diff | difflines %}<span class="{{ cls }}">{{ line if line else ' ' }}</span>{%- endfor %}</pre>
+                <pre class="diff-block"{% if m.lang %} data-lang="{{ m.lang }}"{% endif %} style="--lnw: {{ lnw }}ch">{%- for cls, num, line in dlines %}<span class="row {{ cls }}"><span class="ln">{{ num }}</span><span class="lc">{{ line if line else ' ' }}</span></span>{%- endfor %}</pre>
             </details>
             {% else %}
-            <details class="tool-details">
+            <details class="tool-details"{% if m.tool_name in expand_tools %} open{% endif %}>
                 <summary class="tool-summary">
-                    <span class="tool-label">{{ m.tool_title or ((m.tool_name or 'tool') ~ ' result') }}</span>
+                    <span class="tool-label">{{ m.tool_title or 'result' }}</span>
                     {%- if m.duration_ms | duration %}
                     <span class="tool-elapsed">{{ m.duration_ms | duration }}</span>
                     {%- endif %}
                 </summary>
-                <pre class="tool-raw">{{ m.content[:8000] }}{% if m.content | length > 8000 %}
-... [truncated in view]{% endif %}</pre>
+                {% if input_text %}
+                <div class="tool-result">
+                    <div class="tool-result-label">input</div>
+                    <pre class="tool-raw">{{ input_text }}</pre>
+                </div>
+                {% endif %}
+                <div class="tool-result">
+                    {% if input_text or m.is_error %}
+                    <div class="tool-result-label">{{ 'error' if m.is_error else 'output' }}</div>
+                    {% endif %}
+                    {% if m.code %}
+                    {# A read or write's contents: shown as highlighted, numbered
+                       code without the [path#tag] header or line numbers that the
+                       model sees. #}
+                    <pre class="tool-raw code-lines"{% if m.lang %} data-lang="{{ m.lang }}"{% endif %} data-start="{{ m.code_start or 1 }}"><code>{{ m.code[:20000] }}{% if m.code | length > 20000 %}\n... [truncated in view]{% endif %}</code></pre>
+                    {% else %}
+                    <pre class="tool-raw">{{ m.content[:8000] }}{% if m.content | length > 8000 %}
+ ... [truncated in view]{% endif %}</pre>
+                    {% endif %}
+                </div>
             </details>
             {% endif %}
         </div>
@@ -65,15 +90,26 @@
     {# An assistant turn that only carried tool calls has nothing left to show
        once the raw arguments are hidden, and would render as an empty bubble. #}
     {% if body or attached or m.reasoning_content or m.role != 'assistant' %}
-    <div class="message {{ m.role }}" id="msg-{{ m.id }}">
-        <div class="msg-role" title="{{ m.role }}">{{ m.role }}</div>
+    {% if m.role == 'assistant' and m.reasoning_content %}
+    {# Thinking block as its own row, separate from the AI's response. Without a
+       split the thinking text sits inside the assistant bubble and the model's
+       own reply ends up below it with no breathing room. #}
+    <div class="message thinking" id="msg-{{ m.id }}-thinking">
+        <div class="msg-role" title="reasoning"></div>
         <div class="msg-content">
-            {% if m.reasoning_content %}
-            <details class="tool-details reasoning-details">
-                <summary class="tool-summary">Thinking</summary>
+            <details class="tool-details reasoning-details"{% if 'reasoning' in expand_tools %} open{% endif %}>
+                <summary class="tool-summary">Reasoning</summary>
                 <pre class="reasoning-text">{{ m.reasoning_content }}</pre>
             </details>
-            {% endif %}
+        </div>
+        <span class="msg-time">{{ m.created_at | clocktime }}</span>
+    </div>
+    {% endif %}
+    {% if body or attached or m.role != 'assistant' %}
+    <div class="message {{ m.role }}{% if m.mail_from %} mail{% endif %}" id="msg-{{ m.id }}">
+        <div class="msg-role" title="{{ m.mail_from or m.role }}">{{ m.mail_from or m.role }}</div>
+        <div class="msg-content">
+
 
             {% if attached %}
             <div class="msg-attachments">
@@ -92,6 +128,7 @@
         </div>
         <span class="msg-time">{{ m.created_at | clocktime }}</span>
     </div>
+    {% endif %}
     {% endif %}
     {% endif %}
     {% endfor %}

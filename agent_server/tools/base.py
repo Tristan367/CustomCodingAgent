@@ -18,6 +18,12 @@ class ToolContext:
     model: str = "deepseek-v4-pro"
     # Empty means "same model as this session".
     subagent_model: str = ""
+    # The parent session's prompt profile, so the subagent can inherit its
+    # subagent-prompt and tool configuration.
+    prompt_profile: str = "default"
+    # Which tier of subagent this is. 0 = first-level subagent, 1 = subsubagent,
+    # etc. Incremented each time `task` launches from within a subagent.
+    subagent_tier: int = 0
     abort: asyncio.Event = field(default_factory=asyncio.Event)
 
     def resolve(self, path: str | None) -> Path:
@@ -42,6 +48,14 @@ class ToolResult:
     is_error: bool = False
     title: str = ""
     diff: str = ""
+    # highlight.js language for `code`/`diff`, so the UI can syntax-highlight
+    # what the model saw as raw text. Empty means "don't highlight".
+    lang: str = ""
+    # The code this result is meant to display (e.g. a file read without the
+    # [path#tag] header and line numbers). Display-only, never sent to the model.
+    code: str = ""
+    # 1-indexed line number of the first line in `code`, for the gutter.
+    code_start: int = 1
     # Token usage for tools that call a model themselves, so their spend is
     # attributed to the session instead of vanishing.
     usage: dict | None = None
@@ -67,7 +81,8 @@ def unified_diff(before: str, after: str, path: str, context: int = 3) -> str:
     ))
     if not lines:
         return ""
-    # Drop the ---/+++ header; the UI already shows the filename.
+    # Drop the ---/+++ header; the UI already shows the filename. The @@ hunk
+    # headers are kept: they carry the line numbers the UI renders in its gutter.
     body = lines[2:] if len(lines) > 2 and lines[0].startswith("---") else lines
     text = "".join(body)
     if len(text) > 20_000:

@@ -52,7 +52,7 @@ async def capture(
     if prompt is None:
         return ToolResult(
             output=body + "\n\nNot described. Pass these paths to `vision` to ask about them.",
-            title=f"capture ({len(paths)} frame{plural})",
+            title=f"{len(paths)} frame{plural}",
         )
 
     # Dispatched by name so a `vision` supplied as a custom tool answers here
@@ -65,7 +65,7 @@ async def capture(
             "\n\nNot described: no `vision` tool is installed. "
             "Add one on the Tools page, or ask about these paths another way."
         )
-        return ToolResult(output=body, title=f"capture ({len(paths)} frame{plural})")
+        return ToolResult(output=body, title=f"{len(paths)} frame{plural}")
 
     result = await execute_tool(
         "vision", {"prompt": prompt or DEFAULT_PROMPT, "paths": paths[:MAX_IMAGES]}, ctx
@@ -77,4 +77,4 @@ async def capture(
         )
     else:
         body += f"\n\n{result.output}"
-    return ToolResult(output=body, title=f"capture ({len(paths)} frame{plural})")
+    return ToolResult(output=body, title=f"{len(paths)} frame{plural}")

@@ -84,7 +84,6 @@ async def create_session_form(
     project_dir: str = Form(...),
     model: str = Form(DEFAULT_MODEL),
     prompt_profile: str = Form("default"),
-    compact_profile: str = Form("default"),
     thinking_effort: str = Form(""),
     custom_model: str = Form(""),
     subagent_model: str = Form(""),
@@ -111,7 +110,6 @@ async def create_session_form(
         provider=provider,
         model=effective_model,
         prompt_profile=prompt_profile,
-        compact_profile=compact_profile,
         thinking_effort=thinking_effort or None,
         subagent_model=subagent_model or None,
     )
@@ -146,6 +144,5 @@ async def quick_chat(request: Request):
         project_dir=str(scratch),
         model=DEFAULT_MODEL,
         prompt_profile=PROTECTED_PROMPT,
-        compact_profile=PROTECTED_PROMPT,
     )
     return RedirectResponse(f"/sessions/{session['id']}", status_code=303)

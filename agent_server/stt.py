@@ -21,6 +21,9 @@ _NOISE = re.compile(
     r"^\s*[\(\[\*][^)\]\*]{0,40}[\)\]\*]\s*$|^\s*(you|thanks for watching[.!]?|thank you[.!]?)\s*$",
     re.IGNORECASE,
 )
+# STT engines sometimes insert bracket-delimited placeholders (e.g. [BLANK AUDIO],
+# [inaudible], [music]). Nobody says brackets aloud, so strip anything inside them.
+_BRACKET = re.compile(r"\[[^\]]*\]")
 
 
 class STTError(RuntimeError):
@@ -92,6 +95,7 @@ async def _run(cmd: list[str], timeout: int, label: str) -> str:
 
 
 def _clean(raw: str) -> str:
+    raw = _BRACKET.sub("", raw)
     lines = [ln.strip() for ln in raw.splitlines()]
     kept = [ln for ln in lines if ln and not _NOISE.match(ln)]
     text = " ".join(kept)

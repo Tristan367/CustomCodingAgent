@@ -21,12 +21,19 @@ from agent_server import tts as tts_service
 from agent_server.compaction import should_offer_compaction
 from agent_server.config import (
     DEFAULT_MODEL,
+    DYNAMIC_DEEPSEEK_MODELS,
     MODELS,
     REASONING_EFFORTS,
     THRESHOLD_STEPS,
+    dynamic_deepseek_models,
     stt_available,
 )
-from agent_server.conversation import parse_arguments, pending_tool_calls, tool_call_name
+from agent_server.conversation import (
+    normalize_tool_calls,
+    parse_arguments,
+    pending_tool_calls,
+    tool_call_name,
+)
 from agent_server.providers import (
     _providers,
     get_provider,
@@ -34,7 +41,7 @@ from agent_server.providers import (
     list_providers,
 )
 from agent_server.stt import availability as stt_availability
-from agent_server.system_prompt import COMPACTION, list_prompt_names
+from agent_server.system_prompt import list_prompt_names
 from agent_server.tools.registry import get_tool
 
 _SOUND_DIR = Path.home() / ".config" / "codeagent" / "sounds"
@@ -47,6 +54,16 @@ def _slug(raw: str) -> str:
     return re.sub(r"[^a-z0-9-]+", "-", raw.strip().lower()).strip("-")[:40]
 
 
+def _page_or_body(request, page: str, body: str) -> str:
+    """Which template to render for this request.
+
+    An HTMX swap replaces one element. Returning the full page -- navbar,
+    <head> and all -- put a second copy of the chrome inside the element being
+    swapped, which is why saving a tool or a secret grew another navbar.
+    """
+    return body if request.headers.get("HX-Request") else page
+
+
 def _clamp(raw: str, low: float, high: float, fallback: float) -> float:
     try:
         return min(max(float(raw), low), high)
@@ -56,6 +73,34 @@ def _clamp(raw: str, low: float, high: float, fallback: float) -> float:
 
 async def _sound_enabled() -> bool:
     return await db.get_setting("sound_enabled", "1") != "0"
+
+
+DEFAULT_EXPAND_TOOLS = ["write", "edit"]
+
+
+async def _expand_tools() -> list[str]:
+    """Tool names whose results auto-expand in the transcript."""
+    raw = await db.get_setting("expand_tools", "")
+    if raw:
+        try:
+            values = json.loads(raw)
+            if isinstance(values, list):
+                # The reasoning block used to be keyed "thinking"; migrate it.
+                return ["reasoning" if v == "thinking" else str(v) for v in values]
+        except json.JSONDecodeError:
+            pass
+    return list(DEFAULT_EXPAND_TOOLS)
+
+
+def _expandable_tools() -> list[str]:
+    """Every tool the user can choose to auto-expand, the four they are most
+    likely to want first. `reasoning` is not a tool, but its block obeys the same
+    auto-expand rule, so it gets a checkbox of its own."""
+    from agent_server.tools.registry import TOOLS
+
+    preferred = ["write", "edit", "read", "bash", "reasoning"]
+    rest = sorted(name for name in TOOLS if name not in preferred)
+    return preferred + rest
 
 
 def _ensure_sound_dir() -> Path:
@@ -98,6 +143,12 @@ def _offerable_models() -> list[dict]:
                 "provider": key,
                 "needs_model_id": True,
             })
+
+    # Models discovered from the DeepSeek /models endpoint at startup, offered
+    # only while the key is present so a model that cannot authenticate is never
+    # presented as runnable.
+    if DYNAMIC_DEEPSEEK_MODELS and get_provider("deepseek").has_credentials():
+        offered.extend(dynamic_deepseek_models())
     return offered
 
 
@@ -175,18 +226,48 @@ async def _pending_prompt(session: dict, messages: list[dict]) -> dict | None:
     }
 
 
+def _tool_input_text(name: str, args: dict) -> str | None:
+    """The input worth repeating, only for tools whose summary does not name it."""
+    if name == "bash":
+        return args.get("command")
+    if name == "send_message":
+        return args.get("message")
+    return None
+
+
+def _tool_inputs(messages: list[dict]) -> dict[str, str]:
+    """Map tool_call_id to the call's input, for display in the transcript."""
+    inputs: dict[str, str] = {}
+    for m in messages:
+        if m["role"] != "assistant" or not m.get("tool_calls"):
+            continue
+        for call in normalize_tool_calls(m["tool_calls"]):
+            cid = call.get("id")
+            if not cid:
+                continue
+            text = _tool_input_text(tool_call_name(call), parse_arguments(call))
+            if not text:
+                continue
+            if len(text) > 3000:
+                text = text[:3000] + "\n\u2026 [truncated]"
+            inputs[cid] = text
+    return inputs
+
+
 async def _session_context(session: dict) -> dict:
     usage = await db.get_session_usage(session["id"])
     messages = await db.get_messages(session["id"])
     return {
         "session": session,
         "messages": messages,
+        # tool_call_id -> pretty-printed arguments, so a reloaded page can show
+        # what each tool was asked to do alongside its result.
+        "tool_inputs": _tool_inputs(messages),
         "compactions": await db.get_compactions(session["id"]),
         # Only models that can actually authenticate, so switching to one does
         # not produce a session that fails on its next message.
         "models": _offerable_models(),
         "profiles": await list_prompt_names(),
-        "compact_profiles": await list_prompt_names(COMPACTION),
         "efforts": REASONING_EFFORTS,
         "usage": usage,
         "should_compact": await should_offer_compaction(session["id"]),
@@ -198,6 +279,7 @@ async def _session_context(session: dict) -> dict:
         "uploaded_sounds": _list_uploaded_sounds(),
         "threshold_steps": THRESHOLD_STEPS,
         "allowed_dirs": await permissions.list_allowed(session["id"]),
+        "expand_tools": await _expand_tools(),
     }
 
 
@@ -221,7 +303,6 @@ async def _home_context(
                 "clone_model": clone_session.get("model", DEFAULT_MODEL),
                 "clone_provider": clone_session.get("provider", "deepseek"),
                 "clone_profile": clone_session.get("prompt_profile", "default"),
-                "clone_compact": clone_session.get("compact_profile", "default"),
                 "clone_thinking": clone_session.get("thinking_effort", "high"),
                 "clone_bash_auto": clone_session.get("bash_auto_approve", 0),
             }
@@ -250,6 +331,8 @@ async def _home_context(
         # are a handful of buttons, not a destination.
         "scripts": await db.list_scripts(),
         "edit_script": edit_script,
+        # The same secret store the Tools page edits, managed here too.
+        "secrets": await db.list_secrets(),
         "saved": saved,
         "sound_enabled": await _sound_enabled(),
         "uploaded_sounds": _list_uploaded_sounds(),
@@ -261,9 +344,10 @@ async def _home_context(
         "providers": list_providers(),
         "models": filtered_models,
         "profiles": await list_prompt_names(),
-        "compact_profiles": await list_prompt_names(COMPACTION),
         "default_model": DEFAULT_MODEL,
         "clone_defaults": clone_defaults,
         "default_name": f"temp session {datetime.now().strftime('%-m-%-d-%Y')}",
+        "expand_tools": await _expand_tools(),
+        "expandable_tools": _expandable_tools(),
         "error": error,
     }

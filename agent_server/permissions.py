@@ -126,6 +126,14 @@ async def check(
 
     if name == "bash":
         command = args.get("command", "")
+        # sudo always needs a password, even with auto-approve on.
+        if "sudo" in command.split():
+            return {
+                "kind": "sudo",
+                "tool": name,
+                "command": command,
+                "workdir": args.get("workdir") or project_dir,
+            }
         if is_read_only(command) or shell_auto_approve:
             return None
         return {

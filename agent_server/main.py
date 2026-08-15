@@ -17,6 +17,7 @@ from agent_server.routes import (
     chat,
     custom_tools,
     endpoints,
+    files,
     pages,
     projects,
     prompts,
@@ -50,6 +51,28 @@ async def _reap_browsers():
             log.warning("reaping idle browsers failed", exc_info=True)
 
 
+async def _discover_deepseek_models():
+    """Pull the current DeepSeek model list so new releases need no code change.
+
+    Only the built-in DeepSeek provider is queried; local/custom endpoints are
+    left to their operator. Best-effort: any failure keeps the hand-configured
+    list and the app starts normally.
+    """
+    from agent_server import config
+    from agent_server.providers import get_provider
+
+    try:
+        provider = get_provider("deepseek")
+        if not provider.has_credentials():
+            return
+        ids = await provider.fetch_model_ids()
+        config.register_dynamic_deepseek_models(ids)
+        if ids:
+            log.info("deepseek models discovered: %s", ", ".join(ids))
+    except Exception:
+        log.warning("deepseek model discovery failed", exc_info=True)
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     from agent_server.logging_setup import configure
@@ -71,6 +94,10 @@ async def lifespan(app: FastAPI):
     for problem in problems:
         log.warning("custom tool problem: %s", problem)
     await load_custom_endpoint_providers()
+    await _discover_deepseek_models()
+    from agent_server.templating import set_theme
+
+    set_theme((await db.get_setting("theme")) or "green")
     reaper = asyncio.create_task(_reap_browsers())
 
     yield
@@ -91,6 +118,7 @@ app = FastAPI(title="CodeAgent", lifespan=lifespan)
 app.mount("/static", StaticFiles(directory=str(STATIC_DIR)), name="static")
 app.include_router(sessions.router)
 app.include_router(chat.router)
+app.include_router(files.router)
 app.include_router(tts.router)
 app.include_router(pages.router)
 app.include_router(tabs.router)

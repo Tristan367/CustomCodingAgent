@@ -132,7 +132,7 @@ def test_default_prompt_names_no_tool_that_does_not_exist():
     assert not unknown, f"prompt references tools that do not exist: {sorted(unknown)}"
 
 
-def test_default_prompt_keeps_the_injection_contract():
-    """Reminders are injected into user turns, so both halves must be stated."""
-    assert "<system-conventions>" in sp.DEFAULT_PROMPT
-    assert "still a system directive" in sp.DEFAULT_PROMPT
+def test_default_prompt_has_core_sections():
+    assert "Engineering Principles" in sp.DEFAULT_PROMPT
+    assert "Execution Workflow" in sp.DEFAULT_PROMPT
+    assert "Delivery Contract" in sp.DEFAULT_PROMPT

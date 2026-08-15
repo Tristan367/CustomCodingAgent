@@ -2,6 +2,7 @@
 
 import asyncio
 import os
+import re
 import shlex
 
 from agent_server.config import MAX_TOOL_RESULT_CHARS
@@ -18,6 +19,52 @@ READ_ONLY_PREFIXES = {
     "printenv", "uname", "hostname", "id", "ps", "top", "uptime", "history",
 }
 GIT_READ_ONLY = {"status", "log", "diff", "show", "branch", "remote", "blame", "describe", "rev-parse"}
+
+# Paths whose recursive deletion destroys the machine rather than the project.
+# A `rm -rf build/` is fine; `rm -rf /` is not.
+PROTECTED_RM_TARGETS = {
+    "/", "/*", "/.", "/..", "~", "~/", "$HOME", "${HOME}", "$HOME/",
+    "/home", "/etc", "/usr", "/bin", "/sbin", "/lib", "/lib64",
+    "/boot", "/var", "/opt", "/root", "/srv", "/mnt", "/proc", "/sys", "/dev",
+}
+_BLOCK_DEV_RE = re.compile(r"/dev/(sd[a-z]+|hd[a-z]+|nvme\d+n\d+|vd[a-z]+|xvd[a-z]+|mmcblk\d+|disk|mapper)")
+
+
+def _has_flag(tokens: list[str], flag: str) -> bool:
+    return any(t.startswith("-") and flag in t for t in tokens)
+
+
+def danger_reason(command: str) -> str | None:
+    """Why `command` must not run, or None when it is allowed.
+
+    A guard against the commands that take the machine down with them, not just
+    the project. Deliberately conservative: it only fires on the obvious
+    catastrophes and never on an ordinary `rm -rf build/` or `git clean`.
+    """
+    s = command.strip()
+
+    # Classic fork bomb.
+    if re.search(r":\s*\(\s*\)\s*\{\s*:\s*\|\s*:\s*&\s*\}\s*;", s):
+        return "fork bomb"
+
+    # rm with recursive+force flags targeting a protected path.
+    if re.search(r"(^|[\s;&|])\brm\b", s):
+        tokens = s.split()
+        if _has_flag(tokens, "r") and _has_flag(tokens, "f"):
+            for tok in tokens:
+                if tok.startswith("-"):
+                    continue
+                target = tok.rstrip("/") or "/"
+                if target in PROTECTED_RM_TARGETS:
+                    return f"rm -rf of {tok}"
+
+    # Writing directly to a raw block device.
+    if _BLOCK_DEV_RE.search(s) and re.search(r"\b(dd|mkfs\S*|fdisk|parted|sfdisk)\b", s):
+        return "raw disk write"
+    if re.search(r"[>]\s*" + _BLOCK_DEV_RE.pattern, s):
+        return "raw disk write"
+
+    return None
 
 
 def is_read_only(command: str) -> bool:
@@ -52,17 +99,33 @@ async def run_bash(
     timeout: int | None = None,
     workdir: str | None = None,
     env: dict[str, str] | None = None,
+    sudo_password: str | None = None,
     **_,
 ) -> ToolResult:
     if not command or not command.strip():
         return ToolResult.error("empty command", "bash")
+
+    reason = danger_reason(command)
+    if reason:
+        return ToolResult.error(
+            f"refusing to run destructive command ({reason}). "
+            "The guard only blocks machine-destroying commands; be explicit if "
+            "you meant a scoped deletion.",
+            "bash",
+        )
+
+    has_sudo = "sudo" in command.split()
+    if has_sudo:
+        command = re.sub(r"\bsudo\b", "sudo -S", command, count=1)
+        if sudo_password:
+            command = re.sub(r"-n\b\s*", "", command, count=1)
 
     timeout_ms = min(timeout or DEFAULT_TIMEOUT_MS, MAX_TIMEOUT_MS)
     timeout_sec = timeout_ms / 1000
     cwd = str(ctx.resolve(workdir)) if workdir else ctx.project_dir
     if not os.path.isdir(cwd):
         cwd = ctx.project_dir
-    title = f"bash: {command.strip().splitlines()[0][:90]}"
+    title = command.strip().splitlines()[0][:90]
 
     proc = None
     detached = False
@@ -71,13 +134,17 @@ async def run_bash(
             command,
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,
-            stdin=asyncio.subprocess.DEVNULL,
+            stdin=asyncio.subprocess.PIPE if (sudo_password or has_sudo) else asyncio.subprocess.DEVNULL,
             cwd=cwd,
-            # New process group so a timeout can kill the whole pipeline, not
-            # just the shell that spawned it.
             start_new_session=True,
             env={**os.environ, "TERM": "dumb", "NO_COLOR": "1", "PAGER": "cat", **(env or {})},
         )
+        if sudo_password and proc.stdin is not None:
+            proc.stdin.write((sudo_password + "\n").encode())
+            await proc.stdin.drain()
+            proc.stdin.close()
+        elif has_sudo and not sudo_password and proc.stdin is not None:
+            proc.stdin.close()
         stdout, stderr, detached = await asyncio.wait_for(
             _collect(proc), timeout=timeout_sec
         )

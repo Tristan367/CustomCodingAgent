@@ -48,7 +48,7 @@
             {% endif %}
             <button type="submit" class="btn-primary btn-sm" {% if ep.api_key %}disabled{% endif %}>Save</button>
             <button type="button" class="btn-danger btn-sm"
-                    hx-post="/_delete_custom_endpoint" hx-vals='{"name":"{{ ep.name }}"}'
+                    hx-post="/_delete_custom_endpoint" hx-vals='{"name":{{ ep.name | tojson }}}'
                     hx-target="#home-page" hx-swap="outerHTML"
                     hx-confirm="Delete this endpoint?">×</button>
         </form>
@@ -116,28 +116,10 @@ async function stopCodeAgent(button) {
                            placeholder="model id, e.g. qwen3-coder:30b"
                            hidden autocomplete="off" spellcheck="false">
                 </label>
-                <label>Prompt
+                <label>Profile
                     <select name="prompt_profile">
                         {% for p in profiles %}
                         <option value="{{ p }}" {% if p == clone_defaults.get('clone_profile', 'default') %}selected{% endif %}>{{ p }}</option>
-                        {% endfor %}
-                    </select>
-                </label>
-                <label>Summariser
-                    <select name="compact_profile">
-                        {% for p in compact_profiles %}
-                        <option value="{{ p }}" {% if p == clone_defaults.get('clone_compact', 'default') %}selected{% endif %}>{{ p }}</option>
-                        {% endfor %}
-                    </select>
-                </label>
-                <label>Subagents
-                    <select name="subagent_model">
-                        <option value="">Same as this session</option>
-                        {% for m in models %}
-                        {% if not m.needs_model_id %}
-                        <option value="{{ m.id }}"
-                                {% if m.id == clone_defaults.get('clone_subagent', '') %}selected{% endif %}>{{ m.name }}</option>
-                        {% endif %}
                         {% endfor %}
                     </select>
                 </label>
@@ -189,6 +171,16 @@ async function stopCodeAgent(button) {
                 </span>
             </label>
         </div>
+        <label class="field-label">Color theme
+            <span class="control-row theme-swatches">
+                {% for name, color in [('green', '#8ea24f'), ('red', '#c06a5f'), ('gray', '#9aa4a0')] %}
+                <button type="button" class="theme-swatch" style="background:{{ color }}"
+                        data-theme="{{ name }}" title="{{ name | title }}"
+                        {% if settings.get('theme', 'green') == name %}aria-pressed="true"{% endif %}
+                        onclick="setTheme(this)"></button>
+                {% endfor %}
+            </span>
+        </label>
         <p class="hint" style="margin-top:6px">
             Dictation:
             {% if stt.available %}
@@ -199,6 +191,17 @@ async function stopCodeAgent(button) {
             {% endif %}
             Hold <kbd>Right Ctrl</kbd> to talk.
         </p>
+        <div class="tool-grid" style="margin-top:12px">
+            <span class="hint" style="grid-column:1/-1;margin:0">Expand these tool results automatically:</span>
+            {% for t in expandable_tools %}
+            <label class="checkbox-label">
+                <input type="checkbox" value="{{ t }}" class="expand-tool-check"
+                       {% if t in expand_tools %}checked{% endif %}
+                       onchange="saveExpandTools()">
+                <code>{{ t }}</code>
+            </label>
+            {% endfor %}
+        </div>
     </section>
 
     <section class="panel">
@@ -309,6 +312,27 @@ function saveTts() {
     form.append('volume', document.getElementById('tts-volume').value);
     form.append('tone', document.getElementById('tts-tone').value);
     fetch('/_settings/tts', { method: 'POST', body: form });
+}
+
+function saveExpandTools() {
+    const names = Array.from(document.querySelectorAll('.expand-tool-check:checked'))
+        .map((c) => c.value);
+    fetch('/_settings/expand', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(names),
+    });
+}
+
+function setTheme(btn) {
+    // Apply instantly (the CSS keys off body[data-theme]); persist in the background.
+    document.body.dataset.theme = btn.dataset.theme;
+    document.querySelectorAll('.theme-swatch').forEach((b) => {
+        b.setAttribute('aria-pressed', b === btn ? 'true' : 'false');
+    });
+    const form = new FormData();
+    form.append('theme', btn.dataset.theme);
+    fetch('/_settings/theme', { method: 'POST', body: form });
 }
 
 /* Judging a voice from its name is hopeless, so play a line with the current

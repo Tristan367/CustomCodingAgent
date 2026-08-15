@@ -17,18 +17,22 @@
   --border-strong: #2f3a36;
 
   --text:          #dde3df;
-  --text-dim:      #8a958e;
-  --text-faint:    #5b665f;
+  --text-dim:      #b4bcb8;
+  --text-faint:    #838f8a;
 
   --accent:        #8ea24f;
+  --accent-rgb:    142, 162, 79;
   --accent-dim:    #4a5730;
   --success:       #7d9b4c;
+  --add:           #a3bd74;
+  --add-rgb:       125, 155, 76;
   --warn:          #b8904a;
   --danger:        #bf5f58;
   --info:          #4f938e;
 
   --role-user:     #85a352;
   --role-assistant:#7d9b4c;
+  --role-mail:     #5b7c99;
   /* Tool rows are the most numerous thing on screen. Giving them a colour made
      the whole app read as that colour, so they stay grey. */
   --role-tool:     #79837d;
@@ -68,6 +72,40 @@
   --content-pad: 12px;
 }
 
+/* Theme palettes. `data-theme` sits on <body> and overrides the accent family,
+   so the whole app recolours from one place. */
+body[data-theme="red"] {
+  /* Same dark base but with a faint red cast, so the background reads red the
+     way the default reads green. */
+  --bg:            #0f0c0c;
+  --bg-raised:     #181313;
+  --bg-inset:      #14100f;
+  --bg-hover:      #211a19;
+  --border:        #2a2221;
+  --border-strong: #3a2f2e;
+  --accent:        #c06a5f;
+  --accent-rgb:    192, 106, 95;
+  --accent-dim:    #5a2f2b;
+  --role-user:     #b06a5f;
+  --role-assistant:#c06a5f;
+}
+body[data-theme="gray"] {
+  /* Neutral, no colour cast, and a step darker than the default so it reads as
+     grey rather than washed-out. The accent drops to a mid grey so primary
+     buttons don't glow light-grey. */
+  --bg:            #0e0e0f;
+  --bg-raised:     #151517;
+  --bg-inset:      #111113;
+  --bg-hover:      #1c1c1f;
+  --border:        #242427;
+  --border-strong: #313134;
+  --accent:        #7a817e;
+  --accent-rgb:    122, 129, 126;
+  --accent-dim:    #474d4b;
+  --role-user:     #8a928f;
+  --role-assistant:#8a928f;
+}
+
 * { box-sizing: border-box; }
 
 /* Elements below set `display`, which would otherwise beat the UA `hidden` rule. */
@@ -89,6 +127,10 @@ body { display: flex; flex-direction: column; overflow: hidden; }
 ::-webkit-scrollbar-track { background: transparent; }
 ::-webkit-scrollbar-thumb { background: var(--border-strong); border-radius: 5px; }
 ::-webkit-scrollbar-thumb:hover { background: #3d4a45; }
+/* Dragging the thumb: use the theme accent instead of the browser's blue. */
+::-webkit-scrollbar-thumb:active { background: var(--accent); }
+/* Firefox: colour the thumb and keep the well transparent, matching WebKit. */
+html { scrollbar-color: var(--border-strong) transparent; }
 
 a { color: var(--accent); text-decoration: none; }
 a:hover { text-decoration: underline; }
@@ -199,6 +241,31 @@ hr { border: 0; border-top: 1px solid var(--border); margin: 6px 0; }
 }
 .tab-new:hover { background: var(--bg-hover); color: var(--text); text-decoration: none; }
 
+.stop-all { border: 0; border-left: 1px solid var(--border); background: none; cursor: pointer; font-size: 13px; border-radius: 0; }
+.stop-all:hover { background: rgba(248, 81, 73, 0.15); color: var(--danger); }
+
+.broadcast-list {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  max-height: 40vh;
+  overflow-y: auto;
+  margin: var(--s3) 0;
+}
+.broadcast-session {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 8px;
+  border-radius: 5px;
+  cursor: pointer;
+}
+.broadcast-session:hover { background: var(--bg-hover); }
+.broadcast-session input { accent-color: var(--accent); }
+.broadcast-name { font-size: var(--fs-body); }
+
+#chat-textarea.dragging { outline: 2px dashed var(--accent); outline-offset: 2px; }
+
 /* ── Layout ──────────────────────────────────────────────────────────────── */
 
 #main-content { flex: 1; min-height: 0; display: flex; flex-direction: column; overflow: hidden; }
@@ -247,23 +314,6 @@ hr { border: 0; border-top: 1px solid var(--border); margin: 6px 0; }
 .chip-muted { border-color: var(--border); color: var(--text-faint); }
 .dim { color: var(--text-dim); }
 .spacer { flex: 1; }
-
-.meta-banner {
-  padding: 6px 12px;
-  background: rgba(210, 153, 34, 0.09);
-  border-top: 1px solid rgba(210, 153, 34, 0.3);
-  font-size: 12px;
-  color: var(--warn);
-}
-.link-btn {
-  background: none;
-  border: 0;
-  color: var(--accent);
-  cursor: pointer;
-  text-decoration: underline;
-  font-size: inherit;
-  padding: 0;
-}
 
 /* ── Dropdown ────────────────────────────────────────────────────────────── */
 
@@ -319,12 +369,18 @@ hr { border: 0; border-top: 1px solid var(--border); margin: 6px 0; }
    between them. The role is truncated rather than widened -- most names are
    four or five letters, and the full name is on the element's title. */
 .message {
+  position: relative;
   display: grid;
   grid-template-columns: 50px 1fr 50px;
   gap: 10px;
   padding: 5px 0;
   align-items: start;
+  overflow: visible;
 }
+.message.tool { padding: 2px 0; }
+.message.thinking { padding: 2px 0; }
+.message.assistant { padding: 10px 0; }
+.message.user { padding: 10px 0; }
 
 .msg-role {
   font-size: 10.5px;
@@ -338,8 +394,10 @@ hr { border: 0; border-top: 1px solid var(--border); margin: 6px 0; }
   text-overflow: ellipsis;
 }
 .message.user     .msg-role { color: var(--role-user); }
+.message.mail     .msg-role { color: var(--role-mail); }
 .message.assistant .msg-role { visibility: hidden; }
 .message.tool     .msg-role { color: var(--role-tool); }
+.message.thinking .msg-role { color: var(--text-dim); }
 
 .msg-content { min-width: 0; overflow-wrap: anywhere; }
 .msg-time {
@@ -359,6 +417,14 @@ hr { border: 0; border-top: 1px solid var(--border); margin: 6px 0; }
   padding: 6px 10px;
   border-radius: 0 var(--radius) var(--radius) 0;
 }
+
+.message.mail .content-text {
+  background: rgba(91, 124, 153, 0.14);
+  border-left: 2px solid var(--role-mail);
+  padding: 6px 10px;
+  border-radius: 0 var(--radius) var(--radius) 0;
+}
+
 
 /* ── Rendered markdown ───────────────────────────────────────────────────── */
 
@@ -389,13 +455,21 @@ hr { border: 0; border-top: 1px solid var(--border); margin: 6px 0; }
 
 .content-text :not(pre) > code {
   background: var(--bg-inset);
-  border: 1px solid var(--border);
   border-radius: 3px;
   padding: 0.5px 4px;
   font-size: 12px;
-  color: var(--warn);
+  color: var(--accent);
 }
 .content-text code.file-ref { color: var(--accent); }
+/* File paths the model mentions render as links that open the in-app editor. */
+a.file-ref {
+  color: var(--accent);
+  text-decoration: none;
+  font-family: var(--mono);
+  border-bottom: 1px dotted var(--accent-dim);
+  cursor: pointer;
+}
+a.file-ref:hover { border-bottom-style: solid; color: var(--text); background: var(--bg-inset); }
 
 .content-text table { border-collapse: collapse; margin: 0 0 10px; font-size: 12.5px; display: block; overflow-x: auto; }
 .content-text th, .content-text td { border: 1px solid var(--border); padding: 4px 9px; text-align: left; }
@@ -419,23 +493,61 @@ hr { border: 0; border-top: 1px solid var(--border); margin: 6px 0; }
 }
 .code-lang { font-size: 10.5px; font-family: var(--mono); color: var(--text-faint); text-transform: lowercase; }
 .code-copy {
+  opacity: 0;
+  transition: opacity 120ms ease;
   background: none;
   border: 1px solid var(--border);
   border-radius: 3px;
   color: var(--text-dim);
-  font-size: 10.5px;
-  padding: 1px 7px;
   cursor: pointer;
+  padding: 3px 5px;
+  display: flex;
+  align-items: center;
 }
+.code-block:hover .code-copy,
+.code-copy.copied { opacity: 1; }
 .code-copy:hover { background: var(--bg-hover); color: var(--text); }
+.code-copy.copied { color: var(--accent); border-color: var(--accent-dim); }
+
+.copy-toast {
+  position: fixed;
+  bottom: 24px;
+  left: 50%;
+  transform: translateX(-50%);
+  background: var(--bg-raised);
+  border: 1px solid var(--border-strong);
+  border-radius: 6px;
+  color: var(--text);
+  font-size: 12px;
+  padding: 6px 16px;
+  z-index: 9999;
+  box-shadow: 0 2px 8px rgba(0,0,0,0.4);
+}
+.copy-toast[hidden] { display: none; }
 .code-block pre { margin: 0; padding: 9px 11px; overflow-x: auto; line-height: 1.5; }
 .code-block code { background: none; border: 0; padding: 0; color: var(--text); }
 
-.hl-kw  { color: #c07268; }
-.hl-str { color: #9aad63; }
-.hl-num { color: #b8904a; }
-.hl-com { color: #6e7681; font-style: italic; }
-.hl-fn  { color: #62a09b; }
+/* highlight.js token colours, remapped onto the app palette. The theme ships
+   its own reds and blues; these keep code blocks in the olive/teal family.
+   Each rule restates the theme's selector list so compound selectors such as
+   .hljs-meta .hljs-keyword lose on specificity, not just on order. */
+.hljs { color: var(--text); background: transparent; }
+.hljs-doctag, .hljs-keyword, .hljs-meta .hljs-keyword, .hljs-template-tag,
+.hljs-template-variable, .hljs-type, .hljs-variable.language_ { color: #c07268; }
+.hljs-title, .hljs-title.class_, .hljs-title.class_.inherited__,
+.hljs-title.function_ { color: #62a09b; }
+.hljs-attr, .hljs-attribute, .hljs-literal, .hljs-meta, .hljs-number,
+.hljs-operator, .hljs-selector-attr, .hljs-selector-class, .hljs-selector-id,
+.hljs-variable { color: #b8904a; }
+.hljs-meta .hljs-string, .hljs-regexp, .hljs-string { color: #9aad63; }
+.hljs-built_in, .hljs-symbol, .hljs-link, .hljs-bullet { color: #62a09b; }
+.hljs-code, .hljs-comment, .hljs-formula { color: #6e7681; font-style: italic; }
+.hljs-name, .hljs-quote, .hljs-selector-pseudo, .hljs-selector-tag { color: #9aad63; }
+.hljs-subst, .hljs-section { color: #c07268; }
+.hljs-emphasis { color: var(--text); font-style: italic; }
+.hljs-strong { color: var(--text); font-weight: 700; }
+.hljs-addition { color: var(--add); background: transparent; }
+.hljs-deletion { color: #cf928d; background: transparent; }
 
 /* ── Thinking ────────────────────────────────────────────────────────────── */
 
@@ -471,6 +583,11 @@ hr { border: 0; border-top: 1px solid var(--border); margin: 6px 0; }
 .tool-summary::-webkit-details-marker { display: none; }
 .tool-summary::before { content: '\25B8'; color: var(--text-faint); font-size: 9px; }
 .tool-details[open] > .tool-summary::before { content: '\25BE'; }
+/* Reasoning has no role in the gutter, so the disclosure marker would float
+   alone as a stray dot; hide it there, expanded or not. The [open] variant ties
+   the collapsed/expanded rules above and, coming later, wins. */
+.reasoning-details > .tool-summary::before,
+.reasoning-details[open] > .tool-summary::before { content: none; }
 .tool-summary:hover { color: var(--text); }
 .message.tool-error .tool-summary { color: var(--danger); }
 
@@ -486,6 +603,9 @@ hr { border: 0; border-top: 1px solid var(--border); margin: 6px 0; }
   white-space: pre-wrap;
   font-size: 11.5px;
 }
+/* Read contents render as highlighted code: no wrapping, full-brightness base
+   text so the token colours read against it. */
+.tool-raw code { white-space: pre; color: var(--text); }
 .tool-result-label {
   margin-top: 6px;
   font-size: 10px;
@@ -533,10 +653,7 @@ hr { border: 0; border-top: 1px solid var(--border); margin: 6px 0; }
   border-radius: var(--radius);
   background: rgba(210, 153, 34, 0.06);
 }
-.permission-card.resolved { opacity: 0.6; border-color: var(--border); background: var(--bg-raised); }
-
 .permission-head { font-size: 12.5px; font-weight: 600; color: var(--warn); margin-bottom: 8px; }
-.permission-card.resolved .permission-head { color: var(--text-dim); }
 
 .permission-command {
   margin: 0 0 6px;
@@ -746,7 +863,7 @@ button:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
   gap: 7px;
   padding: 0 10px 2px;
   border-radius: 0 0 var(--radius) var(--radius);
-  background: linear-gradient(to top, rgba(142, 162, 79, 0.16), transparent);
+  background: linear-gradient(to top, rgba(var(--accent-rgb), 0.16), transparent);
   color: var(--accent);
   font-size: 11px;
   pointer-events: none;
@@ -840,6 +957,21 @@ button:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
 }
 
 .sound-row { margin-top: var(--s3); gap: var(--s4); }
+
+/* Colour-theme swatches: three small squares, the active one ringed. */
+.theme-swatches { display: flex; gap: 6px; }
+.theme-swatch {
+  width: 22px;
+  height: 22px;
+  min-height: 0;   /* beat the global button min-height, keep the square square */
+  flex: 0 0 auto;
+  border-radius: 5px;
+  border: 2px solid var(--border-strong);
+  cursor: pointer;
+  padding: 0;
+}
+.theme-swatch:hover { border-color: var(--text-dim); }
+.theme-swatch[aria-pressed="true"] { border-color: var(--text); }
 /* The sound side carries three controls, the volume side one. */
 .sound-row > label:first-child { flex: 3; }
 .sound-row > label:last-child { flex: 2; }
@@ -858,6 +990,21 @@ input[type="search"], input[type="url"], input[type="email"], select, textarea {
 textarea { padding: var(--s2); line-height: 1.5; }
 input:focus, select:focus, textarea:focus { outline: none; border-color: var(--accent-dim); }
 select { cursor: pointer; }
+option:checked,
+option:hover {
+  background: var(--accent);
+  color: var(--bg);
+}
+.sa-tier--disabled { opacity: 0.35; pointer-events: none; }
+.ta-copy-wrap { position: relative; }
+.ta-copy-btn {
+  position: absolute; top: 6px; right: 6px; z-index: 2;
+  background: var(--bg); border: 1px solid var(--border); border-radius: 4px;
+  color: var(--text-dim); cursor: pointer; padding: 2px 5px; font-size: 12px;
+  opacity: 0; transition: opacity 120ms ease;
+}
+.ta-copy-wrap:hover .ta-copy-btn { opacity: 1; }
+.ta-copy-btn.copied { color: var(--accent); }
 
 /* Sliders were left native everywhere except the three that had been styled by
    hand, so the sound volume rendered in the browser's blue directly above a
@@ -951,10 +1098,11 @@ input[type="checkbox"] { accent-color: var(--accent); }
 .mkdir-form input { width: 150px; }
 .checkbox-label { display: flex; align-items: center; gap: 5px; font-size: 11.5px; color: var(--text-dim); cursor: pointer; }
 
-.browser-entries { max-height: 300px; overflow-y: auto; padding: 4px; }
+.browser-entries { max-height: 600px; overflow-y: auto; padding: 4px; }
 .browser-entry {
   display: flex;
   align-items: center;
+  justify-content: flex-start;
   gap: 8px;
   width: 100%;
   padding: 3px 8px;
@@ -963,18 +1111,17 @@ input[type="checkbox"] { accent-color: var(--accent); }
   border-radius: 3px;
   color: var(--text);
   font-family: var(--mono);
-  font-size: 12px;
+  font-size: 13px;
   text-align: left;
 }
 .browser-entry.is-dir { cursor: pointer; }
 .browser-entry.is-dir:hover { background: var(--bg-hover); }
 .browser-entry.is-file { color: var(--text-faint); }
-.entry-icon { flex: 0 0 auto; font-size: 11px; }
+.entry-icon { flex: 0 0 auto; font-size: 14px; }
 .entry-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 
 /* ── Prompts page ────────────────────────────────────────────────────────── */
 
-.prompt-editor { margin-bottom: 6px; }
 .prompt-textarea { width: 100%; font-family: var(--mono); font-size: 12px; line-height: 1.55; resize: vertical; }
 
 .prompt-tabs { display: flex; gap: 6px; align-items: center; margin-bottom: 8px; }
@@ -993,15 +1140,10 @@ input[type="checkbox"] { accent-color: var(--accent); }
 .prompt-discard { margin-left: auto; font-size: 12px; }
 .menu-badge { color: var(--accent); font-size: 11px; }
 
-.quick-row { display: flex; align-items: center; justify-content: space-between; gap: 20px; }
-.quick-row h2 { margin-bottom: 4px; }
-.quick-row .hint { margin: 0; max-width: 52ch; }
-.quick-row form { flex: 0 0 auto; }
-
 .compact-preset-row { display: block; margin-bottom: 10px; }
 .compact-preset-row select { display: block; width: 100%; margin-top: 4px; }
 
-.prompt-bar { display: flex; gap: 8px; align-items: center; margin-bottom: 8px; }
+.prompt-bar { display: flex; gap: 8px; align-items: center; margin-top: 14px; margin-bottom: 8px; }
 .prompt-bar select { flex: 0 0 220px; }
 .prompt-bar .btn-danger { margin-left: auto; }
 .btn-danger { background: var(--bg-inset); border: 1px solid var(--border-strong); color: var(--danger); }
@@ -1140,9 +1282,34 @@ input[type="checkbox"] { accent-color: var(--accent); }
 
 /* ── Message actions ─────────────────────────────────────────────────────── */
 
-.msg-side { display: flex; align-items: center; gap: 8px; padding-top: 3px; }
-.msg-actions { position: relative; display: flex; gap: 4px; opacity: 0; transition: opacity 120ms ease; }
-.message:hover .msg-actions { opacity: 1; }
+.msg-side { position: relative; display: flex; flex-direction: column; align-items: flex-end; gap: 4px; }
+/* The hover-revealed controls must never interrupt a text-selection drag: the
+   buttons are form controls, and dragging across one collapses the highlight. */
+.msg-side, .msg-side button, .msg-time, .vol-pop { user-select: none; -webkit-user-select: none; }
+body.selecting .msg-actions,
+body.selecting .msg-copy,
+body.selecting .msg-time { opacity: 0 !important; visibility: hidden !important; }
+.msg-actions { position: absolute; top: 40px; right: -2px; display: flex; gap: 4px; opacity: 0; visibility: hidden; transition: opacity 120ms ease, visibility 0s 120ms; z-index: 3; }
+.message:hover .msg-actions { opacity: 1; visibility: visible; transition: opacity 120ms ease, visibility 0s 0s; }
+.msg-copy {
+  position: absolute;
+  top: 18px;
+  right: -2px;
+  opacity: 0;
+  transition: opacity 120ms ease;
+  z-index: 2;
+}
+.message:hover .msg-copy { opacity: 1; }
+.msg-copy button {
+  background: none;
+  border: 0;
+  color: var(--text-faint);
+  cursor: pointer;
+  padding: 2px;
+  display: flex;
+  align-items: center;
+}
+.msg-copy button:hover { color: var(--accent); }
 .msg-actions button {
   background: none;
   border: 0;
@@ -1170,11 +1337,25 @@ input[type="checkbox"] { accent-color: var(--accent); }
   max-height: 420px;
   overflow-y: auto;
 }
-.diff-block span { display: block; padding: 0 10px; white-space: pre; }
-.diff-add  { background: rgba(125, 155, 76, 0.13); color: #a3bd74; }
+.diff-block .row, .code-lines .row { display: block; white-space: pre; }
+.diff-block .row { padding: 0 10px; }
+.diff-add  { background: rgba(var(--add-rgb), 0.13); color: var(--add); }
 .diff-del  { background: rgba(191, 95, 88, 0.13); color: #cf928d; }
 .diff-hunk { color: var(--text-faint); background: rgba(110, 118, 129, 0.10); }
 .diff-ctx  { color: var(--text-dim); }
+
+/* Line-number gutter shared by diffs and read/write code. --lnw is set in the
+   markup (or JS) to the widest number, so 7, 8, 9 line up with 10, 11, 12. */
+.diff-block .ln, .code-lines .ln {
+  display: inline-block;
+  min-width: var(--lnw, 3ch);
+  text-align: right;
+  padding-right: 1.5ch;
+  margin-right: 1.5ch;
+  border-right: 1px solid var(--border);
+  color: var(--text-faint);
+  user-select: none;
+}
 
 /* ── Threshold slider ────────────────────────────────────────────────────── */
 
@@ -1246,6 +1427,28 @@ input[type="checkbox"] { accent-color: var(--accent); }
 .permission-card.permission-denied { border-color: var(--danger); background: rgba(248, 81, 73, 0.07); }
 .permission-card.permission-denied .permission-head { color: var(--danger); }
 
+.permission-sudo-pw { display: flex; gap: 4px; margin: 8px 0; }
+.sudo-pw-input {
+  flex: 1;
+  background: var(--bg-inset);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  color: var(--text);
+  font-family: var(--mono);
+  font-size: 13px;
+  padding: 4px 8px;
+}
+.sudo-show-btn {
+  background: none;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  color: var(--text-dim);
+  cursor: pointer;
+  font-size: 14px;
+  padding: 2px 6px;
+}
+.sudo-show-btn:hover { color: var(--text); background: var(--bg-hover); }
+
 /* ── Attachments ─────────────────────────────────────────────────────────── */
 
 .attachments { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 7px; }
@@ -1311,7 +1514,6 @@ input[type="checkbox"] { accent-color: var(--accent); }
 
 /* Breathing room under the prompts form so the save button isn't flush. */
 #prompts-page form { margin-bottom: 34px; }
-#prompts-page .save-btn:last-of-type { margin-bottom: 12px; }
 #tools-page .hint { margin-bottom: var(--s4); }
 /* Chips wrap onto a second line in a narrow column, and with no row gap they
    sat flush against each other. */
@@ -1381,7 +1583,6 @@ input:disabled, textarea:disabled { opacity: 0.6; background: var(--bg-inset); }
   font-variant-numeric: tabular-nums;
   font-size: 10.5px;
 }
-.tool-summary { display: flex; align-items: center; gap: 6px; }
 .tool-label { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 
 /* Shown while the model is still streaming a tool call's arguments. */
@@ -1392,7 +1593,7 @@ input:disabled, textarea:disabled { opacity: 0.6; background: var(--bg-inset); }
   font-size: 11.5px;
 }
 
-.diff-details { margin-top: 4px; }
+.tool-details .diff-details { margin-top: 4px; }
 .diff-stat {
   margin-left: auto;
   padding-left: 10px;
@@ -1460,7 +1661,7 @@ input:disabled, textarea:disabled { opacity: 0.6; background: var(--bg-inset); }
 
 /* Coloured diff counts, matching the diff body. */
 .diff-stat { display: inline-flex; gap: 7px; }
-.diff-stat-add { color: #a3bd74; }
+.diff-stat-add { color: var(--add); }
 .diff-stat-del { color: #cf928d; }
 
 /* A subagent's prompt, visible while it works. */
@@ -1474,12 +1675,40 @@ input:disabled, textarea:disabled { opacity: 0.6; background: var(--bg-inset); }
 
 /* End-of-turn change summary. */
 .change-summary .msg-role { color: var(--accent); }
-.change-summary > .msg-content > .tool-details {
+.change-head {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 6px 10px;
   border: 1px solid var(--border);
-  border-radius: var(--radius);
-  padding: 6px 9px;
+  border-bottom: 0;
+  border-radius: var(--radius) var(--radius) 0 0;
   background: var(--bg-raised);
 }
+.change-count { font-family: var(--mono); font-size: 12px; color: var(--text); }
+.change-toggle {
+  margin-left: auto;
+  background: none;
+  border: 1px solid var(--border);
+  color: var(--text-dim);
+  border-radius: 4px;
+  padding: 2px 8px;
+  font-size: 11.5px;
+  font-family: var(--sans);
+  cursor: pointer;
+}
+.change-toggle:hover { color: var(--text); border-color: var(--border-strong); }
+.change-files {
+  border: 1px solid var(--border);
+  border-top: 0;
+  border-radius: 0 0 var(--radius) var(--radius);
+  background: var(--bg-raised);
+  padding: 4px 10px 8px;
+}
+.change-file { margin: 0; }
+.change-file .tool-summary { padding: 5px 0; }
+.change-file .tool-summary::before { content: none; }
+.change-file[hidden] { display: none; }
 
 /* A message handed to a run in progress, not yet picked up. */
 .message.user.queued .content-text { opacity: 0.62; border-left-style: dashed; }
@@ -1506,22 +1735,11 @@ input:disabled, textarea:disabled { opacity: 0.6; background: var(--bg-inset); }
 
 /* ── Speech ──────────────────────────────────────────────────────────────── */
 
-/* The right gutter is the width of a timestamp and is mirrored on the left, so
-   the play control stacks under the time rather than beside it. */
-.msg-side.stacked {
-  position: relative;
-  display: flex;
-  flex-direction: column;
-  align-items: flex-start;
-  gap: 2px;
-}
-.msg-side.stacked .msg-time { padding-top: 4px; }
-
 .play-btn { padding: 0 2px; }
 
 /* The reply being read keeps its control visible; the rest follow the
    timestamps and appear on hover. */
-.message.speaking .msg-actions { opacity: 1; }
+.message.speaking .msg-actions { opacity: 1; visibility: visible; }
 .message.speaking .play-btn { color: var(--accent); }
 
 /* Volume drops straight down out of the control, so it never widens the gutter
@@ -1529,8 +1747,8 @@ input:disabled, textarea:disabled { opacity: 0.6; background: var(--bg-inset); }
 .vol-pop {
   position: absolute;
   top: calc(100% + 3px);
-  left: 2px;
-  right: auto;
+  left: 50%;
+  transform: translateX(-50%);
   display: flex;
   height: 0;
   overflow: hidden;
@@ -1546,6 +1764,7 @@ input:disabled, textarea:disabled { opacity: 0.6; background: var(--bg-inset); }
   height: 4px;
 }
 .msg-actions:hover .vol-pop,
+.vol-pop:hover,
 .vol-pop:focus-within { height: 82px; opacity: 1; }
 
 .vol-pop input[type="range"] {
@@ -1697,3 +1916,252 @@ kbd {
   margin-top: var(--s5);
 }
 .page-footer .hint { margin: 0; }
+
+/* ── In-app file editor & browser ─────────────────────────────────────────── */
+
+.message.tool.fe-openable .tool-result,
+.message.tool.fe-openable .diff-block,
+.change-file.fe-openable .diff-block { cursor: pointer; }
+.message.tool.fe-openable .tool-result:hover,
+.message.tool.fe-openable .diff-block:hover,
+.change-file.fe-openable .diff-block:hover { background: rgba(var(--accent-rgb), 0.04); }
+
+.file-editor, dialog.file-browser {
+  border: 1px solid var(--border-strong);
+  background: var(--bg-raised, var(--bg));
+  color: var(--text);
+  padding: 0;
+  overflow: hidden;
+}
+/* The editor is a normal flex child of the session view, not an overlay. While
+   open it takes the chat history's space (body.editor-open hides .chat-region),
+   leaving the session bar above and the composer below. */
+.file-editor { display: none; }
+.file-editor.open {
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+  min-height: 0;
+  border: 0;
+}
+body.editor-open .chat-region { display: none; }
+dialog.file-browser[open] {
+  display: flex;
+  flex-direction: column;
+}
+dialog.file-browser {
+  position: fixed;
+  inset: 0;
+  margin: auto;
+  border-radius: 8px;
+  width: min(560px, 92vw);
+  height: min(70vh, 560px);
+}
+dialog.file-browser::backdrop { background: rgba(0, 0, 0, 0.55); }
+
+.fe-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--s2);
+  padding: 8px 10px;
+  border-bottom: 1px solid var(--border);
+  font-family: var(--mono);
+  font-size: 12px;
+  flex: 0 0 auto;
+}
+.fe-path {
+  color: var(--text-dim);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.fe-actions { display: flex; gap: 4px; flex: 0 0 auto; }
+.fe-btn {
+  background: none;
+  border: 1px solid var(--border);
+  color: var(--text-dim);
+  border-radius: 4px;
+  padding: 3px 8px;
+  font-size: 11.5px;
+  font-family: var(--sans);
+  cursor: pointer;
+}
+.fe-btn:hover { color: var(--text); border-color: var(--border-strong); }
+.fe-btn.active { color: var(--accent); border-color: var(--accent-dim); }
+.fe-btn.fe-save { color: var(--accent); }
+
+.fe-body {
+  flex: 1 1 auto;
+  min-height: 0;
+  position: relative;
+  overflow: hidden;
+  background: var(--bg-inset);
+  font-family: var(--mono);
+  font-size: 12.5px;
+  line-height: 1.5;
+  tab-size: 4;
+  /* Left pad before the gutter, then the line-number column, its separator and
+   * the gap to the code. The textarea's text starts at this exact offset. */
+  --pad-left: 8px;
+  --gut: calc(var(--pad-left) + var(--lnw, 3ch) + 2ch + 1px);
+}
+/* The highlighted layer sits behind a transparent textarea, so syntax colouring
+ * shows while the textarea remains the real edit surface. */
+.fe-highlight {
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: 100%;
+  height: 100%;
+  margin: 0;
+  padding: 6px 12px 6px var(--pad-left);
+  white-space: pre;
+  overflow: hidden;
+  pointer-events: none;
+  color: var(--text);
+}
+.fe-highlight.wrap { white-space: pre-wrap; }
+/* Each line is a flex row: the number in a fixed gutter, the code taking the
+ * rest. When a long line wraps, the number stays on its first visual line and
+ * the continuations start under the code, not under the number. */
+.fe-line { display: flex; align-items: flex-start; }
+.fe-ln {
+  flex: 0 0 auto;
+  /* box-sizing is border-box, so the padding and the separator are inside the
+   * width; add them back so the number's column is exactly --lnw and the code
+   * starts at --gut. */
+  width: calc(var(--lnw, 3ch) + 1ch + 1px);
+  text-align: right;
+  padding-right: 1ch;
+  border-right: 1px solid var(--border);
+  margin-right: 1ch;
+  color: var(--text-faint);
+  user-select: none;
+}
+.fe-line.fe-hl { background: rgba(var(--accent-rgb), 0.16); }
+/* flex-basis 0% + min-width 0 make the code fill exactly the remaining width,
+ * so it wraps at the same point as the textarea on every visual line. */
+.fe-code { flex: 1 1 0%; min-width: 0; white-space: inherit; }
+.fe-textarea {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  margin: 0;
+  border: 0;
+  padding: 6px 12px 6px var(--gut);
+  background: transparent;
+  color: transparent;
+  -webkit-text-fill-color: transparent;
+  caret-color: var(--text);
+  white-space: pre;
+  overflow: auto;
+  resize: none;
+  outline: none;
+  font: inherit;
+  tab-size: 4;
+}
+.fe-textarea.wrap { white-space: pre-wrap; }
+.fe-status {
+  flex: 0 0 auto;
+  padding: 6px 12px;
+  border-top: 1px solid var(--border);
+  color: var(--text-faint);
+  font-size: 11.5px;
+  font-family: var(--mono);
+}
+.fe-status-error { color: var(--danger); }
+
+.fb-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 10px;
+  border-bottom: 1px solid var(--border);
+  font-family: var(--mono);
+  font-size: 12px;
+}
+.fb-path {
+  flex: 1 1 auto;
+  min-height: 24px;
+  padding: 0 var(--s2);
+  background: var(--bg-inset);
+  border: 1px solid var(--border-strong);
+  border-radius: 4px;
+  color: var(--text);
+  font-family: var(--mono);
+  font-size: 12px;
+}
+.fb-path:focus { border-color: var(--accent-dim); }
+.fb-list { flex: 1 1 auto; overflow: auto; padding: 4px 0; }
+.fb-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 5px 12px;
+  font-family: var(--mono);
+  font-size: 12.5px;
+  cursor: pointer;
+}
+.fb-row:hover { background: var(--bg-inset); }
+.fb-row.selected { background: var(--bg-hover); }
+.fb-icon { color: var(--text-faint); width: 12px; flex: 0 0 auto; }
+.fb-name { color: var(--text); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.fb-dir .fb-name { color: var(--accent); }
+.fb-size { margin-left: auto; color: var(--text-faint); font-size: 11px; flex: 0 0 auto; }
+.fb-note { padding: 10px 12px; color: var(--text-faint); font-family: var(--sans); font-size: 12.5px; }
+.fb-actions {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 10px;
+  border-top: 1px solid var(--border);
+  background: var(--bg-raised);
+  flex: 0 0 auto;
+}
+.fb-sel { margin-right: auto; color: var(--text-dim); font-size: 11.5px; }
+.fb-move {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 10px;
+  border-top: 1px solid var(--border);
+  background: var(--bg-raised);
+  flex: 0 0 auto;
+}
+.fb-move-info {
+  margin-right: auto;
+  color: var(--text-dim);
+  font-family: var(--mono);
+  font-size: 11.5px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* Right-click "copy path" menu. */
+.ctx-menu {
+  position: fixed;
+  z-index: 1000;
+  background: var(--bg-raised);
+  border: 1px solid var(--border-strong);
+  border-radius: 6px;
+  padding: 4px;
+  box-shadow: 0 6px 20px rgba(0, 0, 0, 0.45);
+}
+.ctx-item {
+  display: block;
+  width: 100%;
+  background: none;
+  border: 0;
+  color: var(--text);
+  font-family: var(--sans);
+  font-size: 12.5px;
+  padding: 6px 12px;
+  text-align: left;
+  cursor: pointer;
+  border-radius: 4px;
+  white-space: nowrap;
+}
+.ctx-item:hover { background: var(--bg-hover); }

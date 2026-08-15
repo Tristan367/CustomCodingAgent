@@ -8,22 +8,11 @@ from fastapi import APIRouter, Request
 from fastapi.responses import HTMLResponse, RedirectResponse
 
 from agent_server import database as db
-from agent_server.routes.context import _slug
+from agent_server.routes.context import _page_or_body, _slug
 from agent_server.templating import templates
 from agent_server.tools.registry import BUILT_IN_NAMES, TOOLS, tool_schemas
 
 router = APIRouter()
-
-
-def _page_or_body(request, page: str, body: str) -> str:
-    """Which template to render for this request.
-
-    An HTMX swap replaces one element. Returning the full page -- navbar,
-    <head> and all -- put a second copy of the chrome inside the element being
-    swapped, which is why saving a tool or a secret grew another navbar.
-    """
-    return body if request.headers.get("HX-Request") else page
-
 
 
 async def _tools_context(edit_tool: str = "", saved: bool = False, error: str = "") -> dict:
@@ -161,7 +150,7 @@ async def tools_page(request: Request, saved: bool = False):
 
 @router.post("/_save_custom_tool")
 async def save_custom_tool(request: Request):
-    from agent_server.tools.custom import reload_custom_tools
+    from agent_server.tools.custom import load_custom_tools
     from agent_server.tools.registry import BUILT_IN_NAMES
 
     form = await request.form()
@@ -204,7 +193,7 @@ async def save_custom_tool(request: Request):
     # profile on the Prompts page, and a second global switch only created a
     # state where a tool was "on" and still absent from the session.
     await db.save_custom_tool(name, description, parameters, script, True, ask_permission)
-    problems = await reload_custom_tools()
+    problems = await load_custom_tools()
     if problems:
         return await refuse("; ".join(problems))
 
@@ -213,59 +202,70 @@ async def save_custom_tool(request: Request):
 
 @router.post("/_delete_custom_tool")
 async def delete_custom_tool(request: Request):
-    from agent_server.tools.custom import reload_custom_tools
+    from agent_server.tools.custom import load_custom_tools
 
     form = await request.form()
     name = str(form.get("name", "")).strip()
     if name:
         await db.delete_custom_tool(name)
-        await reload_custom_tools()
+        await load_custom_tools()
     return RedirectResponse("/tools", status_code=303)
 
 
 @router.post("/_new_custom_tool")
 async def new_custom_tool(request: Request):
-    from agent_server.tools.custom import reload_custom_tools
+    from agent_server.tools.custom import load_custom_tools
 
     form = await request.form()
     name = _slug(str(form.get("new_name", "")))
     if not name:
         return RedirectResponse("/tools", status_code=303)
     await db.save_custom_tool(name, "", "{}", "", True, True)
-    await reload_custom_tools()
+    await load_custom_tools()
     return RedirectResponse(f"/tools?edit={name}", status_code=303)
+
+
+def _safe_back(raw: str) -> str:
+    """Where a secret form returns to. Same-page by default; the scripts panel
+    passes "/" so it can manage the same store without bouncing to /tools."""
+    raw = (raw or "").strip()
+    return raw if raw.startswith("/") and not raw.startswith("//") else "/tools"
 
 
 @router.post("/_save_secret")
 async def save_secret(request: Request):
     form = await request.form()
+    back = _safe_back(str(form.get("back", "")))
     name = str(form.get("name", "")).strip()
     value = str(form.get("value", "")).strip()
     if not name:
-        return RedirectResponse("/tools", status_code=303)
+        return RedirectResponse(back, status_code=303)
     if value and "\u2022" in value:
-        return RedirectResponse("/tools", status_code=303)
+        return RedirectResponse(back, status_code=303)
     if value:
         await db.save_secret(name, value)
-    return RedirectResponse("/tools", status_code=303)
+    return RedirectResponse(back, status_code=303)
 
 
 @router.post("/_delete_secret")
 async def delete_secret(request: Request):
     form = await request.form()
+    back = _safe_back(str(form.get("back", "")))
     name = str(form.get("name", "")).strip()
     if name:
         await db.delete_secret(name)
-    return RedirectResponse("/tools", status_code=303)
+    return RedirectResponse(back, status_code=303)
 
 
 @router.post("/_new_secret")
 async def new_secret(request: Request):
     form = await request.form()
+    back = _safe_back(str(form.get("back", "")))
     name = str(form.get("name", "")).strip()
+    value = str(form.get("value", "")).strip()
     if name:
-        await db.save_secret(name, "")
-    return RedirectResponse("/tools", status_code=303)
+        await db.save_secret(name, value)
+    return RedirectResponse(back, status_code=303)
 
 
 @router.post("/_test_custom_tool")
@@ -310,6 +310,7 @@ async def test_custom_tool(request: Request):
 
     import asyncio as _asyncio
     import os as _os
+    proc = None
     try:
         proc = await _asyncio.create_subprocess_shell(
             script,

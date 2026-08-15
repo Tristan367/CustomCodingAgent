@@ -113,8 +113,11 @@ async def run_script(request: Request):
             stderr=asyncio.subprocess.PIPE,
             cwd=str(BASE_DIR),
             # Inherit the environment so .env values -- the vision host, keys --
-            # are visible, which is most of the point for these scripts.
-            env={**os.environ, "TERM": "dumb", "NO_COLOR": "1", "PAGER": "cat"},
+            # are visible, which is most of the point for these scripts. The
+            # saved secrets (set on this page or the Tools page) are added on
+            # top, so a script can read $VAR_NAME without touching .env.
+            env={**os.environ, **await db.load_secrets_dict(),
+                 "TERM": "dumb", "NO_COLOR": "1", "PAGER": "cat"},
             # Own process group, so a timeout kills the whole pipeline.
             start_new_session=True,
         )

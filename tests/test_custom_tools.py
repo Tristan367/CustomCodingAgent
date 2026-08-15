@@ -42,10 +42,10 @@ def noop_tool(name, parameters=None):
 
 
 def test_the_built_in_names_are_discovered_not_listed():
-    """The hardcoded list had gone stale -- it was missing websearch, explore,
-    skill and every browser tool, all of which were therefore shadowable."""
+    """The hardcoded list had gone stale -- it was missing websearch, explore
+    and every browser tool, all of which were therefore shadowable."""
     for name in ("read", "edit", "write", "bash", "grep", "glob", "webfetch",
-                 "websearch", "task", "explore", "skill", "capture", "browser"):
+                 "websearch", "task", "explore", "capture", "browser"):
         assert name in BUILT_IN_NAMES, name
 
 
@@ -133,5 +133,16 @@ async def test_reloading_drops_tools_that_were_deleted(clean_db):
     assert "temp" in TOOLS
 
     await db.delete_custom_tool("temp")
-    await custom.reload_custom_tools()
+    await custom.load_custom_tools()
     assert "temp" not in TOOLS
+
+
+def test_secret_redirect_is_restricted_to_local_paths():
+    """`back` is a form field, so a crafted value must not redirect off-box."""
+    from agent_server.routes.custom_tools import _safe_back
+
+    assert _safe_back("/") == "/"
+    assert _safe_back("/?script=foo") == "/?script=foo"
+    assert _safe_back("//evil.example") == "/tools"
+    assert _safe_back("https://evil.example") == "/tools"
+    assert _safe_back("") == "/tools"

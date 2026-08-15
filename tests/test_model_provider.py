@@ -10,7 +10,16 @@ through the UI at all, which is why neither had ever been exercised.
 import pytest
 
 from agent_server import database as db
-from agent_server.config import MODELS, MODELS_BY_ID, provider_for_model, resolve_model_choice
+from agent_server.config import (
+    DYNAMIC_DEEPSEEK_MODELS,
+    MODELS,
+    MODELS_BY_ID,
+    dynamic_deepseek_models,
+    is_known_model,
+    provider_for_model,
+    register_dynamic_deepseek_models,
+    resolve_model_choice,
+)
 from agent_server.models import SessionUpdate
 from agent_server.providers import _providers, list_providers
 from agent_server.providers.custom_openai import CustomOpenAIProvider
@@ -18,6 +27,13 @@ from agent_server.routes.sessions import _validate, update_session
 
 # asyncio_mode is "auto", so async tests need no marker and sync ones must not
 # carry a module-level asyncio mark.
+
+
+@pytest.fixture
+def clean_dynamic_models():
+    DYNAMIC_DEEPSEEK_MODELS.clear()
+    yield
+    DYNAMIC_DEEPSEEK_MODELS.clear()
 
 
 @pytest.fixture
@@ -97,16 +113,18 @@ async def test_switching_model_switches_provider(clean_db):
     assert updated["model"] == "claude-opus-5"
 
 
-async def test_the_summariser_choice_is_no_longer_dropped(clean_db):
-    """compact_profile was missing from SessionUpdate, so pydantic discarded it
-    and the dropdown silently did nothing."""
+async def test_compaction_follows_profile_not_legacy_column(clean_db):
+    """compact_profile was dropped from SessionUpdate — the compaction prompt
+    is now always the one bundled with the prompt_profile, so there is nothing
+    to configure separately."""
     session = await db.create_session(name="s", project_dir=str(clean_db))
-    assert "compact_profile" in SessionUpdate.model_fields
+    assert "compact_profile" not in SessionUpdate.model_fields, \
+        "compact_profile was removed from SessionUpdate — profiles bundle it now"
 
-    await db.save_prompt("terse", "be terse", "compaction")
-    await update_session(session["id"], SessionUpdate(compact_profile="terse"))
-
-    assert (await db.get_session(session["id"]))["compact_profile"] == "terse"
+    # Setting prompt_profile alone should still work fine.
+    await db.save_prompt("newbie", "new prompt", "system")
+    await update_session(session["id"], SessionUpdate(prompt_profile="newbie"))
+    assert (await db.get_session(session["id"]))["prompt_profile"] == "newbie"
 
 
 async def test_a_custom_endpoints_model_passes_validation(clean_db, custom_endpoint):
@@ -159,3 +177,42 @@ def test_the_custom_sentinel_is_gone():
     """`custom` was a fake row in MODELS with a fake context window and zero
     prices, so it validated as a real model id and could be sent to an API."""
     assert "custom" not in MODELS_BY_ID
+
+
+def test_dynamic_models_are_registered_and_deduplicated(clean_dynamic_models):
+    """Discovery merges new ids, skips the hand-priced ones and repeats."""
+    register_dynamic_deepseek_models(
+        ["deepseek-v4-pro", "deepseek-v4-pro-0813", "deepseek-v4-pro-0813", ""]
+    )
+    assert DYNAMIC_DEEPSEEK_MODELS == ["deepseek-v4-pro-0813"]
+
+
+def test_dynamic_models_resolve_to_deepseek(clean_dynamic_models):
+    register_dynamic_deepseek_models(["deepseek-v4-pro-0813"])
+    assert is_known_model("deepseek-v4-pro-0813")
+    assert provider_for_model("deepseek-v4-pro-0813") == "deepseek"
+    provider, model = resolve_model_choice("deepseek-v4-pro-0813")
+    assert (provider, model) == ("deepseek", "deepseek-v4-pro-0813")
+
+
+def test_dynamic_models_are_humanised(clean_dynamic_models):
+    register_dynamic_deepseek_models(["deepseek-v4-flash-0731"])
+    entries = dynamic_deepseek_models()
+    assert entries == [
+        {"id": "deepseek-v4-flash-0731", "name": "DeepSeek V4 Flash 0731", "provider": "deepseek"}
+    ]
+
+
+async def test_a_discovered_model_passes_validation(clean_db, clean_dynamic_models):
+    register_dynamic_deepseek_models(["deepseek-v4-pro-0813"])
+    await _validate(SessionUpdate(model="deepseek-v4-pro-0813", provider="deepseek"))
+
+
+async def test_a_discovered_model_still_refuses_a_mismatched_provider(
+    clean_db, clean_dynamic_models
+):
+    from fastapi import HTTPException
+
+    register_dynamic_deepseek_models(["deepseek-v4-pro-0813"])
+    with pytest.raises(HTTPException, match="served by deepseek"):
+        await _validate(SessionUpdate(model="deepseek-v4-pro-0813", provider="anthropic"))

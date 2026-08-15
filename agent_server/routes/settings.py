@@ -1,6 +1,8 @@
 """Application settings: providers, bash rules, sound control, and TTS."""
 
 
+import json
+
 from fastapi import APIRouter, Form, Request
 
 from agent_server import database as db
@@ -61,4 +63,30 @@ async def save_tts_settings(
         await db.set_setting("tts_volume", str(_clamp(volume, 0.0, 1.0, 0.66)))
     if tone:
         await db.set_setting("tts_tone", str(int(_clamp(tone, 2000, 20000, 20000))))
+    return {"ok": True}
+
+
+@router.post("/_settings/expand")
+async def save_expand_setting(request: Request):
+    """Which tool results the transcript opens without a click."""
+    try:
+        body = await request.json()
+    except Exception:
+        return {"ok": False}
+    names = [str(v) for v in body] if isinstance(body, list) else []
+    await db.set_setting("expand_tools", json.dumps(names))
+    return {"ok": True}
+
+
+@router.post("/_settings/theme")
+async def save_theme(request: Request):
+    """The accent colour family: green (default), red, or gray."""
+    form = await request.form()
+    theme = str(form.get("theme", "")).strip()
+    if theme not in ("green", "red", "gray"):
+        return {"ok": False}
+    await db.set_setting("theme", theme)
+    from agent_server.templating import set_theme
+
+    set_theme(theme)
     return {"ok": True}

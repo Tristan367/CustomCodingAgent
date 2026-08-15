@@ -152,6 +152,21 @@ async def test_grants_do_not_leak_between_sessions(clean_db):
     assert await permissions.list_allowed(OTHER) == []
 
 
+async def test_sudo_always_prompts_even_with_auto_approve(clean_db):
+    """sudo must ask for a password even when shell auto-approve is on."""
+    project = str(clean_db)
+    # Without auto-approve
+    p = await permissions.check("bash", {"command": "sudo ls"}, SESSION, project, False)
+    assert p is not None
+    assert p["kind"] == "sudo"
+    # With auto-approve — still prompts for password
+    p = await permissions.check("bash", {"command": "sudo ls"}, SESSION, project, True)
+    assert p is not None
+    assert p["kind"] == "sudo"
+    # But a non-sudo mutating command is still skipped by auto-approve
+    assert await permissions.check("bash", {"command": "rm foo"}, SESSION, project, True) is None
+
+
 async def test_deleting_a_session_drops_its_grants(clean_db):
     outside = clean_db.parent / "gone"
     outside.mkdir(exist_ok=True)

@@ -32,13 +32,16 @@ from agent_server.conversation import (
 )
 from agent_server.providers import Provider, get_provider
 from agent_server.providers.base import message_chars, observe_usage
-from agent_server.system_prompt import disabled_tools, get_compact_prompt, session_system_prompt
+from agent_server.system_prompt import disabled_tools, session_system_prompt
 from agent_server.tools.base import ToolContext, ToolResult, truncate
 from agent_server.tools.registry import execute_tool, get_tool, tool_schemas
 
 log = logging.getLogger(__name__)
 
-# session_id -> abort signal for the in-flight run.
+# Display ceiling for a tool's `code` body (reads) in the streamed event. The
+# full body still lands in the DB, but a single SSE frame should not carry 4 MB.
+MAX_CODE_CHARS = 20_000
+
 # session_id -> abort signal for the in-flight run.
 _aborts: dict[str, asyncio.Event] = {}
 # Sessions the user chose to auto-approve for the lifetime of this process.
@@ -63,9 +66,18 @@ def _parallel_safe(name: str) -> bool:
 # another, and so a session that goes away takes its approvals with it.
 _approved_calls: dict[str, set[str]] = {}
 
+# sudo passwords live only for the lifetime of a single tool call. They are
+# stored here by resolve_pending(), injected into bash args in _drain_pending(),
+# and discarded immediately after use.
+_sudo_passwords: dict[str, dict[str, str]] = {}  # {session_id: {tool_call_id: password}}
+
 # Per-session history of recent tool rounds, for doom-loop detection. Each
 # entry is the set of (name, args_json) keys issued on one assistant turn.
 _doom_history: dict[str, list[set[tuple[str, str]]]] = {}
+# The assistant message id most recently recorded for each session, so a
+# pause/resume re-entering _drain_pending for the same turn does not record the
+# round twice (which would count a single turn as two and trip the detector).
+_doom_recorded: dict[str, str] = {}
 # A key present in this many consecutive rounds is the model going in circles;
 # the call is refused and the refusal is fed back so it can adapt.
 DOOM_ROUNDS = 3
@@ -95,10 +107,6 @@ def _set_status(session_id: str, status: str, notify: str = ""):
         _status[session_id] = status
     if notify:
         _unseen[session_id] = notify
-
-
-def session_status(session_id: str) -> str:
-    return _status.get(session_id, "idle")
 
 
 def status_snapshot() -> dict[str, dict]:
@@ -162,10 +170,6 @@ def snooze_compaction(session_id: str):
 
 async def _auto_approves(session: dict) -> bool:
     return bool(session.get("bash_auto_approve")) or runtime_auto_approve(session["id"])
-
-
-class Paused(Exception):
-    """Raised internally when the loop stops to wait for the user."""
 
 
 class _Run:
@@ -234,6 +238,27 @@ async def _flush_queued(session_id: str) -> list[dict]:
     return [await db.add_message(session_id, "user", combined)]
 
 
+async def _flush_mailbox(session_id: str) -> list[dict]:
+    """Deliver inter-session mail as user messages, oldest first."""
+    rows = await db.drain_mail(session_id)
+    out = []
+    for mail in rows:
+        row = await db.add_message(
+            session_id, "user", mail_content(mail["from_name"], mail["body"]),
+            mail_from=mail["from_name"],
+        )
+        out.append(row)
+    return out
+
+
+def mail_content(from_name: str, body: str) -> str:
+    """The model-facing text of an incoming message."""
+    return (
+        f"You received a message from {from_name}:\n\n{body}\n\n"
+        f"To reply, use the send_message tool with session=\"{from_name}\"."
+    )
+
+
 def _publish(run: _Run, event: dict):
     if event["type"] == "tool_start":
         run.inflight[event["tool_call_id"]] = event
@@ -286,9 +311,13 @@ def forget_session(session_id: str):
     # logged into. Closing is async and this is not; the session is going away
     # regardless, so it is scheduled when there is a loop to schedule it on.
     try:
-        _background.add(asyncio.ensure_future(browser.close_session(session_id)))
+        loop = asyncio.get_running_loop()
     except RuntimeError:
         pass  # no running loop, e.g. under a synchronous test
+    else:
+        task = loop.create_task(browser.close_session(session_id))
+        _background.add(task)
+        task.add_done_callback(_background.discard)
     run = _runs.pop(session_id, None)
     if run is not None and run.task is not None and not run.task.done():
         run.task.cancel()
@@ -296,7 +325,9 @@ def forget_session(session_id: str):
     _aborts.pop(session_id, None)
     _tool_tasks.pop(session_id, None)
     _doom_history.pop(session_id, None)
+    _doom_recorded.pop(session_id, None)
     _approved_calls.pop(session_id, None)
+    _sudo_passwords.pop(session_id, None)
     _compaction_snoozed.discard(session_id)
     _cache_warning_ack.discard(session_id)
     _runtime_auto_approve.discard(session_id)
@@ -317,10 +348,40 @@ async def shutdown(timeout: float = 5.0):
     _runs.clear()
 
 
+async def stop_all() -> int:
+    """Emergency brake: abort every run and drop all pending mail and queues."""
+    stopped = sum(1 for sid in list(_aborts) if request_abort(sid))
+    _queued.clear()
+    await db.clear_mailbox()
+    return stopped
+
+
+async def broadcast(session_ids: list[str], text: str) -> int:
+    """Send one message to several sessions, waking idle ones."""
+    sent = 0
+    for sid in session_ids:
+        if await db.get_session(sid) is None:
+            continue
+        if is_running(sid):
+            queue_message(sid, text)
+        else:
+            await db.add_message(sid, "user", text)
+            start_run(sid)
+        sent += 1
+    return sent
+
+
 def start_run(session_id: str) -> _Run:
-    """Start a turn, or return the one already in progress."""
+    """Start a turn, or return the one already in progress.
+
+    Uses `_aborts` (the same signal as `is_running`) rather than the run's
+    `done` flag, which `_drive` sets slightly later. That window was the bug:
+    a reply arriving as the previous turn finished would see `is_running` say
+    "idle" but `start_run` return the dying run without starting a new one,
+    stranding the reply.
+    """
     existing = _runs.get(session_id)
-    if existing is not None and not existing.done.is_set():
+    if existing is not None and session_id in _aborts:
         return existing
     handle = _Run()
     _runs[session_id] = handle
@@ -398,6 +459,7 @@ async def run(session_id: str) -> AsyncIterator[dict]:
         provider=session["provider"],
         model=session["model"],
         subagent_model=session.get("subagent_model") or "",
+        prompt_profile=session.get("prompt_profile") or "default",
         abort=abort,
     )
     _set_status(session_id, "running")
@@ -414,7 +476,7 @@ async def run(session_id: str) -> AsyncIterator[dict]:
             yield {"type": "turn_start", "user_message_id": last_user["id"]}
 
         async for event in _loop(session, provider, ctx, abort):
-            if event["type"] in ("permission", "compaction_required", "cache_warning"):
+            if event["type"] in ("permission", "cache_warning"):
                 outcome = "waiting"
             elif event["type"] == "error":
                 outcome = "error"
@@ -435,6 +497,13 @@ async def run(session_id: str) -> AsyncIterator[dict]:
         else:
             _compaction_snoozed.discard(session_id)
             _set_status(session_id, "idle", notify=outcome)
+            # A reply can land in the mailbox while the final model call is in
+            # flight, after the last _flush_mailbox. Wake again so it is delivered.
+            # Same for a message queued mid-run: if the model finished before the
+            # next turn boundary, the queue was never flushed, so wake once more
+            # so it becomes the next turn instead of being stranded.
+            if await db.has_mail(session_id) or _queued.get(session_id):
+                start_run(session_id)
         log.info("turn end session=%s outcome=%s tools=%d", session_id, outcome, tools_count)
 
 
@@ -479,33 +548,31 @@ async def _loop(
         for row in await _flush_queued(session_id):
             yield {"type": "queued_message", "message_id": row["id"], "content": row["content"]}
 
-        # Offer compaction at a clean turn boundary, before spending another
-        # full-context request. Snoozed for the rest of the run once the user
-        # either compacts or raises the threshold.
+        for row in await _flush_mailbox(session_id):
+            yield {
+                "type": "queued_message",
+                "message_id": row["id"],
+                "content": row["content"],
+                "from_name": row.get("mail_from"),
+            }
+
+        # Compact at a clean turn boundary, before spending another full-context
+        # request. Automatic, with no opt-out: a long-horizon task must not be
+        # interrupted mid-flight to ask. Raise the threshold to compact by hand
+        # instead. Snoozed for the rest of the run once a compaction happens.
         if session_id not in _compaction_snoozed:
             usage = await db.get_session_usage(session_id)
             if usage["threshold"] and usage["context"] >= usage["threshold"]:
-                if session.get("auto_compact"):
-                    # Asked not to be asked: compact in place and carry on.
-                    from agent_server.compaction import compact_session
+                from agent_server.compaction import compact_session
 
-                    yield {"type": "compacting"}
-                    result = await compact_session(session_id)
-                    _compaction_snoozed.add(session_id)
-                    yield {"type": "compacted", **result}
-                    if not result.get("ok"):
-                        yield {"type": "error", "message": result.get("reason", "Compaction failed")}
-                        return
-                    continue
-                yield {
-                    "type": "compaction_required",
-                    "context": usage["context"],
-                    "threshold": usage["threshold"],
-                    "max_context": usage["max_context"],
-                    "cost": round(usage["cost"], 4),
-                    "instructions": await get_compact_prompt(session),
-                }
-                return
+                yield {"type": "compacting"}
+                result = await compact_session(session_id)
+                _compaction_snoozed.add(session_id)
+                yield {"type": "compacted", **result}
+                if not result.get("ok"):
+                    yield {"type": "error", "message": result.get("reason", "Compaction failed")}
+                    return
+                continue
 
         rows = await db.get_messages(session_id)
         messages = build_messages(system_prompt, await db.get_compactions(session_id), rows)
@@ -710,14 +777,16 @@ async def _drain_pending(session: dict, ctx: ToolContext) -> AsyncIterator[dict]
         return
 
     shell_auto = await _auto_approves(session)
-    # Recorded once for the whole turn, so a fan-out counts as one round.
-    doomed, fatal = _doom_round(session_id, pending)
+    # Recorded once for the whole turn, so a fan-out counts as one round and a
+    # pause/resume does not count the same round twice.
+    doomed, fatal = _doom_round(session_id, pending, assistant_row["id"])
     if fatal:
         for call in pending:
             name = tool_call_name(call)
             result = ToolResult.error(_doom_message(name, _last_output_for(rows, name)), "doom-loop")
             await _record(session_id, call, result, 0)
         _doom_history.pop(session_id, None)
+        _doom_recorded.pop(session_id, None)
         log.warning("doom-loop abort session=%s", session_id)
         yield {
             "type": "error",
@@ -774,6 +843,10 @@ async def _drain_pending(session: dict, ctx: ToolContext) -> AsyncIterator[dict]
             return
 
         _approved_calls.get(session_id, set()).discard(call["id"])
+        # Inject sudo password if one was stored for this call.
+        pwd = (_sudo_passwords.get(session_id) or {}).pop(call["id"], None)
+        if pwd and name == "bash" and "sudo" in (args.get("command") or ""):
+            args["sudo_password"] = pwd
         yield {"type": "tool_start", "tool_call_id": call["id"], "name": name, "args": args}
 
         if _doom_key(call) in doomed:
@@ -845,7 +918,7 @@ def _doom_key(call: dict) -> tuple[str, str]:
     return (tool_call_name(call), json.dumps(parse_arguments(call), sort_keys=True))
 
 
-def _doom_round(session_id: str, calls: list[dict]) -> tuple[set[tuple[str, str]], bool]:
+def _doom_round(session_id: str, calls: list[dict], assistant_id: str) -> tuple[set[tuple[str, str]], bool]:
     """Record one round of tool calls; report the keys that have now repeated.
 
     A round is every tool call on a single assistant turn. Identical calls
@@ -853,6 +926,9 @@ def _doom_round(session_id: str, calls: list[dict]) -> tuple[set[tuple[str, str]
     is what `task`'s `count` exists for -- so a round counts a key once. Only a
     key that survives DOOM_ROUNDS consecutive rounds is a loop: the model asked,
     was answered, and asked the identical thing again.
+
+    A pause/resume re-enters this with the same assistant turn, so the round is
+    only recorded the first time it is seen for a given assistant message id.
 
     The previous version counted each call separately, so a three-way fan-out
     tripped the detector on its own first round and was killed before it ran.
@@ -862,9 +938,11 @@ def _doom_round(session_id: str, calls: list[dict]) -> tuple[set[tuple[str, str]
     """
     keys = {_doom_key(call) for call in calls}
     history = _doom_history.setdefault(session_id, [])
-    history.append(keys)
-    if len(history) > DOOM_ABORT_ROUNDS:
-        history.pop(0)
+    if _doom_recorded.get(session_id) != assistant_id:
+        history.append(keys)
+        _doom_recorded[session_id] = assistant_id
+        if len(history) > DOOM_ABORT_ROUNDS:
+            history.pop(0)
     if len(history) < DOOM_ROUNDS:
         return set(), False
     refuse = set.intersection(*history[-DOOM_ROUNDS:])
@@ -909,6 +987,9 @@ def _last_output_for(rows: list[dict], name: str) -> str:
 
 
 def _tool_end_event(call: dict, name: str, result: ToolResult, elapsed_ms: int) -> dict:
+    code = result.code
+    if len(code) > MAX_CODE_CHARS:
+        code = code[:MAX_CODE_CHARS] + "\n... [truncated in view]"
     return {
         "type": "tool_end",
         "tool_call_id": call["id"],
@@ -917,6 +998,9 @@ def _tool_end_event(call: dict, name: str, result: ToolResult, elapsed_ms: int) 
         "output": truncate(result.output, 20_000, "preview"),
         "is_error": result.is_error,
         "diff": result.diff,
+        "lang": result.lang,
+        "code": code,
+        "code_start": result.code_start,
         "duration_ms": elapsed_ms,
     }
 
@@ -1012,6 +1096,9 @@ async def _record(session_id: str, call: dict, result: ToolResult, duration_ms: 
         tool_title=result.title,
         duration_ms=duration_ms,
         file_path=path if result.diff else "",
+        lang=result.lang,
+        code=result.code,
+        code_start=result.code_start,
         # Subagents bill against this session; without this their spend is
         # simply not counted anywhere.
         usage=result.usage,
@@ -1050,6 +1137,9 @@ async def resolve_pending(
         # Don't run it here. Marking it approved lets the agent loop execute it
         # and stream tool_start/tool_end, so the user sees the result.
         _approved_calls.setdefault(session_id, set()).add(tool_call_id)
+        # Sudo password: store it for one-shot injection into the bash call.
+        if "sudo" in (parse_arguments(call).get("command", "")):
+            _sudo_passwords.setdefault(session_id, {})[tool_call_id] = value
         return True
 
     if action == "reject":

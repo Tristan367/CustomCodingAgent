@@ -25,8 +25,6 @@ import io
 import logging
 from pathlib import Path
 
-import httpx
-
 from agent_server.config import (
     VISION_MAX_PIXELS,
 )
@@ -79,17 +77,6 @@ def normalize_image(data: bytes) -> bytes:
     return out.getvalue()
 
 
-def load_image(path: str | Path) -> bytes:
-    p = Path(path).expanduser()
-    if not p.exists():
-        raise ImageError(f"image not found: {p}")
-    if not p.is_file():
-        raise ImageError(f"not a file: {p}")
-    if p.stat().st_size > 60 * 1024 * 1024:
-        raise ImageError(f"image too large: {p.stat().st_size:,} bytes")
-    return normalize_image(p.read_bytes())
-
-
 def describe_image_file(path: str | Path) -> str:
     """Human-readable dimensions, for tool output."""
     try:
@@ -100,28 +87,6 @@ def describe_image_file(path: str | Path) -> str:
     except Exception:
         log.debug("reading image dimensions failed", exc_info=True)
         return "image"
-
-
-# ── Ollama client ───────────────────────────────────────────────────────────
-
-
-
-_starting = asyncio.Lock()
-_analyze_lock = asyncio.Lock()
-
-
-
-
-        # the rig may already be gone; nothing to clean up
-
-
-
-
-_http: httpx.AsyncClient | None = None
-
-
-
-
 
 
 async def normalize_in_thread(data: bytes) -> bytes:

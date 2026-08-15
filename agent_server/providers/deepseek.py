@@ -25,3 +25,34 @@ class DeepSeekProvider(OpenAICompatibleProvider):
         kwargs["reasoning_effort"] = effort
         kwargs["extra_body"] = {"thinking": {"type": "disabled" if effort == "none" else "enabled"}}
         return kwargs
+
+    async def fetch_model_ids(self) -> list[str]:
+        """Model ids the DeepSeek /models endpoint advertises right now.
+
+        Empty on any failure or missing key: model discovery is best-effort, and
+        the app must not fail to start because the network is down or the
+        account changed. Returns the raw ids; the caller merges them with the
+        hand-configured list.
+        """
+        import httpx
+
+        key = self.api_key()
+        if not key:
+            return []
+        try:
+            async with httpx.AsyncClient(timeout=10) as client:
+                resp = await client.get(
+                    f"{self.base_url}/models",
+                    headers={"Authorization": f"Bearer {key}"},
+                )
+                if resp.status_code != 200:
+                    return []
+                data = resp.json()
+        except Exception:
+            return []
+        rows = data.get("data", []) if isinstance(data, dict) else []
+        return [
+            str(row["id"])
+            for row in rows
+            if isinstance(row, dict) and row.get("id")
+        ]

@@ -7,31 +7,6 @@
 (function (global) {
   'use strict';
 
-  const KEYWORDS = {
-    common: 'return|if|else|for|while|break|continue|new|try|catch|finally|throw|switch|case|default|do|in|of|null|true|false',
-    js: 'const|let|var|function|class|extends|import|export|from|as|async|await|yield|typeof|instanceof|delete|void|this|super|static|get|set|undefined|NaN',
-    ts: 'interface|type|enum|implements|public|private|protected|readonly|namespace|declare|abstract|keyof|infer|satisfies',
-    py: 'def|class|import|from|as|lambda|pass|raise|with|global|nonlocal|assert|del|yield|async|await|elif|not|and|or|is|None|True|False|self|cls|match|case',
-    go: 'func|package|import|var|const|type|struct|interface|go|defer|chan|select|range|map|nil|make',
-    rust: 'fn|let|mut|pub|use|mod|impl|trait|struct|enum|match|ref|move|unsafe|crate|self|Some|None|Ok|Err|where|dyn',
-    sh: 'echo|cd|export|source|alias|sudo|then|fi|done|esac|elif|local|readonly|unset|exit',
-    css: 'important|media|keyframes|import|supports|font-face|root',
-  };
-
-  const LANG_ALIASES = {
-    js: 'js', javascript: 'js', jsx: 'js', mjs: 'js', cjs: 'js', node: 'js',
-    ts: 'ts', typescript: 'ts', tsx: 'ts',
-    py: 'py', python: 'py', py3: 'py',
-    sh: 'sh', bash: 'sh', shell: 'sh', zsh: 'sh', console: 'sh', terminal: 'sh',
-    go: 'go', golang: 'go',
-    rs: 'rust', rust: 'rust',
-    json: 'json', jsonc: 'json',
-    html: 'html', xml: 'html', svg: 'html', vue: 'html',
-    css: 'css', scss: 'css', sass: 'css', less: 'css',
-    sql: 'sql', yaml: 'yaml', yml: 'yaml', toml: 'yaml', ini: 'yaml',
-    c: 'js', cpp: 'js', java: 'js', kt: 'js', cs: 'js', php: 'js', rb: 'py',
-  };
-
   function escapeHtml(text) {
     return String(text)
       .replace(/&/g, '&amp;')
@@ -41,61 +16,50 @@
       .replace(/'/g, '&#39;');
   }
 
-  /* Highlight by tokenizing in one pass so a keyword inside a string is not
-   * re-highlighted. Input must already be escaped. */
-  // Above this, tokenising costs more than the colour is worth.
+  /* Syntax highlighting via highlight.js (vendored, loaded in base.html).
+   * Takes RAW code and returns escaped, token-wrapped HTML. Falls back to plain
+   * escaped text when the language is unknown or the blob is too big. */
   const MAX_HIGHLIGHT_CHARS = 40000;
 
-  function highlight(escaped, lang) {
-    const key = LANG_ALIASES[(lang || '').toLowerCase()];
-    if (!key || escaped.length > MAX_HIGHLIGHT_CHARS) return escaped;
-
-    const keywords = key === 'json' || key === 'yaml'
-      ? 'true|false|null'
-      : [KEYWORDS.common, KEYWORDS[key] || ''].filter(Boolean).join('|');
-
-    const patterns = [
-      // Comments
-      { re: /(&#39;&#39;&#39;[\s\S]*?&#39;&#39;&#39;|&quot;&quot;&quot;[\s\S]*?&quot;&quot;&quot;)/g, cls: 'hl-str' },
-      { re: /(\/\*[\s\S]*?\*\/)/g, cls: 'hl-com' },
-      { re: /(^|[^:\\])(\/\/[^\n]*)/g, cls: 'hl-com', group: 2 },
-      { re: /(#[^\n]*)/g, cls: 'hl-com', only: ['py', 'sh', 'yaml'] },
-      // Strings (escaped quotes are &quot; / &#39;)
-      { re: /(&quot;(?:[^&\\\n]|\\.|&(?!quot;))*&quot;)/g, cls: 'hl-str' },
-      { re: /(&#39;(?:[^&\\\n]|\\.|&(?!#39;))*&#39;)/g, cls: 'hl-str' },
-      { re: /(`(?:[^`\\]|\\.)*`)/g, cls: 'hl-str' },
-      // Numbers
-      { re: /\b(0[xXbBoO][0-9a-fA-F_]+|\d[\d_]*\.?\d*(?:[eE][+-]?\d+)?)\b/g, cls: 'hl-num' },
-      // Keywords / functions
-      { re: new RegExp('\\b(' + keywords + ')\\b', 'g'), cls: 'hl-kw' },
-      { re: /\b([A-Za-z_$][\w$]*)(?=\s*\()/g, cls: 'hl-fn' },
-    ].filter((p) => !p.only || p.only.includes(key));
-
-    // Collect non-overlapping matches, earliest and longest first.
-    const marks = [];
-    for (const p of patterns) {
-      p.re.lastIndex = 0;
-      let m;
-      while ((m = p.re.exec(escaped)) !== null) {
-        if (m[0] === '') { p.re.lastIndex++; continue; }
-        const g = p.group || (p.re.source.startsWith('\\b(') || p.group === undefined ? 1 : 0);
-        const text = m[g] !== undefined ? m[g] : m[0];
-        if (!text) continue;
-        const start = m.index + m[0].indexOf(text);
-        marks.push({ start, end: start + text.length, cls: p.cls });
-      }
+  function highlight(code, lang) {
+    if (!code) return '';
+    const key = (lang || '').toLowerCase();
+    if (key && code.length <= MAX_HIGHLIGHT_CHARS && global.hljs) {
+      try {
+        return global.hljs.highlight(code, { language: key, ignoreIllegals: true }).value;
+      } catch (_) { /* unknown language: fall through to plain text */ }
     }
-    marks.sort((a, b) => a.start - b.start || b.end - a.end);
+    return escapeHtml(code);
+  }
 
-    let out = '';
-    let cursor = 0;
-    for (const mark of marks) {
-      if (mark.start < cursor) continue;
-      out += escaped.slice(cursor, mark.start);
-      out += '<span class="' + mark.cls + '">' + escaped.slice(mark.start, mark.end) + '</span>';
-      cursor = mark.end;
-    }
-    return out + escaped.slice(cursor);
+  /* A path starts with /, ~/, ./, ../, or a directory segment, then runs to the
+   * next whitespace/quote/angle. The negative lookbehind stops the pass from
+   * re-linkifying a href value the link pass just wrote. Trailing sentence
+   * punctuation is split back out so it is not swallowed by the link. The line
+   * (and optional range) ride in data attributes the app reads on click. */
+  const FILE_REF_TOKEN = /(?<![=">])(^|[\s(["'`])((?:\/|~\/|\.{1,2}\/|[\w@.~\-]+\/)[^\s<>"'`]+)/g;
+
+  /* "n/a", "and/or", "AC/DC" are prose, not paths. A path is absolute or
+   * explicitly relative, nested, or ends in a filename extension. */
+  function looksLikePath(p) {
+    if (/^(\/|~\/|\.{1,2}\/)/.test(p)) return true;
+    if ((p.match(/\//g) || []).length >= 2) return true;
+    return /\.[A-Za-z0-9]{1,6}$/.test(p);
+  }
+
+  function fileRefReplacer(full, pre, tok) {
+    if (/^(https?:\/\/|www\.|mailto:)/i.test(tok)) return full;
+    const trail = (tok.match(/[.,;:!?)\]}"'`]+$/) || [''])[0];
+    const core = trail ? tok.slice(0, -trail.length) : tok;
+    const m = /^(.+?)(?::(\d+)(?:-(\d+))?)?$/.exec(core);
+    const path = m ? m[1] : '';
+    if (!path || !looksLikePath(path)) return full;
+    const line = m[2], end = m[3];
+    const display = path + (line ? ':' + line + (end ? '-' + end : '') : '');
+    let attrs = 'data-path="' + escapeHtml(path) + '"';
+    if (line) attrs += ' data-line="' + line + '"';
+    if (end) attrs += ' data-line-end="' + end + '"';
+    return pre + '<a class="file-ref" href="#" ' + attrs + '>' + escapeHtml(display) + '</a>' + trail;
   }
 
   function inline(text) {
@@ -135,14 +99,17 @@
       .replace(/(\*\*|__)(?=\S)([\s\S]*?\S)\1/g, '<strong>$2</strong>')
       .replace(/(^|[\s(])(\*|_)(?=\S)([^*_]*?\S)\2/g, '$1<em>$3</em>')
       .replace(/~~(?=\S)([\s\S]*?\S)~~/g, '<del>$1</del>')
-      // Bare file:line references become clickable-looking code spans.
-      .replace(/(^|[\s(])((?:[\w.\-]+\/)+[\w.\-]+\.\w+:\d+)/g,
-        '$1<code class="file-ref">$2</code>');
+      // File paths (absolute or relative) and file:line references become links
+      // that open the in-app editor. URLs are stashed above, so anything left
+      // starting with / or a dir/ segment is a path, not a link.
+      .replace(FILE_REF_TOKEN, fileRefReplacer);
 
     return out
       .replace(/\u0000LINK(\d+)\u0000/g, (_, i) => links[+i])
       .replace(/\u0000CODE(\d+)\u0000/g,
-        (_, i) => '<code>' + escapeHtml(codes[+i]) + '</code>');
+        (_, i) => '<code>' +
+          escapeHtml(codes[+i]).replace(FILE_REF_TOKEN, fileRefReplacer) +
+          '</code>');
   }
 
   function render(src) {
@@ -176,8 +143,10 @@
         html.push(
           '<div class="code-block" data-code="' + escapeHtml(code) + '">' +
           '<div class="code-head"><span class="code-lang">' + escapeHtml(lang || 'text') + '</span>' +
-          '<button type="button" class="code-copy" onclick="copyCode(this)">Copy</button></div>' +
-          '<pre><code>' + highlight(escapeHtml(code), lang) + '</code></pre></div>'
+          '<button type="button" class="code-copy" onclick="copyCode(this)" title="Copy to clipboard">' +
+          '<svg viewBox="0 0 24 24" width="13" height="13" aria-hidden="true"><rect x="9" y="9" width="13" height="13" rx="2" fill="none" stroke="currentColor" stroke-width="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1" fill="none" stroke="currentColor" stroke-width="2"/></svg>' +
+          '</button></div>' +
+          '<pre><code>' + highlight(code, lang) + '</code></pre></div>'
         );
         continue;
       }
@@ -283,7 +252,8 @@ function copyCode(button) {
   const block = button.closest('.code-block');
   const code = block ? block.dataset.code : '';
   navigator.clipboard.writeText(code).then(() => {
-    button.textContent = 'Copied';
-    setTimeout(() => { button.textContent = 'Copy'; }, 1400);
-  });
+    button.classList.add('copied');
+    showCopyToast();
+    setTimeout(() => button.classList.remove('copied'), 1400);
+  }).catch(() => {});
 }

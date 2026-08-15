@@ -4,21 +4,28 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>{% block title %}CodeAgent{% endblock %}</title>
+    {# highlight.js theme first so style.css can remap its token colours to the
+       app palette (equal specificity, later stylesheet wins). #}
+    <link rel="stylesheet" href="/static/vendor/highlight/github-dark.min.css">
     <link rel="stylesheet" href="/static/css/style.css">
     {# A drawn triangle rather than the U+25B6 glyph. The glyph carried its own
        side bearing, which the tab strip rendered as a gap before the title. #}
     <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'><polygon points='3,2 14,8 3,14' fill='%238ea24f'/></svg>">
     <script src="/static/js/htmx.min.js"></script>
+    <script src="/static/vendor/highlight/highlight.min.js"></script>
     <script src="/static/js/markdown.js"></script>
 </head>
 <body data-sound="{{ 'off' if sound_enabled is defined and not sound_enabled else 'on' }}"
       data-sound-volume="{{ settings.get('sound_volume', '0.5') if settings is defined else '0.5' }}"
-      data-sound-kind="{{ settings.get('sound_choice', 'click') if settings is defined else 'click' }}">
+      data-sound-kind="{{ settings.get('sound_choice', 'click') if settings is defined else 'click' }}"
+      data-theme="{{ current_theme() }}">
     <header id="top-bar">
         <a href="/" class="logo" title="Home">CodeAgent</a>
         <nav id="tab-bar"><div class="tab-scroll" id="tab-scroll"></div></nav>
         <a href="/prompts" class="topbar-link" title="Prompts">Prompts</a>
         <a href="/tools" class="topbar-link" title="Custom tools">Tools</a>
+        <button type="button" id="stop-all-btn" class="topbar-link stop-all" title="Stop every agent and clear all pending messages"
+                onclick="stopAll()">&#9632;</button>
     </header>
     {# Shown when the status poll cannot reach the server, so a stopped backend
        is obvious rather than looking like a frozen page. #}

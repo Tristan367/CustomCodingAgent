@@ -1,10 +1,11 @@
 {% set pct = usage.percent if usage.percent else 0 %}
 {% set ring = 'ring-danger' if pct >= 90 else ('ring-warn' if pct >= 70 else 'ring-ok') %}
-<div id="session-meta" data-threshold="{{ usage.threshold }}" data-max-context="{{ usage.max_context }}"
-     data-auto-compact="{{ 1 if session.auto_compact else 0 }}">
+<div id="session-meta" data-threshold="{{ usage.threshold }}" data-max-context="{{ usage.max_context }}">
     <div class="session-info">
         <span class="session-title">{{ session.name }}</span>
         <code class="session-dir" title="{{ session.project_dir }}">{{ session.project_dir | tildepath }}</code>
+        <button type="button" class="icon-btn session-browse" onclick="openFileManager()"
+                title="Browse files">&#128193;</button>
         <span class="chip">{{ session.model }}</span>
         <span class="chip">{{ session.prompt_profile }}</span>
         <span class="chip">thinking: {{ session.thinking_effort or 'high' }}</span>
@@ -105,14 +106,6 @@
                                 {% endfor %}
                             </select>
                         </label>
-                        <label>Summariser
-                            <select name="compact_profile">
-                                {% for p in compact_profiles %}
-                                <option value="{{ p }}"
-                                    {% if (session.compact_profile or 'default') == p %}selected{% endif %}>{{ p }}</option>
-                                {% endfor %}
-                            </select>
-                        </label>
                         <label>Subagent model
                             <select name="subagent_model">
                                 <option value="">Same as this session</option>
@@ -123,6 +116,11 @@
                                 {% endif %}
                                 {% endfor %}
                             </select>
+                        </label>
+                        <label>Compaction threshold (tokens)
+                            <input type="number" name="compact_threshold" min="4096" step="1"
+                                   inputmode="numeric" value="{{ usage.threshold }}"
+                                   title="Compact automatically once the live context passes this size. Set it above the model window to compact by hand.">
                         </label>
                         <button type="submit" class="btn-primary">Apply</button>
                     </form>

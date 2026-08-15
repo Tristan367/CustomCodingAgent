@@ -1,5 +1,5 @@
 <div id="prompts-page">
-    <h2>Prompts</h2>
+    <h2>Profiles</h2>
     {% if saved %}
     <div class="success-banner">
         Saved.
@@ -11,42 +11,56 @@
     </div>
     {% endif %}
     <p class="hint">
-        A <strong>system prompt</strong> tells the agent how to work; a
-        <strong>summarising prompt</strong> is used when a long conversation is compacted.
-        A session picks one of each, independently. Editing a system prompt reaches the
-        sessions using it at their next compaction, which is when the prefix is rebuilt
-        anyway; sessions with a prompt of their own are left alone.
+        A <strong>profile</strong> bundles a system prompt, a summarising prompt,
+        and subagent configuration. A session picks one profile; editing it
+        reaches sessions using it at their next compaction.
     </p>
 
     <form method="POST" action="/_save_prompts" class="stack" id="prompt-form">
         <div class="prompt-bar">
-            <select id="prompt-picker" name="name" aria-label="Prompt"
+            <select id="prompt-picker" name="name" aria-label="Profile"
                     onchange="window.location='/prompts?selected=' + encodeURIComponent(this.value)">
-                {% for label, keys in groups.items() %}
-                {% if keys %}
-                <optgroup label="{{ label }}">
-                    {% for key in keys %}
-                    <option value="{{ key }}" {% if key == selected %}selected{% endif %}>
-                        {{ key.split(':')[1] }}
-                    </option>
-                    {% endfor %}
-                </optgroup>
-                {% endif %}
+                {% for p in profile_names %}
+                <option value="system:{{ p }}" {% if p == selected_name %}selected{% endif %}>{{ p }}</option>
                 {% endfor %}
             </select>
             <button type="submit" class="btn-primary">Save</button>
-            <button type="button" class="btn-secondary" onclick="newPrompt()">New</button>
+            <button type="button" class="btn-secondary" onclick="newProfile()">New</button>
             <button type="button" class="btn-danger" onclick="deletePrompt()"
                     id="delete-prompt">Delete</button>
         </div>
         <div id="prompt-drift" class="drift-banner" {% if selected not in drift %}hidden{% endif %}>
             {% if selected in drift %}{% for d in drift[selected] %}<p>{{ d }}</p>{% endfor %}{% endif %}
         </div>
-        <textarea name="body" id="prompt-body" rows="20" class="prompt-textarea"
-                  spellcheck="false">{{ body }}</textarea>
 
-        {% if selected.startswith('system:') %}
+        <!-- Caps summary (top-level) -->
+        {% set max_conc = max_concurrent_subs.get(selected, 100) %}
+        {% set mspawn = master_spawn.get(selected, 0) %}
+        <div style="display:flex; gap:16px; align-items:center; flex-wrap:wrap; margin-bottom:12px">
+            <span style="color:var(--accent); font-weight:600; font-size:0.95em" id="concurrent-display">
+                Max possible concurrent: {{ max_conc if max_conc else 'unlimited' }}
+            </span>
+            <span id="theoretical-note" style="color:var(--text-faint); font-size:0.85em">
+                (per-call spawn: {{ mspawn if mspawn else 'unlimited' }})
+            </span>
+            <label class="hint" style="margin:0">
+                Session cap
+                <input type="number" name="max_concurrent" id="max-concurrent" value="{{ max_conc }}" min="0" max="9999"
+                       style="width:60px; margin-left:4px; text-align:center"
+                       {% if selected_name in readonly %}disabled{% endif %}>
+            </label>
+        </div>
+
+        <!-- System prompt -->
+        <label class="hint" style="margin-top:4px">System prompt</label>
+        <div class="ta-copy-wrap">
+        <textarea name="body" id="prompt-body" rows="20" class="prompt-textarea"
+                  spellcheck="false" {% if selected_name in readonly %}readonly disabled{% endif %}>{{ body }}</textarea>
+        </div>
+
+        <!-- Tools for this profile -->
         {% set off = disabled_tools.get(selected, []) %}
+        {% set has_task = 'task' not in off %}
         <details class="tool-toggles" {% if off %}open{% endif %}>
             <summary>
                 Tools for this profile
@@ -63,56 +77,194 @@
                 {% for t in tools %}
                 <label class="checkbox-label" title="{{ t.description[:160] }}">
                     <input type="checkbox" name="tool" value="{{ t.name }}"
-                           {% if t.name not in off %}checked{% endif %}>
+                           {% if t.name not in off %}checked{% endif %}
+                           {% if selected_name in readonly %}disabled{% endif %}>
                     <code>{{ t.name }}</code>
                     <span class="hint">~{{ t.tokens }}t{% if t.pause %} · asks{% endif %}</span>
                 </label>
                 {% endfor %}
             </div>
         </details>
-        {% endif %}
-    </form>
-    <script>
-        /* A prompt is never overwritten once edited, so it can keep describing
-           tools that have since been removed. Nothing else would say so. */
-        const PROMPT_DRIFT = {{ drift | tojson }};
-        function showDrift(key) {
-            const box = document.getElementById('prompt-drift');
-            const items = PROMPT_DRIFT[key];
-            box.textContent = '';
-            box.hidden = !items;
-            (items || []).forEach((text) => {
-                const p = document.createElement('p');
-                p.textContent = text;
-                box.appendChild(p);
-            });
-        }
-    </script>
 
-    <section class="panel" style="margin-top:16px">
-        <h2>Subagent prompt <span class="hint" style="font-weight:400">(applies to all sessions)</span></h2>
-        <p class="hint">
-            The model a session's subagents run on is chosen per session, on the
-            session itself &mdash; it depends on the work in front of you, not on
-            which prompt you happen to be editing.
-        </p>
-        <form hx-post="/_save_subagent" hx-target="#prompts-page" hx-swap="outerHTML" class="stack">
-            <label class="checkbox-label">
-                <input type="checkbox" name="use_system_prompt" value="1"
-                       {% if not sa_prompt %}checked{% endif %}
-                       onchange="document.getElementById('sa-prompt-area').hidden=this.checked">
-                Same as system prompt
-            </label>
-            <textarea name="prompt" id="sa-prompt-area" rows="6" class="prompt-textarea"
-                      spellcheck="false" {% if not sa_prompt %}hidden{% endif %}
-                      placeholder="Custom subagent prompt...">{{ sa_prompt }}</textarea>
-            <button type="submit" class="btn-primary" style="align-self:flex-start">Save</button>
-        </form>
-    </section>
+        <!-- Master spawn + model -->
+        {% set sa_model = sa_default_model.get(selected, '') %}
+        <div style="margin-top:8px; margin-bottom:4px; display:flex; align-items:center; justify-content:space-between">
+            <div style="display:flex; align-items:center; gap:8px">
+                <span class="hint">Master spawn limit</span>
+                <input type="number" name="master_spawn" value="{{ mspawn }}" min="0" max="999"
+                       style="width:56px; text-align:center"
+                       {% if selected_name in readonly %}disabled{% endif %}>
+                <span class="hint">(0 = unlimited, per task call)</span>
+            </div>
+            <div style="display:flex; align-items:center; gap:8px">
+                <span class="hint">Subagent model</span>
+                <select name="sa_model"
+                        {% if selected_name in readonly %}disabled{% endif %}
+                        style="min-width:140px">
+                    <option value="" {% if not sa_model %}selected{% endif %}>Same as session</option>
+                    {% for m in profile_models %}
+                    <option value="{{ m.id }}" {% if sa_model == m.id %}selected{% endif %}>{{ m.name }}</option>
+                    {% endfor %}
+                </select>
+            </div>
+        </div>
+
+        <!-- Compaction prompt -->
+        <label class="hint" style="margin-top:12px">Summarising prompt</label>
+        <div class="ta-copy-wrap">
+        <textarea name="compact_body" id="compact-body" rows="8" class="prompt-textarea"
+                  spellcheck="false" {% if selected_name in readonly %}readonly disabled{% endif %}>{{ compact_body }}</textarea>
+        </div>
+        <p class="hint">Used when a conversation grows long enough to compact.</p>
+
+        <!-- Tier 0 subagent config -->
+        {% set sa_body = subagent_body.get(selected, '') %}
+        {% set sa_off = sa_disabled.get(selected, []) %}
+        {% set sa_cap = sa_parallel_cap.get(selected, 3) %}
+        {% set effective_sa = sa_body or default_sa_body %}
+        {% set sa_has_task = 'task' not in sa_off %}
+        <div id="sa-tiers" {% if not has_task %}hidden{% endif %}>
+            {% if has_task %}<input type="hidden" name="sa_visible" value="1">{% endif %}
+            <div class="sa-tier" data-tier="1">
+            <hr style="margin:20px 0 8px; border-color:var(--border)">
+            <div class="sa-tier-label" style="font-weight:600; color:var(--accent); margin-bottom:4px">Tier 1 — subagents</div>
+            <p class="sa-tier-hint hint" style="margin-bottom:8px">
+                Agents this profile launches via <code>task</code>. The model a
+                subagent runs on is chosen per session, in the session settings.
+            </p>
+
+            <details class="tool-toggles" {% if sa_off %}open{% endif %}>
+                <summary>
+                    Tools for subagents
+                    <span class="hint">
+                        {{ tools | length - sa_off | length }} of {{ tools | length }} on
+                    </span>
+                </summary>
+                <p class="hint">
+                    Enable <code>task</code> and a Tier 2 section will appear
+                    below to configure what their subsubagents look like.
+                </p>
+                <div class="tool-grid">
+                    {% for t in tools %}
+                    <label class="checkbox-label" title="{{ t.description[:160] }}">
+                        <input type="checkbox" name="sa_tool" value="{{ t.name }}"
+                               {% if t.name not in sa_off %}checked{% endif %}
+                               {% if selected_name in readonly %}disabled{% endif %}>
+                        <code>{{ t.name }}</code>
+                        <span class="sa-task-hint hint">{{ 'creates tier 2' if t.name == 'task' else '~' ~ t.tokens ~ 't' }}</span>
+                    </label>
+                    {% endfor %}
+                </div>
+            </details>
+
+            {% set tier1_model = sa_tier1_model.get(selected, '') %}
+            <div style="margin-top:8px; margin-bottom:10px; display:flex; align-items:center; justify-content:space-between">
+                <div style="display:flex; align-items:center; gap:8px">
+                    <span class="hint">Subagent spawn limit</span>
+                    <input type="number" name="sa_cap" value="{{ sa_cap }}" min="0" max="999"
+                           style="width:56px; text-align:center"
+                           {% if selected_name in readonly %}disabled{% endif %}>
+                    <span class="hint">(0 = unlimited)</span>
+                </div>
+                <div style="display:flex; align-items:center; gap:8px">
+                    <span class="hint">Model</span>
+                    <select name="sa_tier_model"
+                            {% if selected_name in readonly %}disabled{% endif %}
+                            style="min-width:140px">
+                        <option value="" {% if not tier1_model %}selected{% endif %}>Inherit</option>
+                        {% for m in profile_models %}
+                        <option value="{{ m.id }}" {% if tier1_model == m.id %}selected{% endif %}>{{ m.name }}</option>
+                        {% endfor %}
+                    </select>
+                </div>
+            </div>
+
+            <label class="hint" style="margin-top:4px">System prompt for subagents</label>
+            <div class="ta-copy-wrap">
+            <textarea name="subagent_body" id="sa-body" rows="8" class="prompt-textarea"
+                      spellcheck="false"
+                      {% if selected_name in readonly %}readonly disabled{% endif %}
+            >{{ effective_sa }}</textarea>
+            </div>
+            <p class="hint">
+                The built-in default is shown above. Edit to customise this
+                profile's subagent; clear it out and the default is used again.
+            </p>
+            </div>
+
+            <!-- Higher tiers from stored JSON -->
+            {% set tiers = sa_tiers.get(selected, []) %}
+            {% for tier in tiers %}
+            {% set tno = loop.index + 1 %}
+            <div class="sa-tier" data-tier="{{ tno }}">
+                <hr style="margin:20px 0 8px; border-color:var(--border)">
+                <div class="sa-tier-label" style="font-weight:600; color:var(--accent); margin-bottom:4px">Tier {{ tno }} — sub-subagents</div>
+                <p class="sa-tier-hint hint" style="margin-bottom:8px">
+                    Enable task and Tier {{ tno + 1 }} will appear.
+                </p>
+
+                <details class="tool-toggles" {% if tier.off %}open{% endif %}>
+                    <summary>
+                        Tools for this tier
+                        <span class="hint">
+                            {{ tools | length - tier.off | length }} of {{ tools | length }} on
+                        </span>
+                    </summary>
+                    <p class="hint">
+                        Enable <code>task</code> here for yet another level.
+                    </p>
+                    <div class="tool-grid">
+                        {% for t in tools %}
+                        <label class="checkbox-label" title="{{ t.description[:160] }}">
+                            <input type="checkbox" name="sa_tool_{{ tno }}" value="{{ t.name }}"
+                                   {% if t.name not in tier.off %}checked{% endif %}
+                                   {% if selected_name in readonly %}disabled{% endif %}>
+                            <code>{{ t.name }}</code>
+                            <span class="sa-task-hint hint">{{ 'creates tier ' ~ (tno + 1) if t.name == 'task' else '~' ~ t.tokens ~ 't' }}</span>
+                        </label>
+                        {% endfor %}
+                    </div>
+                </details>
+
+                <div style="margin-top:8px; margin-bottom:10px; display:flex; align-items:center; justify-content:space-between">
+                    <div style="display:flex; align-items:center; gap:8px">
+                        <span class="hint">Subagent spawn limit</span>
+                        <input type="number" name="sa_cap_{{ tno }}" value="{{ tier.parallel_cap }}" min="0" max="99"
+                               style="width:56px; text-align:center"
+                               {% if selected_name in readonly %}disabled{% endif %}>
+                        <span class="hint">(0 = unlimited)</span>
+                    </div>
+                    <div style="display:flex; align-items:center; gap:8px">
+                        <span class="hint">Model</span>
+                        <select name="sa_model_{{ tno }}"
+                                {% if selected_name in readonly %}disabled{% endif %}
+                                style="min-width:140px">
+                            <option value="" {% if not tier.model %}selected{% endif %}>Inherit</option>
+                            {% for m in profile_models %}
+                            <option value="{{ m.id }}" {% if tier.model == m.id %}selected{% endif %}>{{ m.name }}</option>
+                            {% endfor %}
+                        </select>
+                    </div>
+                </div>
+
+                <label class="hint" style="margin-top:4px">System prompt for this tier</label>
+                <div class="ta-copy-wrap">
+                <textarea name="subagent_body_{{ tno }}" rows="8" class="prompt-textarea"
+                          spellcheck="false"
+                          {% if selected_name in readonly %}readonly disabled{% endif %}
+                >{{ tier.body or default_sa_body }}</textarea>
+                </div>
+                <p class="hint">
+                    Leave empty to use the built-in default.
+                </p>
+            </div>
+            {% endfor %}
+        </div>
+    </form>
 
     <form method="POST" action="/_new_prompt" id="new-prompt-form" hidden>
         <input name="new_name" id="new-prompt-name">
-        <input name="kind" id="new-prompt-kind">
+        <input name="kind" id="new-prompt-kind" value="system">
     </form>
     <form method="POST" action="/_delete_prompt" id="delete-prompt-form" hidden>
         <input name="name" id="delete-prompt-name">
@@ -120,49 +272,57 @@
 
     <script>
         const PROMPT_BODIES = {{ bodies | tojson }};
+        const COMPACT_BODIES = {{ compact_bodies | tojson }};
         const PROTECTED_PROMPT = {{ protected | tojson }};
+        const READONLY_PROMPTS = {{ readonly | tojson }};
         const picker = document.getElementById('prompt-picker');
         const bodyBox = document.getElementById('prompt-body');
+        const compactBox = document.getElementById('compact-body');
         let lastSaved = bodyBox.value;
         let pickerPrevious = picker.value;
 
-        const kindOf = (key) => key.split(':')[0];
         const nameOf = (key) => key.split(':')[1];
 
         function syncDelete() {
             const del = document.getElementById('delete-prompt');
-            del.disabled = nameOf(picker.value) === PROTECTED_PROMPT;
-            del.title = del.disabled
-                ? 'The default cannot be deleted -- sessions fall back to it'
-                : '';
+            const name = nameOf(picker.value);
+            del.disabled = READONLY_PROMPTS.includes(name) || name === PROTECTED_PROMPT;
+            del.title = READONLY_PROMPTS.includes(name) ? 'Built-in profiles are read-only' : '';
+        }
+
+        function syncReadonly() {
+            const name = nameOf(picker.value);
+            const readOnly = READONLY_PROMPTS.includes(name);
+            const saveBtn = document.querySelector('#prompt-form button[type=submit]');
+            bodyBox.readOnly = readOnly;
+            bodyBox.disabled = readOnly;
+            compactBox.readOnly = readOnly;
+            compactBox.disabled = readOnly;
+            if (saveBtn) { saveBtn.disabled = readOnly; saveBtn.title = readOnly ? 'Built-in profiles are read-only' : ''; }
         }
 
         picker.addEventListener('change', async () => {
             if (bodyBox.value !== lastSaved) {
-                const ok = await ui.confirm('Your edits to this prompt have not been saved.',
+                const ok = await ui.confirm('Your edits to this profile have not been saved.',
                     { title: 'Discard changes?', confirmLabel: 'Discard' });
                 if (!ok) { picker.value = pickerPrevious; return; }
             }
-            bodyBox.value = PROMPT_BODIES[picker.value] ?? '';
+            const key = picker.value;
+            bodyBox.value = PROMPT_BODIES[key] ?? '';
+            compactBox.value = COMPACT_BODIES[key] ?? '';
             lastSaved = bodyBox.value;
-            pickerPrevious = picker.value;
+            pickerPrevious = key;
             syncDelete();
-            showDrift(picker.value);
+            syncReadonly();
+            showDrift(key);
         });
 
-        /* New prompts are of whichever kind is on screen, seeded from that
-           kind's default -- a blank box is a worse start than one to edit down. */
-        async function newPrompt() {
-            const kind = kindOf(picker.value);
-            const label = kind === 'compaction' ? 'summarising prompt' : 'system prompt';
-            const name = await ui.prompt(`It will start as a copy of the default ${label}.`, {
-                title: `New ${label}`,
-                placeholder: 'terse',
-                confirmLabel: 'Create',
-            });
+        async function newProfile() {
+            const name = await ui.prompt(
+                'It will start as a copy of the default profile.',
+                { title: 'New profile', placeholder: 'terse', confirmLabel: 'Create' });
             if (!name) return;
             document.getElementById('new-prompt-name').value = name;
-            document.getElementById('new-prompt-kind').value = kind;
             document.getElementById('new-prompt-form').submit();
         }
 
@@ -178,5 +338,213 @@
 
         document.getElementById('prompt-form').addEventListener('submit', () => { lastSaved = bodyBox.value; });
         syncDelete();
+        syncReadonly();
+    </script>
+
+    <script>
+        /* A profile is never overwritten once edited, so it can keep describing
+           tools that have since been removed. Nothing else would say so. */
+        const PROMPT_DRIFT = {{ drift | tojson }};
+        function showDrift(key) {
+            const box = document.getElementById('prompt-drift');
+            const items = PROMPT_DRIFT[key];
+            box.textContent = '';
+            box.hidden = !items;
+            (items || []).forEach((text) => {
+                const p = document.createElement('p');
+                p.textContent = text;
+                box.appendChild(p);
+            });
+        }
+
+        /* ── Textarea copy buttons ─────────────────────────────────────── */
+
+        const COPY_ICON = '<svg viewBox="0 0 24 24" width="13" height="13" aria-hidden="true"><rect x="9" y="9" width="13" height="13" rx="2" fill="none" stroke="currentColor" stroke-width="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1" fill="none" stroke="currentColor" stroke-width="2"/></svg>';
+
+        function attachCopyButtons() {
+            document.querySelectorAll('.ta-copy-wrap').forEach(wrap => {
+                if (wrap.querySelector('.ta-copy-btn')) return;
+                const ta = wrap.querySelector('textarea');
+                if (!ta) return;
+                const btn = document.createElement('button');
+                btn.type = 'button';
+                btn.className = 'ta-copy-btn';
+                btn.innerHTML = COPY_ICON;
+                btn.title = 'Copy to clipboard';
+                btn.addEventListener('click', () => {
+                    navigator.clipboard.writeText(ta.value).then(() => {
+                        btn.classList.add('copied');
+                        setTimeout(() => btn.classList.remove('copied'), 1000);
+                    }).catch(() => {});
+                });
+                wrap.appendChild(btn);
+            });
+        }
+        attachCopyButtons();
+
+        /* ── Concurrent cap live display ────────────────────────────────── */
+
+        function calcTheoretical() {
+            let product = 1;
+            const masterInp = document.querySelector('input[name="master_spawn"]');
+            const master = (masterInp && !isNaN(parseInt(masterInp.value))) ? parseInt(masterInp.value) : 0;
+            if (master > 0) product *= master;
+
+            for (let tier = 1; ; tier++) {
+                const prefix = tier === 1 ? 'sa_tool' : 'sa_tool_' + tier;
+                const taskCb = document.querySelector(`input[name="${prefix}"][value="task"]`);
+                if (!taskCb || taskCb.disabled) break;
+                if (!taskCb.checked) break;
+                const capInp = tier === 1
+                    ? document.querySelector('input[name="sa_cap"]')
+                    : document.querySelector(`input[name="sa_cap_${tier}"]`);
+                const cap = (capInp && !isNaN(parseInt(capInp.value))) ? parseInt(capInp.value) : 0;
+                if (cap > 0) product *= cap;
+            }
+            return product || 'unlimited';
+        }
+
+        function updateConcurrentDisplay() {
+            const el = document.getElementById('concurrent-display');
+            if (!el) return;
+            const inp = document.getElementById('max-concurrent');
+            const val = (inp && !isNaN(parseInt(inp.value))) ? parseInt(inp.value) : 100;
+            el.textContent = 'Max possible concurrent: ' + (val || 'unlimited');
+        }
+
+        function updateTheoreticalNote() {
+            const el = document.getElementById('theoretical-note');
+            if (!el) return;
+            el.textContent = '(max theoretical: ' + calcTheoretical() + ')';
+        }
+
+        document.getElementById('max-concurrent')?.addEventListener('input', updateConcurrentDisplay);
+        document.querySelector('input[name="master_spawn"]')?.addEventListener('input', updateTheoreticalNote);
+
+        document.addEventListener('change', (e) => {
+            if (e.target.matches('input[type=checkbox]') || e.target.name?.startsWith('sa_cap'))
+                updateTheoreticalNote();
+        });
+        document.addEventListener('input', (e) => {
+            if (e.target.name?.startsWith('sa_cap') || e.target.type === 'number')
+                updateTheoreticalNote();
+        });
+
+        /* ── Subagent tier visibility ─────────────────────────────────────── */
+
+        function hasTaskChecked(prefix) {
+            const cb = document.querySelector(`input[name="${prefix}"][value="task"]`);
+            return cb && cb.checked;
+        }
+
+        /* Clone a tier section from the previous one, bumping the numbers. */
+        function createTier(prevTier) {
+            const num = (parseInt(prevTier.dataset.tier) || 0) + 1;
+            const clone = prevTier.cloneNode(true);
+            clone.dataset.tier = String(num);
+
+            // Bump names from e.g. "sa_tool" → "sa_tool_2" or "sa_tool_2" → "sa_tool_3".
+            clone.querySelectorAll('[name]').forEach(el => {
+                const m = el.name.match(/^(.+?)(_(\d+))?$/);
+                if (m) {
+                    // Special: "sa_tier_model" → "sa_model_2"
+                    if (el.name === 'sa_tier_model') {
+                        el.name = 'sa_model_' + num;
+                    } else {
+                        el.name = m[3] ? m[1] + '_' + num : m[1] + '_' + num;
+                    }
+                }
+            });
+
+            clone.querySelectorAll('.sa-tier-label').forEach(el => {
+                el.textContent = 'Tier ' + num + ' — sub-subagents';
+            });
+            clone.querySelectorAll('.sa-tier-hint').forEach(el => {
+                el.textContent = 'Enable task and Tier ' + (num + 1) + ' will appear.';
+            });
+            clone.querySelectorAll('.sa-task-hint').forEach(el => {
+                el.textContent = 'creates tier ' + (num + 1);
+            });
+            // Inherit parent's subagent prompt so the user can edit down.
+            const parentTa = prevTier.querySelector('textarea');
+            const ta = clone.querySelector('textarea');
+            if (ta) {
+                ta.value = parentTa ? parentTa.value : '';
+                const orig = document.getElementById('sa-body');
+                if (orig) ta.placeholder = orig.placeholder;
+            }
+            // Copy parent's parallel cap.
+            const parentCap = prevTier.querySelector('input[type="number"]');
+            const cap = clone.querySelector('input[type="number"]');
+            if (cap && parentCap) cap.value = parentCap.value;
+            // Uncheck task on the cloned tier by default.
+            const taskCb = clone.querySelector('input[value="task"]');
+            if (taskCb) taskCb.checked = false;
+            // cloneNode copies elements but not addEventListener handlers.
+            clone.querySelectorAll('.ta-copy-btn').forEach(b => b.remove());
+            prevTier.after(clone);
+            attachCopyButtons();
+            return clone;
+        }
+
+        function disableTiersAbove(num) {
+            document.querySelectorAll('.sa-tier').forEach(el => {
+                const t = parseInt(el.dataset.tier);
+                if (t > num) {
+                    el.classList.add('sa-tier--disabled');
+                    el.querySelectorAll('input, textarea, button').forEach(c => c.disabled = true);
+                }
+            });
+        }
+
+        function enableTiersAbove(num) {
+            document.querySelectorAll('.sa-tier').forEach(el => {
+                const t = parseInt(el.dataset.tier);
+                if (t > num && el.classList.contains('sa-tier--disabled')) {
+                    el.classList.remove('sa-tier--disabled');
+                    const readOnly = el.closest('#prompt-form')?.querySelector('#prompt-body')?.readOnly;
+                    if (!readOnly) {
+                        el.querySelectorAll('input, textarea, button').forEach(c => c.disabled = false);
+                    }
+                }
+            });
+        }
+
+        function syncTiers() {
+            const container = document.getElementById('sa-tiers');
+            if (!container) return;
+            const mainTask = hasTaskChecked('tool');
+            container.hidden = !mainTask;
+
+            /* Toggle the sa_visible sentinel. */
+            let flag = document.querySelector('input[name="sa_visible"]');
+            if (mainTask) {
+                if (!flag) { flag = document.createElement('input'); flag.type = 'hidden'; flag.name = 'sa_visible'; flag.value = '1'; container.insertBefore(flag, container.firstChild); }
+            } else {
+                if (flag) flag.remove();
+            }
+
+            /* Walk tiers: if task is checked on tier N, ensure tier N+1 exists.
+               If task is unchecked on tier N, remove tiers above N. */
+            for (let n = 1; ; n++) {
+                const prefix = n === 1 ? 'sa_tool' : 'sa_tool_' + n;
+                const tiers = document.querySelectorAll(`.sa-tier[data-tier="${n + 1}"]`);
+                if (hasTaskChecked(prefix)) {
+                    if (!tiers.length) {
+                        const prev = document.querySelector(`.sa-tier[data-tier="${n}"]`);
+                        if (prev) createTier(prev);
+                    }
+                    enableTiersAbove(n);
+                } else {
+                    disableTiersAbove(n);
+                    break;
+                }
+            }
+        }
+
+        document.addEventListener('change', (e) => {
+            if (e.target.matches('input[type=checkbox]')) syncTiers();
+        });
+        syncTiers();
     </script>
 </div>

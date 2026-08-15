@@ -156,36 +156,36 @@
     </details>
 
     <h2>Secrets (env vars for custom tools)</h2>
-    <p class="hint">Each secret is injected as an env var into custom tool scripts. Reference as <code>$NAME</code>. Values never displayed after saving.</p>
+    <p class="hint">Each secret is injected as an env var into custom tool scripts and the home-page scripts. Reference as <code>$NAME</code>. Values never displayed after saving.</p>
     {% for s in secrets %}
     <form hx-post="/_save_secret" hx-target="#tools-page" hx-swap="outerHTML" class="inline-form" style="margin-bottom:6px">
         <input type="text" name="name" value="{{ s.name }}" placeholder="VAR_NAME" style="flex:1" autocomplete="off" spellcheck="false"
                onchange="this.form.querySelector('button[type=submit]').disabled=false">
         {% if s.value %}
         <span class="key-preview" onclick="this.hidden=true;this.nextElementSibling.hidden=false;this.nextElementSibling.focus()" style="cursor:pointer">••••••••</span>
-        <input type="password" name="value" hidden placeholder="secret" autocomplete="off"
+        <input type="text" name="value" hidden placeholder="secret" autocomplete="off"
                oninput="this.form.querySelector('button[type=submit]').disabled=false">
         {% else %}
-        <input type="password" name="value" placeholder="secret" autocomplete="off"
+        <input type="text" name="value" placeholder="secret" autocomplete="off"
                oninput="this.form.querySelector('button[type=submit]').disabled=false">
         {% endif %}
         <button type="submit" class="btn-primary btn-sm" {% if s.value %}disabled{% endif %}>Save</button>
         <button type="button" class="btn-danger btn-sm"
-                hx-post="/_delete_secret" hx-vals='{"name":"{{ s.name }}"}'
+                hx-post="/_delete_secret" hx-vals='{"name":{{ s.name | tojson }}}'
                 hx-target="#tools-page" hx-swap="outerHTML"
-                hx-confirm="Delete this secret?">×</button>
+                hx-confirm="Delete {{ s.name }}?">×</button>
     </form>
     {% endfor %}
-    <div class="page-row">
     <form method="POST" action="/_new_secret" class="inline-form" id="new-secret-form" hidden>
         <input type="text" name="name" placeholder="VAR_NAME" autocomplete="off" spellcheck="false"
                pattern="[A-Za-z_][A-Za-z0-9_]*"
                title="Letters, digits and underscores; cannot start with a digit">
+        <input type="text" name="value" placeholder="secret" autocomplete="off">
         <button type="submit" class="btn-primary btn-sm">Add</button>
-        <button type="button" class="btn-sm"
-                onclick="document.getElementById('new-secret-form').hidden = true">Cancel</button>
+        <button type="button" class="btn-sm" onclick="cancelNewSecret()">Cancel</button>
     </form>
-    <button type="button" class="btn-secondary" id="add-secret-btn" onclick="newSecret()">Add secret</button>
+    <div>
+        <button type="button" class="btn-secondary" id="add-secret-btn" onclick="newSecret()">Add secret</button>
     </div>
     <script>
     function newSecret() {
@@ -193,7 +193,12 @@
         // with the rest of the page, and validates nothing.
         const form = document.getElementById('new-secret-form');
         form.hidden = false;
+        document.getElementById('add-secret-btn').hidden = true;
         form.querySelector('input').focus();
+    }
+    function cancelNewSecret() {
+        document.getElementById('new-secret-form').hidden = true;
+        document.getElementById('add-secret-btn').hidden = false;
     }
 
     function flash(button, text) {

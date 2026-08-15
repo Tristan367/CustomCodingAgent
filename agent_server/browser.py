@@ -28,19 +28,22 @@ building is the point -- so it has no private-network guard, unlike `webfetch`.
 """
 
 import asyncio
+import json
 import logging
 import time
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
-from agent_server.config import CAPTURE_DIR
+from agent_server.config import BROWSER_STATE_DIR, CAPTURE_DIR
 
 log = logging.getLogger(__name__)
 
 DEFAULT_VIEWPORT = (1280, 900)
 # lines a second. Keep the newest.
 MAX_CONSOLE = 300
+# requests a second. Keep the newest.
+MAX_NETWORK = 500
 MAX_FRAMES = 24
 # A context nobody has touched for this long is closed. Chromium holds ~100MB.
 IDLE_TIMEOUT_SEC = 900
@@ -62,12 +65,25 @@ class ConsoleEntry:
 
 
 @dataclass
+class NetworkEntry:
+    """One HTTP request as seen by the page: method, status, url."""
+
+    method: str
+    url: str
+    status: str  # "200" style, or "failed"
+
+    def render(self) -> str:
+        return f"{self.method:<6} {self.status:<8} {self.url}"
+
+
+@dataclass
 class Session:
     """One browser context, its page, and everything that page has said."""
 
     context: Any
     page: Any
     console: list[ConsoleEntry] = field(default_factory=list)
+    network: list[NetworkEntry] = field(default_factory=list)
     # How much of `console` has already been reported, so each step shows only
     # what is new rather than repeating the whole log every time.
     reported: int = 0
@@ -80,6 +96,11 @@ class Session:
             dropped = len(self.console) - MAX_CONSOLE
             del self.console[:dropped]
             self.reported = max(0, self.reported - dropped)
+
+    def note_network(self, entry: NetworkEntry):
+        self.network.append(entry)
+        if len(self.network) > MAX_NETWORK:
+            del self.network[: len(self.network) - MAX_NETWORK]
 
     def fresh(self) -> list[ConsoleEntry]:
         new = self.console[self.reported:]
@@ -132,13 +153,19 @@ async def get_session(session_id: str, width: int = 0, height: int = 0) -> Sessi
         return existing
 
     browser = await _ensure_browser()
-    context = await browser.new_context(
+    state = _state_path(session_id)
+    kwargs: dict = dict(
         viewport={
             "width": width or DEFAULT_VIEWPORT[0],
             "height": height or DEFAULT_VIEWPORT[1],
         },
         ignore_https_errors=True,
     )
+    # A saved login is loaded back when the context is recreated after being
+    # reaped, or the app restarted. Missing file is simply a fresh profile.
+    if state.exists():
+        kwargs["storage_state"] = str(state)
+    context = await browser.new_context(**kwargs)
     context.set_default_timeout(10_000)
     page = await context.new_page()
     session = Session(context=context, page=page)
@@ -170,15 +197,21 @@ def _wire_listeners(session: Session, page):
 
     page.on("console", on_console)
     page.on("pageerror", lambda e: session.note(ConsoleEntry("pageerror", str(e))))
-    page.on(
-        "requestfailed",
-        lambda r: session.note(
-            ConsoleEntry("request", f"{r.method} {r.url} failed: "
-                                    f"{(r.failure or 'unknown')}")
-        ),
-    )
+
+    def on_request_failed(request):
+        failure = request.failure
+        reason = failure.get("errorText", "unknown") if failure else "unknown"
+        session.note(ConsoleEntry(
+            "request", f"{request.method} {request.url} failed: {reason}"
+        ))
+        session.note_network(NetworkEntry(request.method, request.url, "failed"))
+
+    page.on("requestfailed", on_request_failed)
 
     def on_response(response):
+        session.note_network(NetworkEntry(
+            response.request.method, response.url, str(response.status)
+        ))
         if response.status >= 400:
             session.note(ConsoleEntry(
                 "request", f"{response.status} {response.request.method} {response.url}"
@@ -187,14 +220,41 @@ def _wire_listeners(session: Session, page):
     page.on("response", on_response)
 
 
+def _state_path(session_id: str) -> Path:
+    safe = "".join(c for c in session_id if c.isalnum())[:8] or "s"
+    return BROWSER_STATE_DIR / f"{safe}.json"
+
+
 async def close_session(session_id: str):
     session = _sessions.pop(session_id, None)
     if session is None:
         return
+    # Save cookies/localStorage first so a login survives the context being
+    # reaped or the browser process restarting. A context that never loaded
+    # anything has nothing worth writing, but storage_state() is cheap enough.
+    try:
+        data = await session.context.storage_state()
+        _state_path(session_id).write_text(json.dumps(data, ensure_ascii=False))
+    except Exception:
+        log.debug("saving browser state failed", exc_info=True)
     try:
         await session.context.close()
     except Exception:
         log.debug("closing browser context failed", exc_info=True)
+
+
+async def reset_session(session_id: str):
+    """Close the context and forget its login, for a clean next visit."""
+    session = _sessions.pop(session_id, None)
+    if session is not None:
+        try:
+            await session.context.close()
+        except Exception:
+            log.debug("closing browser context failed", exc_info=True)
+    try:
+        _state_path(session_id).unlink(missing_ok=True)
+    except Exception:
+        log.debug("clearing browser state failed", exc_info=True)
 
 
 async def reap_idle():

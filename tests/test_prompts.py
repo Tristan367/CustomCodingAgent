@@ -100,7 +100,8 @@ async def test_prompt_body_is_the_whole_prompt_plus_environment(fresh, tmp_path)
     await db.save_prompt("terse", "Be terse.")
     built = await build_system_prompt("terse", str(tmp_path), "sid")
     assert built.startswith("Be terse.")
-    assert "# Environment" in built
+    assert "Working directory" in built
+    assert "Platform:" in built
     # No preferences block appended any more.
     assert "# User preferences" not in built
 
@@ -158,34 +159,47 @@ async def test_migration_moves_the_shared_compact_setting_into_a_prompt(fresh):
     assert await db.get_setting("compact_prompt", "") == ""
 
 
-async def test_a_session_summarises_with_its_own_prompt(fresh, tmp_path):
+async def test_a_session_summarises_with_its_profile_prompt(fresh, tmp_path):
+    """Compaction prompt is now tied to the profile, not independently chosen."""
     await migrate_prompts()
-    await db.save_prompt("terse", "Five bullets.", COMPACTION)
+    await db.save_prompt("strict", "Be strict.", SYSTEM)
+    await db.save_prompt("strict", "Five bullets.", COMPACTION)
     s = await db.create_session(
-        name="s", project_dir=str(tmp_path), compact_profile="terse"
+        name="s", project_dir=str(tmp_path), prompt_profile="strict"
     )
     assert await get_compact_prompt(await db.get_session(s["id"])) == "Five bullets."
+
+
+async def test_compaction_falls_back_when_profile_has_no_compaction(fresh, tmp_path):
+    await migrate_prompts()
+    s = await db.create_session(
+        name="s", project_dir=str(tmp_path), prompt_profile="minimal"
+    )
+    # minimal has no compaction prompt row → falls back to default
+    body = await get_compact_prompt(await db.get_session(s["id"]))
+    assert body == await prompt_body(PROTECTED_PROMPT, COMPACTION)
 
 
 async def test_a_session_falls_back_when_its_summariser_is_deleted(fresh, tmp_path):
     await migrate_prompts()
     await db.save_prompt("terse", "Five bullets.", COMPACTION)
     s = await db.create_session(
-        name="s", project_dir=str(tmp_path), compact_profile="terse"
+        name="s", project_dir=str(tmp_path), prompt_profile="terse"
     )
     await db.delete_prompt("terse", COMPACTION)
     body = await get_compact_prompt(await db.get_session(s["id"]))
     assert body == await prompt_body(PROTECTED_PROMPT, COMPACTION)
 
 
-async def test_the_two_kinds_are_chosen_independently(fresh, tmp_path):
+async def test_system_and_compaction_are_tied_to_profile(fresh, tmp_path):
+    """Editing a system prompt is editing its profile, which bundles the compaction prompt."""
     await migrate_prompts()
-    await db.save_prompt("strict", "Be strict.", SYSTEM)
-    await db.save_prompt("terse", "Five bullets.", COMPACTION)
+    await db.save_prompt("boss", "You are the boss.", SYSTEM)
+    await db.save_prompt("boss", "Summarise like a boss.", COMPACTION)
     s = await db.create_session(
-        name="s", project_dir=str(tmp_path),
-        prompt_profile="strict", compact_profile="terse",
+        name="s", project_dir=str(tmp_path), prompt_profile="boss",
+        compact_profile="boss",
     )
     row = await db.get_session(s["id"])
-    assert (await build_system_prompt(row["prompt_profile"], str(tmp_path))).startswith("Be strict.")
-    assert await get_compact_prompt(row) == "Five bullets."
+    assert (await build_system_prompt(row["prompt_profile"], str(tmp_path))).startswith("You are the boss.")
+    assert await get_compact_prompt(row) == "Summarise like a boss."

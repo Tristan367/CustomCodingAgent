@@ -12,6 +12,7 @@ being asked.
 """
 
 import json
+import re
 from pathlib import Path
 
 from agent_server import browser as engine
@@ -36,7 +37,7 @@ async def browser(
     **_,
 ) -> ToolResult:
     if reset:
-        await engine.close_session(ctx.session_id)
+        await engine.reset_session(ctx.session_id)
     if not steps:
         return ToolResult.error(
             "`steps` is empty. Give at least one, e.g. "
@@ -146,7 +147,7 @@ async def _perform(ctx, session, action: str, step: dict):
         url = str(step.get("url") or "")
         if not url:
             raise engine.BrowserError("`goto` needs `url`")
-        await page.goto(url, wait_until=step.get("wait") or "load", timeout=30_000)
+        await page.goto(url, wait_until=step.get("wait") or "load", timeout=int(step.get("timeout_ms") or 30_000))
         return {"text": f"at {page.url}"}
 
     if action == "click":
@@ -233,6 +234,9 @@ async def _perform(ctx, session, action: str, step: dict):
         value = await page.evaluate(js)
         return {"text": _cap(json.dumps(value, default=str, indent=2, ensure_ascii=False), 3000)}
 
+    if action == "network":
+        return {"text": _network_report(session, step)}
+
     if action == "shoot":
         path, data = await engine.capture(
             session, ctx.session_id, at=at, full_page=bool(step.get("full_page"))
@@ -264,8 +268,34 @@ async def _perform(ctx, session, action: str, step: dict):
         return await _expect(session, step, at, timeout)
 
     known = ("goto click fill press hover select check uncheck upload scroll wait "
-             "back forward reload resize snapshot eval shoot record expect")
+             "back forward reload resize snapshot eval network shoot record expect")
     raise engine.BrowserError(f"unknown action '{action}'. Available: {known}")
+
+
+def _network_report(session, step: dict) -> str:
+    """The page's recent requests, newest last.
+
+    Every request and response is captured, so `network` is the tab that says
+    whether a click actually hit the endpoint, and with what status. `filter`
+    narrows to matching URLs (a substring, or `/regex/`), and `count` limits the
+    number shown.
+    """
+    entries = session.network
+    filt = str(step.get("filter") or "")
+    if filt:
+        if len(filt) >= 2 and filt[0] == filt[-1] == "/":
+            pattern = re.compile(filt[1:-1])
+            entries = [e for e in entries if pattern.search(e.url)]
+        else:
+            low = filt.lower()
+            entries = [e for e in entries if low in e.url.lower()]
+
+    count = max(1, min(int(step.get("count") or 200), 500))
+    shown = entries[-count:]
+    lines = [e.render() for e in shown]
+    if len(entries) > len(shown):
+        lines.insert(0, f"... ({len(entries) - len(shown)} earlier requests omitted)")
+    return "\n".join(lines) if lines else "(no requests recorded yet)"
 
 
 def _with_comparisons(ctx, shots, compare) -> list[tuple[str, bytes]]:
@@ -439,7 +469,7 @@ def _title(session, steps, failed_at) -> str:
         str(s.get("action", "?")) for s in steps if isinstance(s, dict)
     ))
     outcome = f" (failed at step {failed_at})" if failed_at else ""
-    return f"browser: {actions[:60]}{outcome}"
+    return f"{actions[:60]}{outcome}"
 
 
 def _indent(text: str, prefix: str = "      ") -> str:

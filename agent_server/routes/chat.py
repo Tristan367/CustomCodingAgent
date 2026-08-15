@@ -11,7 +11,7 @@ from agent_server import agent, images, permissions
 from agent_server import database as db
 from agent_server import stt as stt_service
 from agent_server.compaction import compact_session_events, should_offer_compaction
-from agent_server.config import MIN_COMPACT_THRESHOLD, UPLOAD_DIR, model_info
+from agent_server.config import MIN_COMPACT_THRESHOLD, UPLOAD_DIR
 from agent_server.models import ChatRequest, CompactProfileRequest, ResolveRequest
 from agent_server.system_prompt import (
     COMPACTION,
@@ -87,7 +87,7 @@ async def chat_with_image(
     session_id: str,
     request: Request,
     message: str = Form(""),
-    images: list[UploadFile] = File(default=[]),
+    image_files: list[UploadFile] = File(default=[]),
 ):
     """Send a message with one or more attached images.
 
@@ -98,7 +98,7 @@ async def chat_with_image(
     """
     await _require_session(session_id)
     text = message.strip()
-    attachments = [i for i in images if i and i.filename]
+    attachments = [i for i in image_files if i and i.filename]
 
     if not attachments:
         if not text:
@@ -137,15 +137,16 @@ async def resolve(session_id: str, request: Request, body: ResolveRequest):
     """Answer a paused tool call (shell approval or question) and resume."""
     await _require_session(session_id)
 
-    if body.action == "approve" and body.scope == "session":
-        agent.set_runtime_auto_approve(session_id, True)
-
     ok = await agent.resolve_pending(
         session_id, body.tool_call_id, body.action, body.value,
         scope=body.scope, grant_path=body.grant_path,
     )
     if not ok:
         raise HTTPException(409, "That tool call is no longer pending.")
+    # Only flip the session-wide grant once the call is confirmed still pending;
+    # a stale or double submit must not silently enable auto-approve.
+    if body.action == "approve" and body.scope == "session":
+        agent.set_runtime_auto_approve(session_id, True)
     return _stream(session_id, request)
 
 
@@ -193,6 +194,61 @@ async def attach(session_id: str):
 @router.post("/sessions/{session_id}/cancel")
 async def cancel(session_id: str):
     return {"ok": agent.request_abort(session_id)}
+
+
+@router.delete("/sessions/{session_id}/last-message")
+async def revert_last_message(session_id: str):
+    """Take back the last user message, if the model has not replied to it yet.
+
+    Only the final user message is removable, and only while nothing has
+    answered it: once the model has produced a reply, deleting the message would
+    orphan that reply and silently invalidate the cache. A partially-thought or
+    stopped turn (reasoning but no reply) still counts as unreplied and is
+    removed along with the message.
+    """
+    await _require_session(session_id)
+    if agent.is_running(session_id):
+        return JSONResponse({"ok": False, "reason": "still running"}, status_code=409)
+
+    messages = await db.get_messages(session_id)
+    last_user = None
+    for m in reversed(messages):
+        if m["role"] == "user":
+            last_user = m
+            break
+    if last_user is None:
+        return JSONResponse({"ok": False, "reason": "no user message"}, status_code=404)
+
+    replied = any(
+        m["role"] == "assistant" and (m.get("content") or "").strip()
+        for m in messages
+        if m["id"] > last_user["id"]
+    )
+    if replied:
+        return JSONResponse({"ok": False, "reason": "already replied"}, status_code=409)
+
+    await db.delete_messages_after(session_id, last_user["id"] - 1)
+    return {"ok": True, "message": last_user["content"]}
+
+
+@router.post("/stop-all")
+async def stop_all():
+    """Emergency brake: halt every run and clear pending inter-session mail."""
+    stopped = await agent.stop_all()
+    return {"ok": True, "stopped": stopped}
+
+
+@router.post("/broadcast")
+async def broadcast(payload: dict):
+    """Send one message to several sessions at once."""
+    text = (payload.get("message") or "").strip()
+    session_ids = payload.get("session_ids") or []
+    if not text:
+        raise HTTPException(400, "Message is required")
+    if not session_ids:
+        raise HTTPException(400, "No sessions selected")
+    sent = await agent.broadcast(session_ids, text)
+    return {"ok": True, "sent": sent}
 
 
 @router.get("/status")
@@ -336,14 +392,6 @@ async def compact(
     return StreamingResponse(generator(), media_type="text/event-stream", headers=SSE_HEADERS)
 
 
-@router.post("/sessions/{session_id}/auto-compact")
-async def set_auto_compact(session_id: str, enabled: bool = Form(False)):
-    """Compact without asking, for people who never want the prompt."""
-    await _require_session(session_id)
-    await db.update_session(session_id, auto_compact=1 if enabled else 0)
-    return {"ok": True, "auto_compact": enabled}
-
-
 @router.post("/sessions/{session_id}/compact-threshold")
 async def set_compact_threshold(
     session_id: str,
@@ -351,10 +399,13 @@ async def set_compact_threshold(
     threshold: int = Form(...),
     resume: bool = Form(False),
 ):
-    """Raise or lower the point at which compaction is offered."""
-    session = await _require_session(session_id)
-    ceiling = model_info(session["model"])["context"]
-    value = max(MIN_COMPACT_THRESHOLD, min(int(threshold), ceiling))
+    """Raise or lower the point at which compaction happens.
+
+    No ceiling: the user may set it above the model's window to compact by hand
+    instead of automatically.
+    """
+    await _require_session(session_id)
+    value = max(MIN_COMPACT_THRESHOLD, int(threshold))
     await db.update_session(session_id, compact_threshold=value)
     agent.snooze_compaction(session_id)
     if resume:
@@ -387,7 +438,7 @@ async def serve_image(path: str):
     Restricted to the directories this app writes into, so a crafted path cannot
     turn the endpoint into an arbitrary file read.
     """
-    from agent_server.images import CAPTURE_DIR
+    from agent_server.config import CAPTURE_DIR
 
     try:
         resolved = Path(path).expanduser().resolve()

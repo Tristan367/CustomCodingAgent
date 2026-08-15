@@ -48,7 +48,12 @@ def broken(tmp_path):
 
 
 @pytest.fixture
-async def ctx(tmp_path):
+async def ctx(tmp_path, monkeypatch):
+    # The saved-login state goes to a per-test dir, so a run never leaves
+    # `testbrow.json` behind in the real data dir or leaks a login across runs.
+    state_dir = tmp_path / "browser_state"
+    state_dir.mkdir(exist_ok=True)
+    monkeypatch.setattr(engine, "BROWSER_STATE_DIR", state_dir)
     context = ToolContext(
         session_id="test-browser", project_dir=str(tmp_path), abort=asyncio.Event()
     )
@@ -212,6 +217,25 @@ async def test_eval_is_an_escape_hatch(ctx, page):
     ])
     assert not result.is_error, result.output
     assert "Demo" in result.output
+
+
+async def test_network_reports_the_requests(ctx, page):
+    """The network tab: did the click actually hit the endpoint, with what status."""
+    await browser(ctx, steps=[{"action": "goto", "url": page}])
+    result = await browser(ctx, steps=[{"action": "network"}])
+    assert not result.is_error, result.output
+    assert "GET" in result.output
+    assert "200" in result.output
+    assert "app.html" in result.output
+
+
+async def test_network_filter_narrows_to_matching_urls(ctx, page):
+    await browser(ctx, steps=[{"action": "goto", "url": page}])
+    result = await browser(ctx, steps=[
+        {"action": "network", "filter": "app.html", "count": 10},
+    ])
+    assert not result.is_error, result.output
+    assert "app.html" in result.output
 
 
 async def test_an_unknown_action_says_what_is_available(ctx, page):

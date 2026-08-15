@@ -57,6 +57,12 @@ UPLOAD_DIR.mkdir(parents=True, exist_ok=True)
 CAPTURE_DIR = Path(os.getenv("CODEAGENT_CAPTURE_DIR") or _TMP / "codeagent_captures")
 CAPTURE_DIR.mkdir(parents=True, exist_ok=True)
 
+# Cookies/localStorage saved by `browser`, so a login survives the context being
+# reaped and the app restarting. Lives under DATA_DIR because it must persist,
+# unlike CAPTURE_DIR which is fine to lose on reboot.
+BROWSER_STATE_DIR = Path(os.getenv("CODEAGENT_BROWSER_STATE_DIR") or DATA_DIR / "browser_state")
+BROWSER_STATE_DIR.mkdir(parents=True, exist_ok=True)
+
 # ── Models ──────────────────────────────────────────────────────────────────
 # Context/limits per https://api-docs.deepseek.com/quick_start/pricing
 DEFAULT_PROVIDER = "deepseek"
@@ -173,6 +179,38 @@ MODELS = [
 
 MODELS_BY_ID = {m["id"]: m for m in MODELS}
 
+# DeepSeek model ids discovered from the /models endpoint at startup. They carry
+# no pricing or context metadata (the endpoint returns ids only), so they fall
+# through to UNKNOWN_MODEL for sizing and cost. Refreshed on every start so a
+# newly-released model appears without a code change, and never touched for
+# local/custom endpoints (which are queried only for what the operator serves).
+DYNAMIC_DEEPSEEK_MODELS: list[str] = []
+
+
+def register_dynamic_deepseek_models(ids: list[str]) -> None:
+    """Record ids the DeepSeek /models endpoint returned, minus ones already
+    priced by hand in MODELS."""
+    for mid in ids:
+        if mid and mid not in MODELS_BY_ID and mid not in DYNAMIC_DEEPSEEK_MODELS:
+            DYNAMIC_DEEPSEEK_MODELS.append(mid)
+
+
+def is_known_model(model_id: str) -> bool:
+    """Whether a session can be created for this id (built-in or discovered)."""
+    return model_id in MODELS_BY_ID or model_id in DYNAMIC_DEEPSEEK_MODELS
+
+
+def dynamic_deepseek_models() -> list[dict]:
+    """Discovered DeepSeek models as offerable entries, humanised for the UI."""
+    return [
+        {"id": mid, "name": _humanize_model_id(mid), "provider": "deepseek"}
+        for mid in DYNAMIC_DEEPSEEK_MODELS
+    ]
+
+
+def _humanize_model_id(mid: str) -> str:
+    return " ".join("DeepSeek" if t == "deepseek" else t.capitalize() for t in mid.split("-"))
+
 # What a model whose pricing we do not know is assumed to cost and hold. A
 # custom endpoint can serve anything, so the honest answer is "unknown"; these
 # keep the context ring and the cost figure from reading as authoritative zeros.
@@ -221,9 +259,9 @@ def resolve_model_choice(choice: str, custom_model: str = "") -> tuple[str, str]
         if not model:
             raise ValueError("Type the model id the custom endpoint expects.")
         return choice, model
-    if choice not in MODELS_BY_ID:
+    if not is_known_model(choice):
         raise ValueError(f"Unknown model: {choice}")
-    return MODELS_BY_ID[choice]["provider"], choice
+    return provider_for_model(choice), choice
 
 # Offer compaction once a session's live context passes this many tokens.
 # Overridable per session; the ceiling is the model's context window.
@@ -255,28 +293,6 @@ WEBFETCH_MAX_BYTES = int(os.getenv("WEBFETCH_MAX_BYTES", "5000000"))
 # tool. Set to 0 only if you need the agent to reach an internal service.
 WEBFETCH_ALLOW_PRIVATE = os.getenv("WEBFETCH_ALLOW_PRIVATE", "0") == "1"
 
-# Vision talks to an Ollama server the user supplies. There is no sensible
-# default host, so unset means the tool is not registered at all rather than
-# registered and permanently failing -- a tool in the schema that cannot work
-# costs tokens on every request and invites the model to keep trying it.
-VISION_OLLAMA_URL = os.getenv("VISION_OLLAMA_URL", "")
-VISION_MODEL = os.getenv("VISION_MODEL", "qwen3-vl:32b")
-VISION_TIMEOUT = int(os.getenv("VISION_TIMEOUT", "300"))
-# Ollama unloads an idle model after five minutes by default. Reloading a 32B
-# vision model costs about ten seconds, which dwarfs the two seconds the actual
-# inference takes, so hold it in memory between calls.
-VISION_KEEP_ALIVE = os.getenv("VISION_KEEP_ALIVE", "30m")
-# Bring the rig up on demand over SSH, so the only thing to switch on by hand is
-# the machine itself. Empty disables it and vision just reports being offline.
-# Requires key-based SSH; the binary is started as your user, no sudo involved.
-VISION_SSH_HOST = os.getenv("VISION_SSH_HOST", "")
-VISION_REMOTE_BIN = os.getenv("VISION_REMOTE_BIN", "~/.local/bin/ollama")
-VISION_AUTOSTART = os.getenv("VISION_AUTOSTART", "1") == "1"
-# How long to wait for it to come up before giving up on a request.
-VISION_START_TIMEOUT = int(os.getenv("VISION_START_TIMEOUT", "45"))
-# Must be identical on every request: Ollama reloads the model whenever the
-# options change, which would reintroduce the cold start it is meant to avoid.
-VISION_NUM_CTX = int(os.getenv("VISION_NUM_CTX", "8192"))
 # Downscale anything larger before sending; phone photos are needlessly huge.
 VISION_MAX_PIXELS = int(os.getenv("VISION_MAX_PIXELS", str(1600 * 1600)))
 
@@ -341,7 +357,3 @@ def _find_tts_voices() -> str:
 TTS_MODEL = _find_tts_model()
 TTS_VOICES = _find_tts_voices()
 TTS_DEFAULT_VOICE = os.getenv("TTS_DEFAULT_VOICE", "af_aoede")
-
-
-def tts_available() -> bool:
-    return bool(TTS_MODEL and TTS_VOICES)

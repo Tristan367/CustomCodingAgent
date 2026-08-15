@@ -143,3 +143,23 @@ async def test_saving_a_script_does_not_register_a_tool(clean_db):
     # And it should not be in the custom tool registry either
     from agent_server.tools.registry import _custom_tool_names
     assert "my-script" not in _custom_tool_names
+
+
+async def test_secrets_are_injected_into_the_script_environment(client):
+    """Scripts see the same secret store the tools do, as env vars."""
+    await db.save_secret("MY_KEY", "my-value")
+    await db.save_script("envcheck", 'echo "MY_KEY=$MY_KEY"')
+    body = (await client.post("/_run_script", data={"name": "envcheck"})).text
+    assert "MY_KEY=my-value" in body
+
+
+async def test_saving_a_secret_returns_to_the_back_page(client):
+    """The scripts panel manages the same store and returns to itself."""
+    resp = await client.post(
+        "/_save_secret",
+        data={"name": "FOO", "value": "bar", "back": "/?script=myscript"},
+        follow_redirects=False,
+    )
+    assert resp.status_code == 303
+    assert resp.headers["location"] == "/?script=myscript"
+    assert (await db.load_secrets_dict()).get("FOO") == "bar"

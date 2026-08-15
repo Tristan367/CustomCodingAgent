@@ -115,8 +115,18 @@ CREATE TABLE IF NOT EXISTS scripts (
     updated_at TEXT NOT NULL
 );
 
+CREATE TABLE IF NOT EXISTS mailbox (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    to_session TEXT NOT NULL,
+    from_session TEXT NOT NULL,
+    from_name TEXT NOT NULL,
+    body TEXT NOT NULL,
+    created_at TEXT NOT NULL
+);
+
 CREATE INDEX IF NOT EXISTS idx_messages_session ON messages(session_id, id);
 CREATE INDEX IF NOT EXISTS idx_compactions_session ON compactions(session_id, id);
+CREATE INDEX IF NOT EXISTS idx_mailbox_to ON mailbox(to_session, id);
 """
 
 # Columns added after the original schema shipped. Applied idempotently.
@@ -124,7 +134,6 @@ MIGRATIONS: list[tuple[str, str, str]] = [
     ("sessions", "prompt_profile", "TEXT DEFAULT 'default'"),
     ("sessions", "bash_auto_approve", "INTEGER DEFAULT 0"),
     ("sessions", "compact_threshold", "INTEGER"),
-    ("sessions", "auto_compact", "INTEGER DEFAULT 0"),
     # The rendered system prompt, frozen per session. Kept here rather than
     # rebuilt per request so that editing a shared prompt, restarting the
     # server, or the date rolling over cannot change a live conversation's
@@ -171,6 +180,36 @@ MIGRATIONS: list[tuple[str, str, str]] = [
     ("messages", "send_reasoning", "INTEGER DEFAULT 1"),
     # Which tools are disabled for this prompt profile (JSON array of names).
     ("prompts", "disabled_tools", "TEXT"),
+    # Subagent system prompt body for this profile. NULL uses the built-in default.
+    ("prompts", "subagent_body", "TEXT"),
+    # Tools to exclude when this profile's subagent is launched (comma-separated).
+    ("prompts", "subagent_disabled_tools", "TEXT"),
+    # Maximum parallel subagents this tier can spawn (0 = unlimited).
+    ("prompts", "subagent_parallel_cap", "INTEGER DEFAULT 3"),
+    # Master agent's spawn limit — how many subagents the main AI can launch
+    # in one task call (0 = unlimited). Separate from the subagent tiers.
+    ("prompts", "master_spawn_limit", "INTEGER DEFAULT 0"),
+    # Default model for subagents launched under this profile.
+    # Empty / NULL means "same model as the parent session".
+    ("prompts", "subagent_model", "TEXT"),
+    # Tier-1 subagent model override. NULL uses subagent_model (the profile default).
+    ("prompts", "sa_tier_model", "TEXT"),
+    # Maximum total subagents running concurrently in a session using this
+    # profile (0 = unlimited). Acts as a global safety valve across all tiers.
+    ("prompts", "max_concurrent_subagents", "INTEGER DEFAULT 100"),
+    # Higher subagent tiers (subsubagents and beyond), stored as a JSON array of
+    # {body, disabled_tools}. Tier 0 uses the two columns above; tiers 1+ live here.
+    ("prompts", "subagent_tiers", "TEXT"),
+    # Sender session name for inter-session mail, so the UI can render an
+    # incoming message distinctly (blue bubble, sender as the role).
+    ("messages", "mail_from", "TEXT"),
+    # highlight.js language for syntax-highlighting the tool result in the UI.
+    ("messages", "lang", "TEXT"),
+    # Display-only code body (a read without the [path#tag] header or line
+    # numbers). Never fed back to the model.
+    ("messages", "code", "TEXT"),
+    # 1-indexed first line number of `code`, for the UI's line-number gutter.
+    ("messages", "code_start", "INTEGER DEFAULT 1"),
 ]
 
 
@@ -206,12 +245,15 @@ async def close():
 async def init_db():
     db = await connect()
     await db.executescript(SCHEMA)
+    # Handle migrating original `prompts` table which lacked the `kind` column.
+    # Must come BEFORE the migrations loop so that migration-added columns
+    # are applied to the freshly-recreated table.
+    await _rekey_prompts(db)
     for table, column, decl in MIGRATIONS:
         cur = await db.execute(f"PRAGMA table_info({table})")
         existing = {r[1] for r in await cur.fetchall()}
         if column not in existing:
             await db.execute(f"ALTER TABLE {table} ADD COLUMN {column} {decl}")
-    await _rekey_prompts(db)
     await db.commit()
     # The seeder used to write custom tools literally named `vision` and
     # `screenshot`, which load_custom_tools then registered over the built-ins
@@ -292,7 +334,7 @@ SESSION_FIELDS = {
     "name", "project_dir", "provider", "model", "thinking_effort",
     "prompt_profile", "compact_profile", "bash_auto_approve", "is_archived", "compact_threshold",
     "cache_fp", "cache_fp_tokens", "cache_checked_at", "cache_prompt_tokens",
-    "auto_compact", "system_prompt", "prompt_custom", "pending_system_prompt", "subagent_model",
+    "system_prompt", "prompt_custom", "pending_system_prompt", "subagent_model",
 }
 
 
@@ -302,10 +344,12 @@ async def create_session(
     provider: str = "deepseek",
     model: str = "deepseek-v4-pro",
     prompt_profile: str = "default",
-    compact_profile: str = "default",
+    compact_profile: str | None = None,
     thinking_effort: str | None = None,
     subagent_model: str | None = None,
 ) -> dict:
+    if compact_profile is None:
+        compact_profile = prompt_profile
     sid = uuid.uuid4().hex[:8]
     now = _now()
     await _execute(
@@ -322,6 +366,15 @@ async def create_session(
 
 async def get_session(session_id: str) -> dict | None:
     return await _fetchone("SELECT * FROM sessions WHERE id = ?", (session_id,))
+
+
+async def get_session_by_name(name: str) -> dict | None:
+    """Most recently active, non-archived session with this name."""
+    return await _fetchone(
+        "SELECT * FROM sessions WHERE name = ? AND is_archived = 0"
+        " ORDER BY last_active_at DESC LIMIT 1",
+        (name,),
+    )
 
 
 async def list_sessions(archived: bool = False) -> list[dict]:
@@ -347,6 +400,41 @@ async def touch_session(session_id: str):
     await _execute("UPDATE sessions SET last_active_at = ? WHERE id = ?", (_now(), session_id))
 
 
+# ── Inter-session mail ───────────────────────────────────────────────────────
+
+async def send_mail(to_session: str, from_session: str, from_name: str, body: str) -> int:
+    return await _execute(
+        "INSERT INTO mailbox (to_session, from_session, from_name, body, created_at)"
+        " VALUES (?, ?, ?, ?, ?)",
+        (to_session, from_session, from_name, body, _now()),
+    )
+
+
+async def drain_mail(session_id: str) -> list[dict]:
+    """Claim and remove all pending mail for a session, oldest first."""
+    rows = await _fetchall(
+        "SELECT id, from_session, from_name, body FROM mailbox"
+        " WHERE to_session = ? ORDER BY id",
+        (session_id,),
+    )
+    if rows:
+        ids = [r["id"] for r in rows]
+        placeholders = ",".join("?" * len(ids))
+        await _execute(f"DELETE FROM mailbox WHERE id IN ({placeholders})", tuple(ids))
+    return rows
+
+
+async def clear_mailbox() -> None:
+    """Drop every pending message (the emergency brake)."""
+    await _execute("DELETE FROM mailbox")
+
+
+async def has_mail(session_id: str) -> bool:
+    """True if the session has undelivered inter-session mail."""
+    row = await _fetchone("SELECT 1 FROM mailbox WHERE to_session = ? LIMIT 1", (session_id,))
+    return row is not None
+
+
 async def delete_session(session_id: str):
     """Remove a session and everything hanging off it.
 
@@ -360,19 +448,6 @@ async def delete_session(session_id: str):
         await db.execute("DELETE FROM sessions WHERE id = ?", (session_id,))
         await db.commit()
 
-
-async def purge_orphans() -> int:
-    """Drop rows left behind by earlier deletes that did not cascade."""
-    db = await connect()
-    total = 0
-    async with _write_lock:
-        for table in ("messages", "compactions", "session_write_dirs"):
-            cur = await db.execute(
-                f"DELETE FROM {table} WHERE session_id NOT IN (SELECT id FROM sessions)"
-            )
-            total += cur.rowcount or 0
-        await db.commit()
-    return total
 
 # ── Custom endpoints ────────────────────────────────────────────────────────
 
@@ -443,12 +518,17 @@ async def add_message(
     tool_title: str = "",
     duration_ms: int = 0,
     file_path: str = "",
+    mail_from: str | None = None,
+    lang: str = "",
+    code: str = "",
+    code_start: int = 1,
 ) -> dict:
     """Insert a message. `tool_calls` is stored as canonical OpenAI wire JSON."""
     msg_id = await _execute(
         "INSERT INTO messages (session_id, role, content, reasoning_content, tool_calls,"
         " tool_call_id, tool_name, is_error, token_count, usage, diff, tool_title,"
-        " duration_ms, file_path, created_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+        " duration_ms, file_path, mail_from, lang, code, code_start, created_at)"
+        " VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
         (
             session_id,
             role,
@@ -464,6 +544,10 @@ async def add_message(
             tool_title or None,
             duration_ms or None,
             file_path or None,
+            mail_from,
+            lang or None,
+            code or None,
+            code_start if code_start else 1,
             _now(),
         ),
     )
@@ -473,19 +557,11 @@ async def add_message(
     return row
 
 
-async def get_messages(session_id: str, include_compacted: bool = False) -> list[dict]:
-    if include_compacted:
-        return await _fetchall(
-            "SELECT * FROM messages WHERE session_id = ? ORDER BY id ASC", (session_id,)
-        )
+async def get_messages(session_id: str) -> list[dict]:
     return await _fetchall(
         "SELECT * FROM messages WHERE session_id = ? AND is_compacted = 0 ORDER BY id ASC",
         (session_id,),
     )
-
-
-async def delete_message(message_id: int):
-    await _execute("DELETE FROM messages WHERE id = ?", (message_id,))
 
 
 async def delete_messages_after(session_id: str, message_id: int) -> int:
@@ -771,21 +847,31 @@ async def get_prompt(name: str, kind: str = "system") -> dict | None:
 
 
 async def save_prompt(
-    name: str, body: str, kind: str = "system", disabled_tools: str | None = None
+    name: str, body: str, kind: str = "system", disabled_tools: str | None = None,
+    subagent_body: str | None = None, subagent_disabled_tools: str | None = None,
+    subagent_parallel_cap: int | None = None,
 ):
     # Textareas submit CRLF per the HTML spec; storing that would make an
     # untouched round-trip through the editor look like an edit.
     body = body.replace("\r\n", "\n").strip()
+    if subagent_body is not None:
+        subagent_body = subagent_body.replace("\r\n", "\n").strip()
     # None means "leave the tool selection alone". It used to default to "",
     # and the upsert wrote that unconditionally, so saving an edit to the text
     # -- or the startup refresh touching an unedited prompt -- silently cleared
     # which tools the profile had switched off.
     await _execute(
-        "INSERT INTO prompts (kind, name, body, disabled_tools, updated_at) VALUES (?,?,?,?,?)"
+        "INSERT INTO prompts (kind, name, body, disabled_tools, subagent_body, subagent_disabled_tools, subagent_parallel_cap, updated_at)"
+        " VALUES (?,?,?,?,?,?,?,?)"
         " ON CONFLICT(kind, name) DO UPDATE SET body = excluded.body,"
         " disabled_tools = COALESCE(?, prompts.disabled_tools),"
+        " subagent_body = COALESCE(?, prompts.subagent_body),"
+        " subagent_disabled_tools = COALESCE(?, prompts.subagent_disabled_tools),"
+        " subagent_parallel_cap = COALESCE(?, prompts.subagent_parallel_cap),"
         " updated_at = excluded.updated_at",
-        (kind, name, body, disabled_tools or "", _now(), disabled_tools),
+        (kind, name, body, disabled_tools or "",
+         subagent_body, subagent_disabled_tools, subagent_parallel_cap, _now(),
+         disabled_tools, subagent_body, subagent_disabled_tools, subagent_parallel_cap),
     )
 
 
@@ -799,12 +885,6 @@ async def delete_prompt(name: str, kind: str = "system"):
 async def list_custom_tools() -> list[dict]:
     return await _fetchall(
         "SELECT * FROM custom_tools ORDER BY name"
-    )
-
-
-async def get_custom_tool(name: str) -> dict | None:
-    return await _fetchone(
-        "SELECT * FROM custom_tools WHERE name = ?", (name,)
     )
 
 

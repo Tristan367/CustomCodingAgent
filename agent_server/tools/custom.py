@@ -14,7 +14,7 @@ from agent_server.tools.registry import (
     unregister_custom,
 )
 
-__all__ = ["BUILT_IN_NAMES", "load_custom_tools", "reload_custom_tools"]
+__all__ = ["BUILT_IN_NAMES", "load_custom_tools"]
 
 
 def _make_handler(script: str):
@@ -58,8 +58,3 @@ async def load_custom_tools() -> list[str]:
         if error:
             problems.append(error)
     return problems
-
-
-async def reload_custom_tools() -> list[str]:
-    """Re-register after a save or deletion."""
-    return await load_custom_tools()

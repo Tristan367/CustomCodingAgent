@@ -41,7 +41,10 @@ class Backend:
 
 
 def _grim(path: str, region: str) -> list[str]:
-    return ["grim", *(["-g", region.replace(",", " ", 1).replace(",", " ")] if region else []), path]
+    if not region:
+        return ["grim", path]
+    x, y, w, h = region.split(",")
+    return ["grim", "-g", f"{x},{y} {w}x{h}", path]
 
 
 def _spectacle(path: str, region: str) -> list[str]:
@@ -53,7 +56,10 @@ def _gnome(path: str, region: str) -> list[str]:
 
 
 def _maim(path: str, region: str) -> list[str]:
-    return ["maim", *(["-g", region] if region else []), path]
+    if not region:
+        return ["maim", path]
+    x, y, w, h = region.split(",")
+    return ["maim", "-g", f"{w}x{h}+{x}+{y}", path]
 
 
 def _scrot(path: str, region: str) -> list[str]:
@@ -61,7 +67,10 @@ def _scrot(path: str, region: str) -> list[str]:
 
 
 def _imagemagick(path: str, region: str) -> list[str]:
-    return ["import", "-window", "root", *(["-crop", region] if region else []), path]
+    if not region:
+        return ["import", "-window", "root", path]
+    x, y, w, h = region.split(",")
+    return ["import", "-window", "root", "-crop", f"{w}x{h}+{x}+{y}", path]
 
 
 def _ffmpeg_x11(path: str, region: str) -> list[str]:

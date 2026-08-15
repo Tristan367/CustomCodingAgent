@@ -182,6 +182,13 @@
     "name": "save_settings"
   },
   {
+    "path": "/_settings/expand",
+    "methods": [
+      "POST"
+    ],
+    "name": "save_expand_setting"
+  },
+  {
     "path": "/_settings/sound",
     "methods": [
       "POST"
@@ -215,6 +222,13 @@
       "GET"
     ],
     "name": "serve_sound"
+  },
+  {
+    "path": "/_settings/theme",
+    "methods": [
+      "POST"
+    ],
+    "name": "save_theme"
   },
   {
     "path": "/_settings/tts",
@@ -259,11 +273,95 @@
     "name": "test_custom_tool"
   },
   {
+    "path": "/api/broadcast",
+    "methods": [
+      "POST"
+    ],
+    "name": "broadcast"
+  },
+  {
     "path": "/api/files/image",
     "methods": [
       "GET"
     ],
     "name": "serve_image"
+  },
+  {
+    "path": "/api/files/copy",
+    "methods": [
+      "POST"
+    ],
+    "name": "copy_entry"
+  },
+  {
+    "path": "/api/files/delete",
+    "methods": [
+      "POST"
+    ],
+    "name": "delete_entry"
+  },
+  {
+    "path": "/api/files/format",
+    "methods": [
+      "POST"
+    ],
+    "name": "format_file"
+  },
+  {
+    "path": "/api/files/list",
+    "methods": [
+      "GET"
+    ],
+    "name": "list_dir"
+  },
+  {
+    "path": "/api/files/mkdir",
+    "methods": [
+      "POST"
+    ],
+    "name": "make_directory"
+  },
+  {
+    "path": "/api/files/move",
+    "methods": [
+      "POST"
+    ],
+    "name": "move_entries"
+  },
+  {
+    "path": "/api/files/read",
+    "methods": [
+      "GET"
+    ],
+    "name": "read_file"
+  },
+  {
+    "path": "/api/files/rename",
+    "methods": [
+      "POST"
+    ],
+    "name": "rename_entry"
+  },
+  {
+    "path": "/api/files/save",
+    "methods": [
+      "POST"
+    ],
+    "name": "save_file"
+  },
+  {
+    "path": "/api/files/stat",
+    "methods": [
+      "GET"
+    ],
+    "name": "stat_path"
+  },
+  {
+    "path": "/api/stop-all",
+    "methods": [
+      "POST"
+    ],
+    "name": "stop_all"
   },
   {
     "path": "/api/sessions",
@@ -322,18 +420,18 @@
     "name": "set_auto_approve"
   },
   {
-    "path": "/api/sessions/{session_id}/auto-compact",
-    "methods": [
-      "POST"
-    ],
-    "name": "set_auto_compact"
-  },
-  {
     "path": "/api/sessions/{session_id}/cancel",
     "methods": [
       "POST"
     ],
     "name": "cancel"
+  },
+  {
+    "path": "/api/sessions/{session_id}/changes",
+    "methods": [
+      "GET"
+    ],
+    "name": "session_changes"
   },
   {
     "path": "/api/sessions/{session_id}/chat",
@@ -383,6 +481,13 @@
       "POST"
     ],
     "name": "continue_run"
+  },
+  {
+    "path": "/api/sessions/{session_id}/last-message",
+    "methods": [
+      "DELETE"
+    ],
+    "name": "revert_last_message"
   },
   {
     "path": "/api/sessions/{session_id}/messages",

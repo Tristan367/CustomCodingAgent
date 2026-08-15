@@ -26,7 +26,7 @@ async def grep_search(
     **_,
 ) -> ToolResult:
     search_dir = ctx.resolve(path)
-    title = f"grep '{pattern[:60]}'"
+    title = f"'{pattern[:60]}'"
 
     if not pattern or not pattern.strip():
         return ToolResult.error("empty pattern — nothing to search for", title)
@@ -105,7 +105,7 @@ def _expand_braces(pattern: str) -> list[str]:
 
 async def glob_search(ctx: ToolContext, *, pattern: str, path: str | None = None, **_) -> ToolResult:
     search_dir = ctx.resolve(path)
-    title = f"glob '{pattern}'"
+    title = f"'{pattern}'"
 
     if not search_dir.is_dir():
         return ToolResult.error(f"directory not found: {search_dir}", title)

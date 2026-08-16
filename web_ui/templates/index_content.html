@@ -171,7 +171,7 @@ async function stopCodeAgent(button) {
                 </span>
             </label>
         </div>
-        <label class="field-label">Color theme
+        <div class="field-label">Color theme
             <span class="control-row theme-swatches">
                 {% for name, color in [('green', '#8ea24f'), ('red', '#c06a5f'), ('blue', '#8fb0c7'), ('gray', '#a4aca9')] %}
                 <button type="button" class="theme-swatch" style="background:{{ color }}"
@@ -186,7 +186,7 @@ async function stopCodeAgent(button) {
                            onchange="setCustomTheme(this.value)">
                 </label>
             </span>
-        </label>
+        </div>
         <label class="field-label">Speech model
             <span class="control-row">
                 <select name="stt-model" onchange="saveSttModel(this.value)">

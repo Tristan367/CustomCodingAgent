@@ -1017,13 +1017,15 @@ button:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
   padding: 0;
   position: relative;
 }
-/* Hover brightens the swatch itself and never touches the border, so a hover
- * cue can never be mistaken for the selection ring. */
-.theme-swatch:hover { filter: brightness(1.18); }
-/* Selection is a checkmark on a bright border -- unambiguous against hover. */
-.theme-swatch[aria-pressed="true"] {
-  border-color: var(--text);
-}
+/* Hover only brightens the border of the square you are actually over; the
+ * selected square's border never changes, so hovering one swatch can never
+ * make a different one look hovered. */
+.theme-swatch:hover { border-color: var(--text-faint); }
+/* A click leaves a focus outline that reads as "hovered/ringed"; the checkmark
+ * already carries selection, so drop the outline on these tiny squares. */
+.theme-swatch:focus-visible { outline: none; }
+/* Selection is a checkmark alone -- no border change, no ring -- so it cannot
+ * be mistaken for the hover border. */
 .theme-swatch[aria-pressed="true"]::after {
   content: "\2713";
   position: absolute;

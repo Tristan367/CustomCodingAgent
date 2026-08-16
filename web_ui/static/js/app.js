@@ -2260,14 +2260,10 @@ const Dictation = {
       this.ws.binaryType = 'arraybuffer';
       this.ws.onmessage = (e) => this.onStreamMessage(e);
       this.ws.onclose = () => { this.ws = null; };
-      // A server-initiated close after finalize can surface as an error event
-      // in some browsers; only report it while we are actually dictating.
-      this.ws.onerror = () => {
-        if (this.recording) {
-          appendNotice('error', 'Streaming dictation connection failed.');
-          this.teardown();
-        }
-      };
+      // A WebSocket "error" event fires on many benign abnormal closures (e.g.
+      // the server dropping the socket after finalize). Real failures come back
+      // as {"error": ...} messages, so don't alarm the user from onerror alone.
+      this.ws.onerror = () => { this.ws = null; };
     } catch (err) {
       appendNotice('error', `Could not start dictation: ${err.message}`);
       this.teardown();

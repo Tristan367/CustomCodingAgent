@@ -482,21 +482,28 @@ async def stt_stream(websocket: WebSocket):
                 samples = np.frombuffer(message["bytes"], dtype=np.float32)
                 if samples.size:
                     session.append(samples)
-                    if not session.busy and session.new_seconds >= whisper_streaming.STEP_SECONDS:
-                        session.busy = True
-                        try:
-                            partial = await session.transcribe()
-                            await websocket.send_json({"text": partial, "partial": True})
-                        except Exception:
-                            pass  # a failed partial is dropped; the final still runs
-                        finally:
-                            session.busy = False
+                    if session.busy:
+                        continue
+                    session.busy = True
+                    try:
+                        if session.should_finalize:
+                            # A long pause: commit the sentence (period added).
+                            await session.commit_pause()
+                            await websocket.send_json({"text": session.finalized_text(), "partial": True})
+                        elif session.new_seconds >= whisper_streaming.STEP_SECONDS:
+                            partial = await session.current_partial()
+                            text = (session.finalized_text() + " " + partial).strip()
+                            await websocket.send_json({"text": text, "partial": True})
+                    except Exception:
+                        pass  # a failed partial is dropped; the final still runs
+                    finally:
+                        session.busy = False
         if should_finalize:
             try:
-                final = await session.transcribe()
+                final = await session.finalize()
                 await websocket.send_json({"text": final, "partial": False})
             except Exception:
-                await websocket.send_json({"text": "", "partial": False})
+                await websocket.send_json({"text": session.finalized_text(), "partial": False})
     except WebSocketDisconnect:
         pass
     finally:

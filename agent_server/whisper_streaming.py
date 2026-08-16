@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import asyncio
 import io
+import os
 import re
 import wave
 
@@ -27,6 +28,9 @@ from agent_server.config import (
 SAMPLE_RATE = 16000
 # Re-transcribe only once this much NEW audio has accumulated.
 STEP_SECONDS = 1.5
+# A pause this long (with speech before it) commits the sentence and adds a
+# period, so dictation can stay on and each burst of talking becomes a sentence.
+PAUSE_SECONDS = float(os.getenv("CODEAGENT_DICTATION_PAUSE", "10"))
 
 # whisper emits these for silence/music/etc; they read as noise in the chat.
 _NOISE = re.compile(
@@ -128,21 +132,49 @@ async def shutdown() -> None:
 
 
 class WhisperSession:
-    """One utterance: accumulates float32 samples, re-transcribes on demand."""
+    """One continuous dictation session.
+
+    Re-transcribes the in-progress audio every couple of seconds for live
+    feedback, and -- so the user can leave dictation on and just talk -- detects
+    a long pause and commits the speech before it as a finished sentence (adding
+    a period if whisper did not). Committed sentences are dropped from the audio
+    buffer, so the re-transcription never grows without bound.
+    """
 
     def __init__(self, server: WhisperServer) -> None:
         self.server = server
-        self._buf = bytearray()
+        self._buf = bytearray()          # audio since the last committed sentence
+        self._finalized: list[str] = []  # committed sentences
+        self._silence = 0.0              # seconds of trailing silence
+        self._speech = False             # whether the current buffer has speech
+        self._peak = 0.0                 # slowly-decaying recent RMS
         self._last_transcribed = 0
         self.busy = False
 
     def append(self, samples: np.ndarray) -> None:
         self._buf.extend(samples.astype(np.float32).tobytes())
+        if not samples.size:
+            return
+        rms = float(np.sqrt(np.mean(samples.astype(np.float32) ** 2)))
+        # Adaptive silence: anything well under the recent speech level counts as
+        # a pause, with a floor so a genuinely quiet mic still has a threshold.
+        self._peak = max(self._peak * 0.999, rms)
+        if rms < max(0.008, self._peak * 0.2):
+            self._silence += samples.size / SAMPLE_RATE
+        else:
+            self._silence = 0.0
+            self._speech = True
 
     @property
     def new_seconds(self) -> float:
-        n = len(self._buf) // 4
-        return (n - self._last_transcribed) / SAMPLE_RATE
+        return (len(self._buf) // 4 - self._last_transcribed) / SAMPLE_RATE
+
+    @property
+    def should_finalize(self) -> bool:
+        return self._speech and self._silence >= PAUSE_SECONDS
+
+    def finalized_text(self) -> str:
+        return " ".join(self._finalized)
 
     def _to_wav(self) -> bytes:
         samples = np.frombuffer(self._buf, dtype=np.float32)
@@ -155,7 +187,40 @@ class WhisperSession:
             w.writeframes(pcm16.tobytes())
         return out.getvalue()
 
-    async def transcribe(self) -> str:
+    async def current_partial(self) -> str:
+        """Transcribe the in-progress buffer; empty if nothing has been said."""
+        if not self._speech:
+            return ""
         wav = self._to_wav()
         self._last_transcribed = len(self._buf) // 4
         return await self.server.transcribe(wav)
+
+    @staticmethod
+    def _ensure_period(text: str) -> str:
+        text = text.strip()
+        if text and text[-1] not in ".!?":
+            text += "."
+        return text
+
+    async def commit_pause(self) -> bool:
+        """Finalize the buffer as a finished sentence and reset it."""
+        text = self._ensure_period(await self.current_partial())
+        if text:
+            self._finalized.append(text)
+        self._reset()
+        return bool(text)
+
+    async def finalize(self) -> str:
+        """Commit whatever remains and return the whole utterance."""
+        text = self._ensure_period(await self.current_partial())
+        if text:
+            self._finalized.append(text)
+        self._reset()
+        return self.finalized_text()
+
+    def _reset(self) -> None:
+        self._buf = bytearray()
+        self._silence = 0.0
+        self._speech = False
+        self._peak = 0.0
+        self._last_transcribed = 0

@@ -31,3 +31,18 @@ def test_clean_strips_noise_markers():
     assert whisper_streaming._clean("hello [BLANK_AUDIO] world") == "hello world"
     assert whisper_streaming._clean("[blank_audio]  [MUSIC]  hi") == "hi"
     assert whisper_streaming._clean("normal speech") == "normal speech"
+
+
+def test_ensure_period():
+    ensure = whisper_streaming.WhisperSession._ensure_period
+    assert ensure("hello world") == "hello world."
+    assert ensure("hello world!") == "hello world!"
+    assert ensure("  ") == ""
+
+
+def test_pause_finalization_requires_long_silence():
+    session = whisper_streaming.WhisperSession(server=None)
+    session.append(np.full(16000, 0.5, dtype=np.float32))  # 1s of loud speech
+    assert not session.should_finalize
+    session.append(np.zeros(int((whisper_streaming.PAUSE_SECONDS + 1) * 16000), dtype=np.float32))
+    assert session.should_finalize

@@ -38,8 +38,9 @@ STEP_SECONDS = 1.5
 PAUSE_SECONDS = float(os.getenv("CODEAGENT_DICTATION_PAUSE", "10"))
 # Audio older than this is committed and trimmed, so the re-transcription only
 # ever covers the recent tail. Sized to keep the last couple of sentences under
-# review, since whisper sometimes revises them when more context arrives.
-COMMIT_DELAY_SEC = float(os.getenv("CODEAGENT_DICTATION_COMMIT_DELAY", "6"))
+# review, since whisper sometimes revises them when more context arrives. Ten
+# seconds matches whisper.cpp's own stream example window (--length 10000).
+COMMIT_DELAY_SEC = float(os.getenv("CODEAGENT_DICTATION_COMMIT_DELAY", "10"))
 
 # whisper emits these for silence/background noise; they read as garbage in the
 # transcript. The first arm catches the special-event tokens ([BLANK_AUDIO],

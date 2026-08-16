@@ -87,19 +87,20 @@ def _session_with(segments, seconds):
     return session
 
 
-async def test_partial_commits_old_segments_and_trims():
+async def test_partial_commits_old_segments_and_trims(monkeypatch):
     segs = [
         {"start": 0.0, "end": 2.0, "text": "first sentence."},
         {"start": 2.1, "end": 5.0, "text": "second sentence."},
         {"start": 5.1, "end": 9.0, "text": "still under review."},
     ]
+    monkeypatch.setattr(whisper_streaming, "COMMIT_DELAY_SEC", 6.0)
     # 12s of audio, 6s commit delay: anything ending before 6.0s commits.
     session = _session_with(segs, seconds=12)
     partial = await session.current_partial()
     assert session.finalized_text() == "first sentence. second sentence."
     assert partial == "still under review."
     # The last committed segment ended at 5.0s, so the buffer is trimmed to it.
-    assert len(session._buf) // 4 == int(7.0 * 16000)
+    assert len(session._buf) // 4 == 7 * 16000
 
 
 async def test_partial_keeps_recent_audio_under_review():

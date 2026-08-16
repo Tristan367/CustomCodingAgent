@@ -1004,7 +1004,7 @@ button:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
 
 .sound-row { margin-top: var(--s3); gap: var(--s4); }
 
-/* Colour-theme swatches: three small squares, the active one ringed. */
+/* Colour-theme swatches: small squares, the active one checkmarked. */
 .theme-swatches { display: flex; gap: 6px; }
 .theme-swatch {
   width: 22px;
@@ -1015,16 +1015,28 @@ button:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
   border: 2px solid var(--border-strong);
   cursor: pointer;
   padding: 0;
-  transition: border-color 100ms ease;
+  position: relative;
 }
-/* Hover is a whisper -- just enough to say "clickable" -- so it can never be
- * mistaken for the selection ring below. */
-.theme-swatch:hover { border-color: var(--text-faint); }
-/* Selection is a bright ring set off by a gap, unmistakably distinct from a
- * hover border and visible regardless of which colour the swatch itself is. */
+/* Hover brightens the swatch itself and never touches the border, so a hover
+ * cue can never be mistaken for the selection ring. */
+.theme-swatch:hover { filter: brightness(1.18); }
+/* Selection is a checkmark on a bright border -- unambiguous against hover. */
 .theme-swatch[aria-pressed="true"] {
   border-color: var(--text);
-  box-shadow: 0 0 0 2px var(--bg);
+}
+.theme-swatch[aria-pressed="true"]::after {
+  content: "\2713";
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: #fff;
+  font-size: 13px;
+  font-weight: 700;
+  line-height: 1;
+  text-shadow: 0 1px 1px rgba(0, 0, 0, 0.6);
+  pointer-events: none;
 }
 /* The custom swatch is a label wrapping a native colour input: a rainbow so it
  * reads as "pick any", with the invisible input covering the whole square. */

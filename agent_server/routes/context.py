@@ -26,6 +26,7 @@ from agent_server.config import (
     REASONING_EFFORTS,
     THRESHOLD_STEPS,
     dynamic_deepseek_models,
+    list_whisper_models,
     stt_available,
     whisper_streaming_available,
 )
@@ -339,6 +340,7 @@ async def _home_context(
         "sound_enabled": await _sound_enabled(),
         "uploaded_sounds": _list_uploaded_sounds(),
         "stt": stt_availability(),
+        "stt_models": [{"path": p, "name": Path(p).name} for p in list_whisper_models()],
         "tts": tts_service.availability(),
         "settings": settings,
         "provider_settings": provider_settings,

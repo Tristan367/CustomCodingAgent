@@ -317,19 +317,55 @@ def _find_whisper_model() -> str:
     return ""
 
 
-WHISPER_MODEL = _find_whisper_model()
+_whisper_model = _find_whisper_model()
+
+
+def whisper_model() -> str:
+    """The active whisper model path: env/settings, seeded at startup."""
+    return _whisper_model
+
+
+def set_whisper_model(value: str) -> None:
+    """Switch the active model; empty falls back to env/auto-detection."""
+    global _whisper_model
+    _whisper_model = (value or "").strip() or _find_whisper_model()
+
+
+def list_whisper_models() -> list[str]:
+    """GGML models in the usual locations, for the settings dropdown."""
+    dirs = [
+        Path.home() / "opt/whisper.cpp/models",
+        Path.home() / "models/stt",
+    ]
+    found: list[str] = []
+    seen: set[str] = set()
+    for d in dirs:
+        if not d.is_dir():
+            continue
+        for p in sorted(d.glob("*.bin")):
+            s = str(p)
+            if s not in seen:
+                seen.add(s)
+                found.append(s)
+    current = whisper_model()
+    if current and current not in seen:
+        found.insert(0, current)
+    return found
+
+
+WHISPER_MODEL = _whisper_model
 FFMPEG_BIN = os.getenv("FFMPEG_BIN") or shutil.which("ffmpeg")
 WHISPER_SERVER_BIN = os.getenv("WHISPER_SERVER_BIN") or shutil.which("whisper-server")
 WHISPER_SERVER_PORT = int(os.getenv("WHISPER_SERVER_PORT", "8177"))
 
 
 def stt_available() -> bool:
-    return bool(WHISPER_BIN and WHISPER_MODEL and FFMPEG_BIN)
+    return bool(WHISPER_BIN and whisper_model() and FFMPEG_BIN)
 
 
 def whisper_streaming_available() -> bool:
     """whisper-server (whisper.cpp) for accurate streaming dictation."""
-    return bool(WHISPER_SERVER_BIN and WHISPER_MODEL)
+    return bool(WHISPER_SERVER_BIN and whisper_model())
 
 
 def _find_tts_model() -> str:

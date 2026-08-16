@@ -24,9 +24,9 @@ import httpx
 import numpy as np
 
 from agent_server.config import (
-    WHISPER_MODEL,
     WHISPER_SERVER_BIN,
     WHISPER_SERVER_PORT,
+    whisper_model,
     whisper_streaming_available,
 )
 
@@ -86,7 +86,7 @@ class WhisperServer:
             raise WhisperStreamingError("whisper-server is not installed")
         self.proc = await asyncio.create_subprocess_exec(
             WHISPER_SERVER_BIN,
-            "-m", WHISPER_MODEL,
+            "-m", whisper_model(),
             "--host", "127.0.0.1",
             "--port", str(WHISPER_SERVER_PORT),
             "-l", "en",
@@ -173,6 +173,11 @@ async def shutdown() -> None:
     if _server is not None:
         await _server.shutdown()
         _server = None
+
+
+async def restart() -> None:
+    """Stop the server so the next session starts with the current model."""
+    await shutdown()
 
 
 class WhisperSession:

@@ -10,7 +10,7 @@ import re
 import tempfile
 from pathlib import Path
 
-from agent_server.config import FFMPEG_BIN, WHISPER_BIN, WHISPER_MODEL, stt_available
+from agent_server.config import FFMPEG_BIN, WHISPER_BIN, stt_available, whisper_model
 
 TRANSCODE_TIMEOUT = 60
 TRANSCRIBE_TIMEOUT = 300
@@ -34,7 +34,8 @@ def availability() -> dict:
     return {
         "available": stt_available(),
         "whisper": WHISPER_BIN or "",
-        "model": Path(WHISPER_MODEL).name if WHISPER_MODEL else "",
+        "model": Path(whisper_model()).name if whisper_model() else "",
+        "model_path": whisper_model(),
         "ffmpeg": FFMPEG_BIN or "",
     }
 
@@ -43,7 +44,7 @@ async def transcribe(audio: bytes, suffix: str = ".webm") -> str:
     if not stt_available():
         missing = [
             n for n, v in
-            (("whisper-cli", WHISPER_BIN), ("whisper model", WHISPER_MODEL), ("ffmpeg", FFMPEG_BIN))
+            (("whisper-cli", WHISPER_BIN), ("whisper model", whisper_model()), ("ffmpeg", FFMPEG_BIN))
             if not v
         ]
         raise STTError(f"speech-to-text unavailable, missing: {', '.join(missing)}")
@@ -67,7 +68,7 @@ async def transcribe(audio: bytes, suffix: str = ".webm") -> str:
             return ""
 
         stdout = await _run(
-            [str(WHISPER_BIN), "-m", str(WHISPER_MODEL), "-f", str(wav),
+            [str(WHISPER_BIN), "-m", str(whisper_model()), "-f", str(wav),
              "--no-timestamps", "--no-prints", "--language", "en",
              "--threads", str(min(8, _cpu_count()))],
             TRANSCRIBE_TIMEOUT, "whisper",

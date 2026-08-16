@@ -187,6 +187,15 @@ async function stopCodeAgent(button) {
                 </label>
             </span>
         </label>
+        <label class="field-label">Speech model
+            <span class="control-row">
+                <select name="stt-model" onchange="saveSttModel(this.value)">
+                    {% for m in stt_models %}
+                    <option value="{{ m.path }}" {% if m.path == stt.model_path %}selected{% endif %}>{{ m.name }}</option>
+                    {% endfor %}
+                </select>
+            </span>
+        </label>
         <p class="hint" style="margin-top:6px">
             Dictation:
             {% if stt.available %}
@@ -416,6 +425,15 @@ function applyCustomTheme(hex) {
     document.querySelectorAll('.theme-swatch').forEach((b) => {
         b.setAttribute('aria-pressed', b.classList.contains('theme-custom') ? 'true' : 'false');
     });
+}
+
+async function saveSttModel(path) {
+    const form = new FormData();
+    form.append('model', path);
+    const resp = await fetch('/_settings/stt-model', { method: 'POST', body: form });
+    if (!resp.ok) return;
+    const data = await resp.json();
+    if (!data.ok) appendNotice('error', data.detail || 'Could not switch the speech model');
 }
 
 /* Judging a voice from its name is hopeless, so play a line with the current

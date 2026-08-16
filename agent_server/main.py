@@ -116,6 +116,9 @@ async def lifespan(app: FastAPI):
 
     set_theme((await db.get_setting("theme")) or "green")
     set_custom_color((await db.get_setting("theme_custom")) or "")
+    from agent_server import config
+
+    config.set_whisper_model((await db.get_setting("whisper_model")) or "")
     reaper = asyncio.create_task(_reap_browsers())
     whisper_warmup = asyncio.create_task(_warm_whisper())
 

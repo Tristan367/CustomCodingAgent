@@ -100,3 +100,20 @@ async def save_theme(request: Request):
     await db.set_setting("theme", theme)
     set_theme(theme)
     return {"ok": True}
+
+
+@router.post("/_settings/stt-model")
+async def save_stt_model(request: Request):
+    """Switch the whisper model; the streaming server restarts with it."""
+    from pathlib import Path
+
+    from agent_server import config, whisper_streaming
+
+    form = await request.form()
+    model = str(form.get("model", "")).strip()
+    if not model or not Path(model).expanduser().is_file():
+        return {"ok": False, "detail": "that model file does not exist"}
+    await db.set_setting("whisper_model", model)
+    config.set_whisper_model(model)
+    await whisper_streaming.restart()
+    return {"ok": True}

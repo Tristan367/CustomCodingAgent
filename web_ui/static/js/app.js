@@ -176,6 +176,7 @@ document.addEventListener('DOMContentLoaded', () => {
 /* Home-page wiring. Separate from initSession because the two pages never
    coexist, and because this must re-run after an htmx swap replaces the form. */
 function initHomePage() {
+  MicTest.init();
   const select = document.getElementById('model-select');
   if (!select || select.dataset.bound) return;
   select.dataset.bound = '1';
@@ -2001,6 +2002,26 @@ function button(label, className, onClick) {
 
 const MIC_TITLE = 'Dictate \u2014 click to toggle, or hold Right Ctrl to talk';
 
+/* Persisted microphone preferences: input gain (dB) and the chosen input
+ * device. Both live in localStorage because they are browser/device concerns --
+ * a deviceId is per-browser and per-origin, so a server round-trip would not
+ * round-trip meaningfully across machines, and gain is applied by a Web Audio
+ * GainNode on this side. */
+function micGainDb() {
+  const v = localStorage.getItem('micGain');
+  return v === null ? 0 : Number(v) || 0;
+}
+function saveMicGain(db) { localStorage.setItem('micGain', String(db)); }
+function micDeviceId() { return localStorage.getItem('micDeviceId') || ''; }
+function saveMicDeviceId(id) {
+  if (id) localStorage.setItem('micDeviceId', id);
+  else localStorage.removeItem('micDeviceId');
+}
+function withMicDevice(audio) {
+  const deviceId = micDeviceId();
+  return deviceId ? { ...audio, deviceId: { exact: deviceId } } : audio;
+}
+
 const Dictation = {
   recording: false,
   starting: false,      // set synchronously, before any await
@@ -2009,9 +2030,18 @@ const Dictation = {
   chunks: [],
   streamRef: null,
   audioCtx: null,
+  gain: null,
+  dest: null,
+  src: null,
+  streamCtx: null,     // 16 kHz context used by the streaming worklet
+  workletNode: null,
+  ws: null,
+  partial: '',
+  finalText: '',
   analyser: null,
   rafId: null,
   meterGeneration: 0,   // stale animation loops check this and exit
+  meterLevel: 0,       // smoothed 0..1, so the bars don't jitter frame to frame
   transcribeTimer: null,
   els: {},
 
@@ -2020,6 +2050,10 @@ const Dictation = {
     this.els.meter = document.getElementById('mic-meter');
     this.els.status = document.getElementById('stt-status');
     this.els.elapsed = document.getElementById('stt-elapsed');
+    this.els.live = document.getElementById('dictation-live');
+    // Streaming dictation needs the sherpa-onnx model server-side; the live
+    // overlay is only rendered when it is available.
+    this.streamingAvailable = !!this.els.live;
     if (!this.els.button || this.els.button.dataset.bound) return;
     this.els.button.dataset.bound = '1';
     this.els.button.addEventListener('click', () => this.toggle());
@@ -2061,10 +2095,18 @@ const Dictation = {
     }
     this.starting = true;
 
+    if (this.streamingAvailable) {
+      await this.startStreaming();
+      this.starting = false;
+      return;
+    }
+
     let stream;
     try {
       stream = await navigator.mediaDevices.getUserMedia({
-        audio: { echoCancellation: true, noiseSuppression: true, channelCount: 1 },
+        // autoGainControl is off: browser AGC boosts silence up to a target
+        // level, which is why quiet pauses read as loud on the meter.
+        audio: withMicDevice({ echoCancellation: true, noiseSuppression: true, autoGainControl: false, channelCount: 1 }),
       });
     } catch (err) {
       this.starting = false;
@@ -2081,9 +2123,10 @@ const Dictation = {
     try {
       this.streamRef = stream;
       this.chunks = [];
+      this.ensureAudioGraph();
       const mime = ['audio/webm;codecs=opus', 'audio/webm', 'audio/ogg;codecs=opus', 'audio/mp4']
         .find((t) => MediaRecorder.isTypeSupported(t)) || '';
-      this.recorder = new MediaRecorder(stream, mime ? { mimeType: mime } : undefined);
+      this.recorder = new MediaRecorder(this.dest.stream, mime ? { mimeType: mime } : undefined);
       this.recorder.ondataavailable = (e) => { if (e.data.size) this.chunks.push(e.data); };
       this.recorder.onerror = () => { this.teardown(); };
       this.recorder.start(250);
@@ -2101,7 +2144,14 @@ const Dictation = {
 
   async stop() {
     this.starting = false;
-    if (!this.recording || !this.recorder) {
+    if (!this.recording) {
+      this.teardown();
+      return '';
+    }
+    if (this.streamingAvailable && this.ws) {
+      return await this.stopStreaming();
+    }
+    if (!this.recorder) {
       this.teardown();
       return '';
     }
@@ -2147,6 +2197,132 @@ const Dictation = {
     return text;
   },
 
+  /* ── Streaming dictation (sherpa-onnx) ─────────────────────────────────── */
+
+  async loadWorklet() {
+    if (this._workletReady) return true;
+    if (!this.streamCtx || !this.streamCtx.audioWorklet) return false;
+    try {
+      await this.streamCtx.audioWorklet.addModule('/static/js/stt-worklet.js');
+      this._workletReady = true;
+      return true;
+    } catch (_) { return false; }
+  },
+
+  async startStreaming() {
+    let stream;
+    try {
+      stream = await navigator.mediaDevices.getUserMedia({
+        audio: withMicDevice({ echoCancellation: true, noiseSuppression: true, autoGainControl: false, channelCount: 1 }),
+      });
+    } catch (err) {
+      appendNotice('error', `Microphone unavailable: ${err.message}`);
+      return;
+    }
+    // A toggle-off may have landed while getUserMedia was in flight.
+    if (!this.starting) {
+      stream.getTracks().forEach((t) => t.stop());
+      return;
+    }
+
+    this.streamRef = stream;
+    this.partial = '';
+
+    try {
+      // A 16 kHz context: Chrome resamples the input, so the worklet sees
+      // exactly the PCM the recognizer wants.
+      this.streamCtx = new (window.AudioContext || window.webkitAudioContext)({ sampleRate: 16000 });
+      const src = this.streamCtx.createMediaStreamSource(stream);
+      this.gain = this.streamCtx.createGain();
+      this.gain.gain.value = Math.pow(10, micGainDb() / 20);
+      src.connect(this.gain);
+
+      if (!(await this.loadWorklet())) throw new Error('AudioWorklet is not supported');
+      this.workletNode = new AudioWorkletNode(this.streamCtx, 'stt-capture');
+      this.workletNode.port.onmessage = (e) => {
+        if (this.ws && this.ws.readyState === 1) this.ws.send(e.data);
+      };
+      this.gain.connect(this.workletNode);
+
+      this.ws = new WebSocket((location.protocol === 'https:' ? 'wss://' : 'ws://') + location.host + '/api/stt/stream');
+      this.ws.binaryType = 'arraybuffer';
+      this.ws.onmessage = (e) => this.onStreamMessage(e);
+      this.ws.onclose = () => { this.ws = null; };
+      this.ws.onerror = () => { appendNotice('error', 'Streaming dictation connection failed.'); this.teardown(); };
+    } catch (err) {
+      appendNotice('error', `Could not start dictation: ${err.message}`);
+      this.teardown();
+      return;
+    }
+
+    this.recording = true;
+    updateComposerButtons();
+    this.els.button.classList.add('recording');
+    this.audioCtx = this.streamCtx;
+    this.startMeter();
+    this.renderPartial();
+  },
+
+  async stopStreaming() {
+    this.recording = false;
+    updateComposerButtons();
+    this.els.button.classList.remove('recording');
+    this.els.button.classList.add('transcribing');
+    this.stopMeter();
+    this.showTranscribing();
+
+    // Ask the server to flush its tail of silence and return the final text.
+    const final = await new Promise((resolve) => {
+      const ws = this.ws;
+      if (!ws || ws.readyState !== 1) { resolve(this.partial); return; }
+      const timeout = setTimeout(() => resolve(this.partial), 8000);
+      const prev = ws.onmessage;
+      ws.onmessage = (e) => {
+        let data;
+        try { data = JSON.parse(e.data); } catch (_) { return; }
+        if (data.partial === false) {
+          clearTimeout(timeout);
+          ws.onmessage = prev;
+          resolve((data.text || '').trim());
+        }
+      };
+      ws.send('end');
+    });
+
+    this.teardown();
+    if (!final) flashButton(this.els.button, 'no speech detected');
+    return final;
+  },
+
+  onStreamMessage(e) {
+    let data;
+    try { data = JSON.parse(e.data); } catch (_) { return; }
+    if (data.error) { appendNotice('error', data.error); this.teardown(); return; }
+    this.partial = (data.text || '').trim();
+    this.renderPartial();
+  },
+
+  renderPartial() {
+    const live = this.els.live;
+    if (!live) return;
+    live.textContent = '';
+    if (!this.partial) { live.hidden = true; return; }
+    live.hidden = false;
+    // The trailing two words stay provisional (shimmering) until more context
+    // settles them, mirroring what a streaming recognizer is actually doing.
+    const words = this.partial.split(/\s+/);
+    const cut = Math.max(0, words.length - 2);
+    const solid = words.slice(0, cut);
+    const shimmer = words.slice(cut);
+    if (solid.length) live.appendChild(document.createTextNode(solid.join(' ') + ' '));
+    if (shimmer.length) {
+      const span = document.createElement('span');
+      span.className = 'shimmer';
+      span.textContent = shimmer.join(' ');
+      live.appendChild(span);
+    }
+  },
+
   /* Transcription is the one stretch with no feedback: the recorder has stopped,
      the meter is gone, and whisper can take seconds on a long take. Say so, and
      count, so a slow one reads as slow rather than as nothing happening. */
@@ -2185,13 +2361,48 @@ const Dictation = {
     this.releaseStream();
     this.recorder = null;
     this.chunks = [];
+    if (this.els.live) {
+      this.els.live.hidden = true;
+      this.els.live.textContent = '';
+    }
     if (this.els.button) {
       this.els.button.classList.remove('recording', 'transcribing');
       this.els.button.title = MIC_TITLE;
     }
   },
 
+  /* Reuse one AudioContext and route the mic through a GainNode so the
+   * persisted gain affects what is recorded, not just the meter. */
+  ensureAudioGraph() {
+    if (!this.audioCtx || this.audioCtx.state === 'closed') {
+      this.audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+    }
+    if (this.audioCtx.state === 'suspended') this.audioCtx.resume();
+    this.src = this.audioCtx.createMediaStreamSource(this.streamRef);
+    this.gain = this.audioCtx.createGain();
+    this.gain.gain.value = Math.pow(10, micGainDb() / 20);
+    this.dest = this.audioCtx.createMediaStreamDestination();
+    this.src.connect(this.gain);
+    this.gain.connect(this.dest);
+  },
+
   releaseStream() {
+    if (this.ws) { try { this.ws.close(); } catch (_) {} }
+    this.ws = null;
+    if (this.workletNode) { try { this.workletNode.disconnect(); } catch (_) {} }
+    this.workletNode = null;
+    for (const node of [this.src, this.gain, this.dest]) {
+      if (node) { try { node.disconnect(); } catch (_) {} }
+    }
+    this.src = null;
+    this.gain = null;
+    this.dest = null;
+    if (this.streamCtx) {
+      const ctx = this.streamCtx;
+      try { ctx.close(); } catch (_) {}
+      if (this.audioCtx === ctx) this.audioCtx = null;
+    }
+    this.streamCtx = null;
     if (this.streamRef) {
       this.streamRef.getTracks().forEach((t) => t.stop());
       this.streamRef = null;
@@ -2199,21 +2410,17 @@ const Dictation = {
   },
 
   startMeter() {
-    if (!this.els.meter || !this.streamRef) return;
+    if (!this.els.meter || !this.gain) return;
     this.stopMeter();
+    this.meterLevel = 0;
     const generation = ++this.meterGeneration;
 
     try {
-      // One context, reused. Chrome caps concurrent AudioContexts at a handful
-      // and a leaked one is never reclaimed.
-      if (!this.audioCtx || this.audioCtx.state === 'closed') {
-        this.audioCtx = new (window.AudioContext || window.webkitAudioContext)();
-      }
-      if (this.audioCtx.state === 'suspended') this.audioCtx.resume();
-      const source = this.audioCtx.createMediaStreamSource(this.streamRef);
       this.analyser = this.audioCtx.createAnalyser();
       this.analyser.fftSize = 512;
-      source.connect(this.analyser);
+      // Tap the meter off the gain node, so it shows the same signal the
+      // recorder captures (gain already applied).
+      this.gain.connect(this.analyser);
     } catch (err) {
       this.analyser = null;
       return;   // no meter is fine; recording still works
@@ -2229,7 +2436,13 @@ const Dictation = {
       this.analyser.getByteTimeDomainData(data);
       let sum = 0;
       for (const v of data) sum += (v - 128) ** 2;
-      const level = Math.min(1, Math.sqrt(sum / data.length) / 34);
+      const rms = Math.sqrt(sum / data.length);
+      // Map to dB (loudness is logarithmic) and smooth, so it reads as level
+      // rather than as a jittery per-frame spike.
+      const db = rms > 0.5 ? 20 * Math.log10(rms / 128) : -60;
+      const target = Math.max(0, Math.min(1, (db + 45) / 45));
+      this.meterLevel = this.meterLevel * 0.7 + target * 0.3;
+      const level = this.meterLevel;
       bars.forEach((bar, i) => {
         const bias = 1 - Math.abs(i - (bars.length - 1) / 2) / bars.length;
         bar.style.height = `${Math.max(12, Math.min(100, level * 150 * bias))}%`;
@@ -2248,6 +2461,217 @@ const Dictation = {
       this.els.meter.hidden = true;
       this.els.meter.querySelectorAll('.mic-bar').forEach((b) => { b.style.height = ''; });
     }
+  },
+};
+
+/* ── Microphone test (home page) ───────────────────────────────────────────── */
+
+/* Lets you hear exactly what the mic sends into dictation, and trim the input
+ * gain. It captures the raw microphone (no browser echo/noise/auto-gain), runs
+ * it through a software GainNode, shows a smoothed dB meter, and can record a
+ * short clip for playback. The browser cannot set hardware gain, but a GainNode
+ * changes the recorded signal, which is what matters here. */
+const MicTest = {
+  active: false,
+  recording: false,
+  level: 0,
+  stream: null,
+  ctx: null,
+  gain: null,
+  analyser: null,
+  dest: null,
+  recorder: null,
+  chunks: [],
+  blob: null,
+  rafId: null,
+  autoStop: null,
+  els: {},
+
+  init() {
+    this.release();
+    const toggle = document.getElementById('mic-test-toggle');
+    if (!toggle) return;
+    this.els.toggle = toggle;
+    this.els.meter = document.getElementById('mic-test-meter');
+    this.els.gain = document.getElementById('mic-test-gain');
+    this.els.gainOut = document.getElementById('mic-test-gain-out');
+    this.els.record = document.getElementById('mic-test-record');
+    this.els.play = document.getElementById('mic-test-play');
+    this.els.audio = document.getElementById('mic-test-audio');
+    this.els.device = document.getElementById('mic-test-device');
+
+    if (this.els.meter) {
+      this.els.meter.textContent = '';
+      for (let i = 0; i < 18; i++) this.els.meter.appendChild(el('span', 'mic-test-bar'));
+    }
+    toggle.addEventListener('click', () => (this.active ? this.stop() : this.start()));
+    if (this.els.gain) {
+      // The gain is global (dictation uses it too), so load and persist it.
+      this.els.gain.value = String(micGainDb());
+      this.els.gain.addEventListener('input', () => {
+        saveMicGain(Number(this.els.gain.value));
+        this.setGain(Number(this.els.gain.value));
+      });
+      this.setGain(Number(this.els.gain.value));
+    }
+    if (this.els.record) this.els.record.addEventListener('click', () => this.toggleRecord());
+    if (this.els.play) this.els.play.addEventListener('click', () => this.play());
+    this.refreshDevices();
+    if (this.els.device) this.els.device.addEventListener('change', () => this.selectDevice());
+  },
+
+  async refreshDevices() {
+    if (!this.els.device) return;
+    let devices = [];
+    try {
+      devices = (await navigator.mediaDevices.enumerateDevices())
+        .filter((d) => d.kind === 'audioinput');
+    } catch (_) { /* no list is fine; the default device still works */ }
+    const current = micDeviceId();
+    this.els.device.textContent = '';
+    this.els.device.appendChild(new Option('Default microphone', ''));
+    for (const d of devices) {
+      const opt = new Option(d.label || `Microphone ${d.deviceId.slice(0, 8)}`, d.deviceId);
+      opt.selected = d.deviceId === current;
+      this.els.device.appendChild(opt);
+    }
+  },
+
+  async selectDevice() {
+    saveMicDeviceId(this.els.device ? this.els.device.value : '');
+    // Restart the capture so the newly chosen device takes effect immediately.
+    if (this.active) {
+      this.stop();
+      await this.start();
+    }
+  },
+
+  release() {
+    this.active = false;
+    this.recording = false;
+    if (this.rafId) cancelAnimationFrame(this.rafId);
+    this.rafId = null;
+    if (this.autoStop) clearTimeout(this.autoStop);
+    this.autoStop = null;
+    if (this.recorder && this.recorder.state !== 'inactive') { try { this.recorder.stop(); } catch (_) {} }
+    this.recorder = null;
+    if (this.stream) this.stream.getTracks().forEach((t) => t.stop());
+    this.stream = null;
+    if (this.ctx) { try { this.ctx.close(); } catch (_) {} }
+    this.ctx = this.gain = this.analyser = this.dest = null;
+    this.chunks = [];
+    this.blob = null;
+  },
+
+  async start() {
+    if (this.active) return;
+    if (!navigator.mediaDevices || !window.MediaRecorder) {
+      appendNotice('error', 'This browser cannot record audio.');
+      return;
+    }
+    let stream;
+    try {
+      // Raw: no echo/noise suppression and, crucially, no auto-gain, so the
+      // meter and the recording reflect what the microphone actually hears.
+      stream = await navigator.mediaDevices.getUserMedia({
+        audio: withMicDevice({ echoCancellation: false, noiseSuppression: false, autoGainControl: false, channelCount: 1 }),
+      });
+    } catch (err) {
+      appendNotice('error', `Microphone unavailable: ${err.message}`);
+      return;
+    }
+    this.active = true;
+    this.stream = stream;
+    this.ctx = new (window.AudioContext || window.webkitAudioContext)();
+    this.src = this.ctx.createMediaStreamSource(stream);
+    this.gain = this.ctx.createGain();
+    this.analyser = this.ctx.createAnalyser();
+    this.analyser.fftSize = 1024;
+    this.analyser.smoothingTimeConstant = 0.6;
+    this.dest = this.ctx.createMediaStreamDestination();
+    this.src.connect(this.gain);
+    this.gain.connect(this.analyser);
+    this.gain.connect(this.dest);
+    this.setGain(this.els.gain ? Number(this.els.gain.value) : 0);
+
+    this.els.meter.hidden = false;
+    this.els.record.hidden = false;
+    this.els.toggle.textContent = 'Stop mic test';
+    this.meterLoop();
+  },
+
+  stop() {
+    this.release();
+    if (this.els.meter) this.els.meter.hidden = true;
+    if (this.els.record) { this.els.record.hidden = true; this.els.record.textContent = 'Record'; }
+    if (this.els.play) this.els.play.hidden = true;
+    if (this.els.toggle) this.els.toggle.textContent = 'Start mic test';
+    if (this.els.audio) this.els.audio.removeAttribute('src');
+  },
+
+  setGain(db) {
+    const v = Number(db);
+    if (this.els.gainOut) this.els.gainOut.textContent = v > 0 ? `+${v}` : String(v);
+    if (this.gain) this.gain.gain.value = Math.pow(10, v / 20);
+  },
+
+  /* dB-scaled and exponentially smoothed, so the bars track loudness the way
+   * the ear does instead of jittering frame to frame like a raw RMS readout. */
+  meterLoop() {
+    const bars = Array.from(this.els.meter.querySelectorAll('.mic-test-bar'));
+    const data = new Uint8Array(this.analyser.frequencyBinCount);
+    const tick = () => {
+      if (!this.active || !this.analyser) return;
+      this.analyser.getByteTimeDomainData(data);
+      let sum = 0;
+      for (const v of data) sum += (v - 128) ** 2;
+      const rms = Math.sqrt(sum / data.length);
+      const db = rms > 0.5 ? 20 * Math.log10(rms / 128) : -60;
+      const target = Math.max(0, Math.min(1, (db + 60) / 60));
+      this.level = this.level * 0.75 + target * 0.25;
+      bars.forEach((bar, i) => {
+        const bias = 1 - Math.abs(i - (bars.length - 1) / 2) / bars.length;
+        bar.style.height = `${Math.max(4, this.level * 100 * (0.4 + 0.6 * bias))}%`;
+      });
+      this.rafId = requestAnimationFrame(tick);
+    };
+    this.rafId = requestAnimationFrame(tick);
+  },
+
+  toggleRecord() {
+    if (this.recording) this.stopRecording();
+    else this.startRecording();
+  },
+
+  startRecording() {
+    if (!this.active || this.recording) return;
+    const mime = ['audio/webm;codecs=opus', 'audio/webm', 'audio/ogg;codecs=opus', 'audio/mp4']
+      .find((t) => MediaRecorder.isTypeSupported(t)) || '';
+    this.recorder = new MediaRecorder(this.dest.stream, mime ? { mimeType: mime } : undefined);
+    this.chunks = [];
+    this.recorder.ondataavailable = (e) => { if (e.data.size) this.chunks.push(e.data); };
+    this.recorder.onstop = () => {
+      this.blob = new Blob(this.chunks, { type: this.recorder.mimeType });
+      if (this.els.audio) this.els.audio.src = URL.createObjectURL(this.blob);
+      if (this.els.play) this.els.play.hidden = false;
+    };
+    this.recorder.start(250);
+    this.recording = true;
+    this.els.record.textContent = 'Stop & save';
+    this.els.play.hidden = true;
+    this.autoStop = setTimeout(() => { if (this.recording) this.stopRecording(); }, 10000);
+  },
+
+  stopRecording() {
+    if (this.recorder && this.recorder.state !== 'inactive') this.recorder.stop();
+    this.recording = false;
+    if (this.autoStop) clearTimeout(this.autoStop);
+    this.autoStop = null;
+    if (this.els.record) this.els.record.textContent = 'Record';
+  },
+
+  play() {
+    if (this.els.audio && this.els.audio.src) this.els.audio.play();
   },
 };
 

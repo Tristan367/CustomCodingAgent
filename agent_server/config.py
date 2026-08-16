@@ -325,6 +325,27 @@ def stt_available() -> bool:
     return bool(WHISPER_BIN and WHISPER_MODEL and FFMPEG_BIN)
 
 
+def _find_sherpa_model_dir() -> str:
+    """Streaming ASR model (sherpa-onnx zipformer). Only the directory matters;
+    the recognizer picks encoder/decoder/joiner/tokens out of it at load time."""
+    if os.getenv("SHERPA_MODEL_DIR"):
+        return os.getenv("SHERPA_MODEL_DIR", "")
+    candidates = [
+        Path.home() / "models/stt/sherpa-onnx-streaming-zipformer-en-2023-06-26",
+    ]
+    for c in candidates:
+        if (c / "tokens.txt").exists():
+            return str(c)
+    return ""
+
+
+SHERPA_MODEL_DIR = _find_sherpa_model_dir()
+
+
+def streaming_stt_available() -> bool:
+    return bool(SHERPA_MODEL_DIR and (Path(SHERPA_MODEL_DIR) / "tokens.txt").exists())
+
+
 def _find_tts_model() -> str:
     """Kokoro weights, full precision by preference.
 

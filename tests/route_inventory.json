@@ -595,6 +595,13 @@
     "name": "stt_status"
   },
   {
+    "path": "/api/stt/stream",
+    "methods": [
+      "WEBSOCKET"
+    ],
+    "name": "stt_stream"
+  },
+  {
     "path": "/api/tts/plan",
     "methods": [
       "POST"

@@ -26,6 +26,7 @@ from agent_server.config import (
     REASONING_EFFORTS,
     THRESHOLD_STEPS,
     dynamic_deepseek_models,
+    streaming_stt_available,
     stt_available,
 )
 from agent_server.conversation import (
@@ -274,6 +275,7 @@ async def _session_context(session: dict) -> dict:
         "auto_approve": bool(session.get("bash_auto_approve"))
         or agent.runtime_auto_approve(session["id"]),
         "stt_enabled": stt_available(),
+        "stt_streaming": streaming_stt_available(),
         "pending": await _pending_prompt(session, messages),
         "sound_enabled": await _sound_enabled(),
         "uploaded_sounds": _list_uploaded_sounds(),

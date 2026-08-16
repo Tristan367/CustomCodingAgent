@@ -205,6 +205,31 @@ async function stopCodeAgent(button) {
     </section>
 
     <section class="panel">
+        <h2>Microphone</h2>
+        <div class="mic-test">
+            <div class="mic-test-row">
+                <button type="button" id="mic-test-toggle" class="btn-secondary">Start mic test</button>
+                <label class="field-label">Input gain
+                    <span class="control-row">
+                        <input type="range" id="mic-test-gain" min="-18" max="18" step="1" value="0">
+                        <span class="readout"><output id="mic-test-gain-out">0</output> dB</span>
+                    </span>
+                </label>
+                <label class="field-label">Microphone
+                    <select id="mic-test-device"></select>
+                </label>
+            </div>
+            <div class="mic-test-meter" id="mic-test-meter" hidden aria-hidden="true"></div>
+            <div class="mic-test-row">
+                <button type="button" id="mic-test-record" class="btn-secondary" hidden>Record</button>
+                <button type="button" id="mic-test-play" class="btn-secondary" hidden>Play back</button>
+                <span class="hint">Records the mic through the gain above (stops at ~10s), so you can hear exactly what dictation will get.</span>
+            </div>
+            <audio id="mic-test-audio" hidden></audio>
+        </div>
+    </section>
+
+    <section class="panel">
         <h2>Speech</h2>
         {% if tts.available %}
         <div class="form-row settings-row">

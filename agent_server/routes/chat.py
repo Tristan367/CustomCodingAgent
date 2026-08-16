@@ -4,10 +4,21 @@ import uuid
 from collections.abc import AsyncIterator
 from pathlib import Path
 
-from fastapi import APIRouter, Body, File, Form, HTTPException, Request, UploadFile
+import numpy as np
+from fastapi import (
+    APIRouter,
+    Body,
+    File,
+    Form,
+    HTTPException,
+    Request,
+    UploadFile,
+    WebSocket,
+    WebSocketDisconnect,
+)
 from fastapi.responses import FileResponse, JSONResponse, StreamingResponse
 
-from agent_server import agent, images, permissions
+from agent_server import agent, images, permissions, streaming_stt
 from agent_server import database as db
 from agent_server import stt as stt_service
 from agent_server.compaction import compact_session_events, should_offer_compaction
@@ -428,7 +439,9 @@ async def set_compact_threshold(
 
 @router.get("/stt/status")
 async def stt_status():
-    return stt_service.availability()
+    status = stt_service.availability()
+    status["streaming"] = streaming_stt.streaming_stt_available()
+    return status
 
 
 @router.post("/stt")
@@ -440,6 +453,43 @@ async def transcribe(audio: UploadFile = File(...)):
     except stt_service.STTError as e:
         raise HTTPException(400, str(e)) from e
     return {"text": text}
+
+
+@router.websocket("/stt/stream")
+async def stt_stream(websocket: WebSocket):
+    """Live dictation: the browser sends 16 kHz mono float32 PCM and receives
+    partial hypotheses as the speech is decoded, then a final result when it
+    sends a text message (or disconnects)."""
+    await websocket.accept()
+    try:
+        recognizer = streaming_stt.get_recognizer()
+    except streaming_stt.StreamingSTTError as e:
+        await websocket.send_json({"error": str(e)})
+        await websocket.close()
+        return
+
+    session = streaming_stt.StreamingSession(recognizer)
+    try:
+        should_finalize = True
+        while True:
+            message = await websocket.receive()
+            if message["type"] == "websocket.disconnect":
+                should_finalize = False
+                break
+            if message.get("text") is not None:
+                break  # the client asked to finalize the utterance
+            if message.get("bytes") is not None:
+                samples = np.frombuffer(message["bytes"], dtype=np.float32)
+                if samples.size:
+                    partial = session.accept(np.ascontiguousarray(samples))
+                    await websocket.send_json({"text": partial, "partial": True})
+        if should_finalize:
+            final = session.finalize()
+            await websocket.send_json({"text": final, "partial": False})
+    except WebSocketDisconnect:
+        pass
+    finally:
+        session.reset()
 
 
 @router.get("/files/image")

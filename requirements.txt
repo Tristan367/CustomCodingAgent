@@ -12,6 +12,9 @@ playwright>=1.45.0
 # in-app editor formatting
 black>=24.0.0
 
+# streaming speech-to-text (sherpa-onnx zipformer)
+sherpa-onnx>=1.12.0
+
 # dev
 pytest>=8.0.0
 pytest-asyncio>=0.24.0

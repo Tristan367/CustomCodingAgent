@@ -19,6 +19,9 @@
     </div>
 
     <div id="chat-input-area">
+        {% if stt_streaming %}
+        <div id="dictation-live" class="dictation-live" hidden aria-live="polite"></div>
+        {% endif %}
         <form id="chat-form" autocomplete="off">
             <div id="attachments" class="attachments" hidden></div>
             <div class="composer">

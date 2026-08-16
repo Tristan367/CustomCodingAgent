@@ -173,7 +173,7 @@ async function stopCodeAgent(button) {
         </div>
         <label class="field-label">Color theme
             <span class="control-row theme-swatches">
-                {% for name, color in [('green', '#8ea24f'), ('red', '#c06a5f'), ('gray', '#9aa4a0')] %}
+                {% for name, color in [('green', '#8ea24f'), ('red', '#c06a5f'), ('blue', '#7d9bb3'), ('gray', '#a4aca9')] %}
                 <button type="button" class="theme-swatch" style="background:{{ color }}"
                         data-theme="{{ name }}" title="{{ name | title }}"
                         {% if settings.get('theme', 'green') == name %}aria-pressed="true"{% endif %}

@@ -85,10 +85,10 @@ async def save_expand_setting(request: Request):
 
 @router.post("/_settings/theme")
 async def save_theme(request: Request):
-    """The accent colour family: green (default), red, or gray."""
+    """The accent colour family: green (default), red, blue, or gray."""
     form = await request.form()
     theme = str(form.get("theme", "")).strip()
-    if theme not in ("green", "red", "gray"):
+    if theme not in ("green", "red", "blue", "gray"):
         return {"ok": False}
     await db.set_setting("theme", theme)
     from agent_server.templating import set_theme

@@ -3769,11 +3769,13 @@ const FileEditor = (() => {
   let bodyEl, highlightEl, textareaEl, statusEl, pathEl, wrapBtn, saveBtn, formatBtn, menuBtn, menu, backBtn, fwdBtn, splitBtn;
 
   function mountEditor() {
-    // Lives inside the session view, between the chat history and the composer,
-    // so the session bar above and the composer below stay visible around it.
+    // Lives inside the session view, above the chat history: the session bar,
+    // then the editor, then the chat, then the composer. In full height the chat
+    // is hidden and the editor fills the column; in split view both show, editor
+    // on the top half.
     const view = document.getElementById('session-view');
-    const inputArea = document.getElementById('chat-input-area');
-    if (view && inputArea) view.insertBefore(dlg, inputArea);
+    const chat = view && view.querySelector('.chat-region');
+    if (view && chat) view.insertBefore(dlg, chat);
     else document.body.appendChild(dlg);
   }
 
@@ -4149,11 +4151,15 @@ const FileEditor = (() => {
   /* ── Session switch: suspend / restore ─────────────────────────────────── */
 
   // Snapshot the current editor into its session's memory and hide it, so a tab
-  // switch never shows a stale editor. Unsaved edits are kept in memory.
+  // switch never shows a stale editor. Unsaved edits are kept in memory. If the
+  // editor is already hidden there is nothing to snapshot -- and s.sessionId may
+  // still point at an older session, so touching its memory here would mark it
+  // closed and lose the editor the user expects on the way back.
   function suspend() {
     if (!dlg || !s.sessionId) return;
+    if (!dlg.classList.contains('open')) return;
     const m = mem(s.sessionId);
-    m.open = dlg.classList.contains('open');
+    m.open = true;
     m.path = s.path;
     m.savedContent = s.content;
     m.buffer = textareaEl.value;

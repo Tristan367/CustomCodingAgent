@@ -110,6 +110,21 @@ body[data-theme="gray"] {
   --role-user:     #8a928f;
   --role-assistant:#8a928f;
 }
+body[data-theme="blue"] {
+  /* Same dark base with a faint blue cast, desaturated slate-blue accent. */
+  --bg:            #0c0d0f;
+  --bg-raised:     #131517;
+  --bg-inset:      #101214;
+  --bg-hover:      #1a1d21;
+  --border:        #22262b;
+  --border-strong: #2f3439;
+  --accent:        #7d9bb3;
+  --accent-rgb:    125, 155, 179;
+  --accent-dim:    #3a4c59;
+  --accent-btn:    #5a7385;
+  --role-user:     #7d9bb3;
+  --role-assistant:#7d9bb3;
+}
 
 * { box-sizing: border-box; }
 
@@ -1000,9 +1015,17 @@ button:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
   border: 2px solid var(--border-strong);
   cursor: pointer;
   padding: 0;
+  transition: border-color 100ms ease;
 }
-.theme-swatch:hover { border-color: var(--text-dim); }
-.theme-swatch[aria-pressed="true"] { border-color: var(--text); }
+/* Hover is a whisper -- just enough to say "clickable" -- so it can never be
+ * mistaken for the selection ring below. */
+.theme-swatch:hover { border-color: var(--text-faint); }
+/* Selection is a bright ring set off by a gap, unmistakably distinct from a
+ * hover border and visible regardless of which colour the swatch itself is. */
+.theme-swatch[aria-pressed="true"] {
+  border-color: var(--text);
+  box-shadow: 0 0 0 2px var(--bg);
+}
 /* The sound side carries three controls, the volume side one. */
 .sound-row > label:first-child { flex: 3; }
 .sound-row > label:last-child { flex: 2; }

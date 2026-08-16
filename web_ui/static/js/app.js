@@ -2038,6 +2038,8 @@ const Dictation = {
   ws: null,
   partial: '',
   finalText: '',
+  insertAt: 0,         // caret offset where the live dictation segment starts
+  insertedLen: 0,      // length of the text currently occupying that segment
   analyser: null,
   rafId: null,
   meterGeneration: 0,   // stale animation loops check this and exit
@@ -2050,10 +2052,10 @@ const Dictation = {
     this.els.meter = document.getElementById('mic-meter');
     this.els.status = document.getElementById('stt-status');
     this.els.elapsed = document.getElementById('stt-elapsed');
-    this.els.live = document.getElementById('dictation-live');
-    // Streaming dictation needs the sherpa-onnx model server-side; the live
-    // overlay is only rendered when it is available.
-    this.streamingAvailable = !!this.els.live;
+    // Streaming dictation needs the sherpa-onnx model server-side; the session
+    // page carries a flag only when it is available.
+    const view = document.getElementById('session-view');
+    this.streamingAvailable = !!(view && view.dataset.sttStreaming === '1');
     if (!this.els.button || this.els.button.dataset.bound) return;
     this.els.button.dataset.bound = '1';
     this.els.button.addEventListener('click', () => this.toggle());
@@ -2227,6 +2229,9 @@ const Dictation = {
 
     this.streamRef = stream;
     this.partial = '';
+    const ta = App.els.textarea;
+    this.insertAt = ta ? (ta.selectionStart ?? ta.value.length) : 0;
+    this.insertedLen = 0;
 
     try {
       // A 16 kHz context: Chrome resamples the input, so the worklet sees
@@ -2260,7 +2265,6 @@ const Dictation = {
     this.els.button.classList.add('recording');
     this.audioCtx = this.streamCtx;
     this.startMeter();
-    this.renderPartial();
   },
 
   async stopStreaming() {
@@ -2289,9 +2293,11 @@ const Dictation = {
       ws.send('end');
     });
 
+    // The text is already in the textarea; the final flush only tightens it.
+    this.updateDictationSegment(final);
     this.teardown();
     if (!final) flashButton(this.els.button, 'no speech detected');
-    return final;
+    return '';   // nothing to insert separately
   },
 
   onStreamMessage(e) {
@@ -2299,28 +2305,24 @@ const Dictation = {
     try { data = JSON.parse(e.data); } catch (_) { return; }
     if (data.error) { appendNotice('error', data.error); this.teardown(); return; }
     this.partial = (data.text || '').trim();
-    this.renderPartial();
+    this.updateDictationSegment(this.partial);
   },
 
-  renderPartial() {
-    const live = this.els.live;
-    if (!live) return;
-    live.textContent = '';
-    if (!this.partial) { live.hidden = true; return; }
-    live.hidden = false;
-    // The trailing two words stay provisional (shimmering) until more context
-    // settles them, mirroring what a streaming recognizer is actually doing.
-    const words = this.partial.split(/\s+/);
-    const cut = Math.max(0, words.length - 2);
-    const solid = words.slice(0, cut);
-    const shimmer = words.slice(cut);
-    if (solid.length) live.appendChild(document.createTextNode(solid.join(' ') + ' '));
-    if (shimmer.length) {
-      const span = document.createElement('span');
-      span.className = 'shimmer';
-      span.textContent = shimmer.join(' ');
-      live.appendChild(span);
-    }
+  /* Live dictation writes straight into the textarea at the caret: replace the
+   * segment that started at insertAt with the latest hypothesis, so the rest of
+   * the draft is untouched and the caret stays at the end of the new words. */
+  updateDictationSegment(text) {
+    const ta = App.els.textarea;
+    if (!ta) return;
+    const start = this.insertAt;
+    const end = this.insertAt + this.insertedLen;
+    const before = ta.value.slice(0, start);
+    const after = ta.value.slice(end);
+    ta.value = before + text + after;
+    this.insertedLen = text.length;
+    ta.focus();
+    ta.setSelectionRange(start + text.length, start + text.length);
+    autosize(ta);
   },
 
   /* Transcription is the one stretch with no feedback: the recorder has stopped,
@@ -2361,10 +2363,6 @@ const Dictation = {
     this.releaseStream();
     this.recorder = null;
     this.chunks = [];
-    if (this.els.live) {
-      this.els.live.hidden = true;
-      this.els.live.textContent = '';
-    }
     if (this.els.button) {
       this.els.button.classList.remove('recording', 'transcribing');
       this.els.button.title = MIC_TITLE;

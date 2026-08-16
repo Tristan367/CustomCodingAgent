@@ -38,8 +38,14 @@ def test_streaming_session_transcribes(recognizer):
     session = streaming_stt.StreamingSession(recognizer)
     for i in range(0, len(samples), 8000):
         session.accept(samples[i : i + 8000])
-    text = session.finalize().upper()
+    text = session.finalize()
     session.reset()
 
-    assert "NIGHTFALL" in text
-    assert "BROTHELS" in text
+    assert "nightfall" in text.lower()
+    assert "brothels" in text.lower()
+    assert text != text.upper(), "dictation must not come back in ALL CAPS"
+
+
+def test_normalize_case():
+    assert streaming_stt.normalize_case("AFTER EARLY NIGHTFALL, I SAW IT.") == "After early nightfall, I saw it."
+    assert streaming_stt.normalize_case("HELLO WORLD") == "Hello world"

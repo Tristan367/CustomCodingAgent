@@ -1,4 +1,4 @@
-<div id="session-view" data-session-id="{{ session.id }}" data-project-dir="{{ session.project_dir }}" data-expand-tools="{{ expand_tools | tojson | forceescape }}">
+<div id="session-view" data-session-id="{{ session.id }}" data-project-dir="{{ session.project_dir }}" data-expand-tools="{{ expand_tools | tojson | forceescape }}" data-stt-streaming="{{ '1' if stt_streaming else '' }}">
     {% include "components/session_meta.html" %}
 
     {# Anchors #jump-bottom to the scroll region so it sits above the composer
@@ -19,9 +19,6 @@
     </div>
 
     <div id="chat-input-area">
-        {% if stt_streaming %}
-        <div id="dictation-live" class="dictation-live" hidden aria-live="polite"></div>
-        {% endif %}
         <form id="chat-form" autocomplete="off">
             <div id="attachments" class="attachments" hidden></div>
             <div class="composer">

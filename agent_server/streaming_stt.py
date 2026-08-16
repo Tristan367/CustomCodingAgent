@@ -9,6 +9,7 @@ as provisional until they settle.
 
 from __future__ import annotations
 
+import re
 import threading
 from pathlib import Path
 
@@ -20,6 +21,28 @@ SAMPLE_RATE = 16000
 # A short tail of silence flushed at the end lets the decoder emit the final
 # partial frame (without it the very last syllable can be cut off).
 _FINAL_PAD_SECONDS = 0.4
+
+
+def normalize_case(text: str) -> str:
+    """The streaming zipformer transcribes in ALL CAPS (LibriSpeech convention).
+    Bring it down to sentence case so dictation reads like typing."""
+    text = text.strip()
+    if not text:
+        return text
+    text = text.lower()
+    out: list[str] = []
+    cap_next = True
+    for ch in text:
+        if ch.isalpha():
+            out.append(ch.upper() if cap_next else ch)
+            cap_next = False
+        else:
+            out.append(ch)
+            if ch in ".!?":
+                cap_next = True
+    text = "".join(out)
+    # Standalone lowercase "i" -> "I": the most common truecase miss.
+    return re.sub(r"\bi\b", "I", text)
 
 
 class StreamingSTTError(RuntimeError):
@@ -76,7 +99,7 @@ class StreamingSession:
         self.stream.accept_waveform(SAMPLE_RATE, samples)
         while self.recognizer.is_ready(self.stream):
             self.recognizer.decode_stream(self.stream)
-        return self.recognizer.get_result(self.stream)
+        return normalize_case(self.recognizer.get_result(self.stream))
 
     def finalize(self) -> str:
         """Flush a short tail of silence and return the completed text."""
@@ -84,7 +107,7 @@ class StreamingSession:
         self.stream.accept_waveform(SAMPLE_RATE, tail)
         while self.recognizer.is_ready(self.stream):
             self.recognizer.decode_stream(self.stream)
-        return self.recognizer.get_result(self.stream)
+        return normalize_case(self.recognizer.get_result(self.stream))
 
     def reset(self) -> None:
         self.recognizer.reset(self.stream)

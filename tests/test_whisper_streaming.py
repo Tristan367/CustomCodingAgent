@@ -49,6 +49,11 @@ def test_clean_strips_space_before_punctuation():
     assert whisper_streaming._clean("hello , world") == "hello, world"
 
 
+def test_clean_strips_silence_token():
+    assert whisper_streaming._clean("[silence]") == ""
+    assert whisper_streaming._clean("turn it on [silence] now") == "turn it on now"
+
+
 def test_ensure_period():
     ensure = whisper_streaming.WhisperSession._ensure_period
     assert ensure("hello world") == "hello world."

@@ -23,6 +23,9 @@
   --accent:        #8ea24f;
   --accent-rgb:    142, 162, 79;
   --accent-dim:    #4a5730;
+  /* Filled buttons sit on a dimmer shade than the text accent so the UI's
+     primary actions don't outshine inline code, links and other accent text. */
+  --accent-btn:    #66733a;
   --success:       #7d9b4c;
   --add:           #a3bd74;
   --add-rgb:       125, 155, 76;
@@ -86,6 +89,7 @@ body[data-theme="red"] {
   --accent:        #c06a5f;
   --accent-rgb:    192, 106, 95;
   --accent-dim:    #5a2f2b;
+  --accent-btn:    #87483f;
   --role-user:     #b06a5f;
   --role-assistant:#c06a5f;
 }
@@ -99,9 +103,10 @@ body[data-theme="gray"] {
   --bg-hover:      #1c1c1f;
   --border:        #242427;
   --border-strong: #313134;
-  --accent:        #7a817e;
-  --accent-rgb:    122, 129, 126;
+  --accent:        #a4aca9;
+  --accent-rgb:    164, 172, 169;
   --accent-dim:    #474d4b;
+  --accent-btn:    #5a615e;
   --role-user:     #8a928f;
   --role-assistant:#8a928f;
 }
@@ -735,7 +740,7 @@ a.file-ref:hover { border-bottom-style: solid; color: var(--text); background: v
    this file and would otherwise reimpose their horizontal padding and squash
    the icon. */
 #send-btn:disabled { opacity: 0.4; cursor: default; }
-#send-btn:disabled:hover { background: var(--accent); }
+#send-btn:disabled:hover { background: var(--accent-btn); }
 .composer-actions .composer-send {
   display: inline-flex;
   align-items: center;
@@ -783,12 +788,12 @@ button:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
    ghost. Submitting a form is semantics; being the primary action is
    appearance. They are not the same claim. */
 .btn-primary {
-  background: var(--accent);
-  border-color: var(--accent);
-  color: #14190a;
+  background: var(--accent-btn);
+  border-color: var(--accent-btn);
+  color: var(--text);
   font-weight: 600;
 }
-.btn-primary:hover { background: var(--accent); filter: brightness(1.1); }
+.btn-primary:hover { background: var(--accent-btn); filter: brightness(1.15); }
 .btn-secondary { background: var(--bg-inset); border-color: var(--border-strong); color: var(--text); }
 .btn-secondary:hover { background: var(--bg-hover); }
 .btn-stop { background: var(--danger); border-color: var(--danger); color: #250b0a; font-weight: 600; }
@@ -1971,6 +1976,10 @@ kbd {
   border: 0;
 }
 body.editor-open .chat-region { display: none; }
+/* Split view: the editor shrinks to half the column and the chat history stays
+ * visible above it, so the reply and the code are on screen together. */
+body.editor-open.editor-split .chat-region { display: flex; }
+body.editor-open.editor-split .file-editor.open { flex: 0 0 50%; }
 dialog.file-browser[open] {
   display: flex;
   flex-direction: column;

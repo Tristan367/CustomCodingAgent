@@ -34,10 +34,10 @@ PAUSE_SECONDS = float(os.getenv("CODEAGENT_DICTATION_PAUSE", "10"))
 
 # whisper emits these for silence/background noise; they read as garbage in the
 # transcript. The first arm catches the special-event tokens ([BLANK_AUDIO],
-# [MUSIC], [INAUDIBLE], ...); the second catches sound descriptions such as
-# "(wind blowing)" and "(music)".
+# [MUSIC], [INAUDIBLE], and the lowercase [silence]); the second catches sound
+# descriptions such as "(wind blowing)" and "(music)".
 _NOISE = re.compile(
-    r"\[[A-Z_ ]+\]"             # all-caps/underscore/space, whisper's event tokens
+    r"\[[A-Za-z_ ]+\]"         # whisper's event tokens, upper- or lowercase
     r"|\([a-z]+(?: [a-z]+)*\)"  # lowercase sound descriptions
 )
 # A standalone "--" is whisper's way of writing an em-dash; dictation doesn't

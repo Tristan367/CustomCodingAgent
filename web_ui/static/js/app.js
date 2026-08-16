@@ -3737,6 +3737,15 @@ const FileEditor = (() => {
   }
   function memCurrent() { return mem(s.sessionId); }
 
+  // The session-bar "open editor" button is only useful once this session has
+  // opened a file before, so hide it until then.
+  function syncEditorButton() {
+    const btn = document.getElementById('editor-open-btn');
+    if (!btn) return;
+    const m = mem(App.sessionId);
+    btn.hidden = !(m && m.history.length > 0);
+  }
+
   // Mirrors the server's lang_for_path so a rename that changes the extension
   // still gets syntax highlighting without a round-trip.
   const EXT_LANG = {
@@ -3757,7 +3766,7 @@ const FileEditor = (() => {
     '.tf': 'hcl', '.tfvars': 'hcl',
   };
 
-  let bodyEl, highlightEl, textareaEl, statusEl, pathEl, wrapBtn, saveBtn, formatBtn, menuBtn, menu, backBtn, fwdBtn;
+  let bodyEl, highlightEl, textareaEl, statusEl, pathEl, wrapBtn, saveBtn, formatBtn, menuBtn, menu, backBtn, fwdBtn, splitBtn;
 
   function mountEditor() {
     // Lives inside the session view, between the chat history and the composer,
@@ -3783,6 +3792,7 @@ const FileEditor = (() => {
         '<span class="fe-actions">' +
           '<button type="button" class="fe-btn" data-fe="back" title="Back">&#8592;</button>' +
           '<button type="button" class="fe-btn" data-fe="fwd" title="Forward">&#8594;</button>' +
+          '<button type="button" class="fe-btn" data-fe="split" title="Half height">&#8863;</button>' +
           '<button type="button" class="fe-btn" data-fe="copy" title="Copy path and line number">Copy path</button>' +
           '<button type="button" class="fe-btn" data-fe="wrap" title="Toggle line wrap">Wrap</button>' +
           '<button type="button" class="fe-btn" data-fe="format" title="Format document">Format</button>' +
@@ -3805,6 +3815,7 @@ const FileEditor = (() => {
     menuBtn = dlg.querySelector('[data-fe=menu]');
     backBtn = dlg.querySelector('[data-fe=back]');
     fwdBtn = dlg.querySelector('[data-fe=fwd]');
+    splitBtn = dlg.querySelector('[data-fe=split]');
     bodyEl = dlg.querySelector('.fe-body');
     highlightEl = dlg.querySelector('.fe-highlight');
     textareaEl = dlg.querySelector('.fe-textarea');
@@ -3836,6 +3847,7 @@ const FileEditor = (() => {
     formatBtn.addEventListener('click', formatDocument);
     backBtn.addEventListener('click', goBack);
     fwdBtn.addEventListener('click', goForward);
+    splitBtn.addEventListener('click', toggleSplit);
     updateNavButtons();
     // Header buttons must not steal focus, or the caret/selection highlight in
     // the textarea vanishes when one is clicked.
@@ -3872,6 +3884,7 @@ const FileEditor = (() => {
     }
     dlg.classList.remove('open');
     document.body.classList.remove('editor-open');
+    document.body.classList.remove('editor-split');
     if (s.sessionId) mem(s.sessionId).open = false;
   }
 
@@ -4089,6 +4102,7 @@ const FileEditor = (() => {
     show();
     if (opts.record !== false) recordNav(data.path);
     updateNavButtons();
+    syncEditorButton();
     if (s.line) scrollToTarget();
     else textareaEl.scrollTop = 0;
     return true;
@@ -4149,14 +4163,16 @@ const FileEditor = (() => {
     m.lineEnd = s.lineEnd;
     dlg.classList.remove('open');
     document.body.classList.remove('editor-open');
+    document.body.classList.remove('editor-split');
     s.dirty = false;
   }
 
   // Reopen the remembered file for the new session. A clean buffer is re-read
   // so on-disk changes show up; a dirty one is restored in place.
   async function restore() {
-    if (!App.sessionId) return;
+    if (!App.sessionId) { syncEditorButton(); return; }
     const m = mem(App.sessionId);
+    syncEditorButton();
     if (!m.open || !m.path) return;
     ensure();
     if (m.buffer !== m.savedContent) {
@@ -4280,6 +4296,15 @@ const FileEditor = (() => {
     syncScroll();
   }
 
+  /* Split view: shrink the editor to half height so the chat history stays
+   * visible above it. Default is full height. */
+  function toggleSplit() {
+    const half = document.body.classList.toggle('editor-split');
+    splitBtn.classList.toggle('active', half);
+    splitBtn.textContent = half ? '\u229E' : '\u229F';  // ⊞ expand / ⊟ collapse
+    splitBtn.title = half ? 'Full height' : 'Half height';
+  }
+
   function applyWrap() {
     textareaEl.wrap = wrapOn ? 'soft' : 'off';
     textareaEl.classList.toggle('wrap', wrapOn);
@@ -4382,6 +4407,7 @@ const FileEditor = (() => {
     if (!dlg) return;
     dlg.classList.remove('open');
     document.body.classList.remove('editor-open');
+    document.body.classList.remove('editor-split');
     s.dirty = false;
     if (s.sessionId) mem(s.sessionId).open = false;
   }

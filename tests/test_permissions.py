@@ -173,3 +173,23 @@ async def test_deleting_a_session_drops_its_grants(clean_db):
     await permissions.allow_directory(SESSION, str(outside))
     await db.delete_session(SESSION)
     assert await permissions.list_allowed(SESSION) == []
+
+
+async def test_subagents_enforce_the_hard_permission_boundaries(clean_db):
+    """A subagent can't prompt the user, so it must be refused the writes and
+    shells that the main loop would gate. It keeps read-only tools and writes
+    inside the project."""
+    from agent_server.tools.base import ToolContext
+    from agent_server.tools.registry import _subagent_guard
+
+    project = str(clean_db)
+    sub = ToolContext(session_id=SESSION, project_dir=project, subagent_tier=1)
+
+    assert await _subagent_guard("bash", {"command": "ls -la"}, sub) is None
+    assert (await _subagent_guard("bash", {"command": "rm -rf build"}, sub)).is_error
+    assert await _subagent_guard("write", {"filePath": f"{project}/a.py"}, sub) is None
+    assert (await _subagent_guard("write", {"filePath": "/tmp/x.py"}, sub)).is_error
+
+    main = ToolContext(session_id=SESSION, project_dir=project, subagent_tier=0)
+    assert await _subagent_guard("bash", {"command": "rm -rf build"}, main) is None
+    assert await _subagent_guard("write", {"filePath": "/tmp/x.py"}, main) is None

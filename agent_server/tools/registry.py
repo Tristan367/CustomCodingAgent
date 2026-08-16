@@ -503,6 +503,43 @@ def get_tool(name: str) -> Tool | None:
     return TOOLS.get(name)
 
 
+async def _subagent_guard(name: str, args: dict, ctx: ToolContext) -> ToolResult | None:
+    """Enforce the hard permission boundaries for subagents.
+
+    A subagent runs autonomously inside `task`/`explore` and cannot prompt the
+    user, so the prompt-driven gates the main loop applies (permissions.check)
+    never run for it. Instead of letting it write outside the project or run
+    arbitrary shell, reject those calls here. Writes inside the project and
+    read-only bash still work, matching the subagent prompt's "implement" scope.
+    """
+    if ctx.subagent_tier <= 0:
+        return None
+    if name in ("edit", "write"):
+        raw = args.get("filePath") or ""
+        if not raw:
+            return None
+        path = ctx.resolve(raw)
+        from agent_server import permissions
+
+        if permissions.is_denied(path) or not await permissions.write_allowed(
+            ctx.session_id, path, ctx.project_dir
+        ):
+            return ToolResult.error(
+                f"{name} to {path} is outside the project and a subagent cannot ask for a grant",
+                name,
+            )
+        return None
+    if name == "bash":
+        from agent_server.tools.bash import is_read_only
+
+        if not is_read_only(args.get("command", "")):
+            return ToolResult.error(
+                "subagents may only run read-only commands; ask the parent agent to run this",
+                name,
+            )
+    return None
+
+
 async def execute_tool(
     name: str,
     args: dict[str, Any],
@@ -515,6 +552,10 @@ async def execute_tool(
         return ToolResult.error(f"unknown tool '{name}'. Available tools: {known}", name)
     if allowed is not None and name not in allowed:
         return ToolResult.error(f"tool '{name}' is not available in this context", name)
+
+    blocked = await _subagent_guard(name, args, ctx)
+    if blocked is not None:
+        return blocked
 
     # Drop unexpected keys so a hallucinated argument cannot raise TypeError.
     signature = inspect.signature(tool.handler)
@@ -536,7 +577,7 @@ async def execute_tool(
     if not isinstance(result, ToolResult):
         result = ToolResult(output=str(result))
     if not result.title:
-        result = ToolResult(output=result.output, is_error=result.is_error)
+        result.title = name
     if result.is_error:
         log.warning("tool %s failed: %s", name, result.output[:200])
     return result

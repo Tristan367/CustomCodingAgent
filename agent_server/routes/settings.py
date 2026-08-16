@@ -21,9 +21,14 @@ async def save_settings(request: Request):
     for ps in get_provider_settings_fields():
         changed = False
         for f in ps["fields"]:
-            value = str(form.get(f["key"], "")).strip()
-            if not value:
+            # Each provider's form posts only its own field. Absent fields are
+            # the *other* providers' keys and must not be cleared by this save.
+            if f["key"] not in form:
                 continue
+            value = str(form.get(f["key"], "")).strip()
+            # A masked password field must never overwrite the stored key if it
+            # ever submits bullets. An emptied field is a deliberate clear, so it
+            # is saved.
             if f.get("kind") == "password" and "\u2022" in value:
                 continue
             await db.set_setting(f["key"], value)

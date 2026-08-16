@@ -56,10 +56,10 @@
     if (!path || !looksLikePath(path)) return full;
     const line = m[2], end = m[3];
     const display = path + (line ? ':' + line + (end ? '-' + end : '') : '');
-    let attrs = 'data-path="' + escapeHtml(path) + '"';
+    let attrs = 'data-path="' + path + '"';
     if (line) attrs += ' data-line="' + line + '"';
     if (end) attrs += ' data-line-end="' + end + '"';
-    return pre + '<a class="file-ref" href="#" ' + attrs + '>' + escapeHtml(display) + '</a>' + trail;
+    return pre + '<a class="file-ref" href="#" ' + attrs + '>' + display + '</a>' + trail;
   }
 
   function inline(text) {
@@ -108,7 +108,7 @@
       .replace(/\u0000LINK(\d+)\u0000/g, (_, i) => links[+i])
       .replace(/\u0000CODE(\d+)\u0000/g,
         (_, i) => '<code>' +
-          escapeHtml(codes[+i]).replace(FILE_REF_TOKEN, fileRefReplacer) +
+          codes[+i].replace(FILE_REF_TOKEN, fileRefReplacer) +
           '</code>');
   }
 

@@ -67,10 +67,31 @@ def test_timeout_still_applies_to_foreground_commands():
     ("echo hi > file", False),
     ("git push", False),
     ("ls && rm x", False),
+    ("find . -name '*.py'", True),
+    ("find . -delete", False),
+    ("find . -exec rm {} +", False),
+    ("git branch", True),
+    ("git branch -D foo", False),
+    ("git remote add origin url", False),
+    ("/bin/rm -rf x", False),
 ])
 def test_read_only_classification(command, expected):
     from agent_server.tools.bash import is_read_only
     assert is_read_only(command) is expected
+
+
+@pytest.mark.parametrize("command,expected", [
+    ("rm -rf /", "rm -rf of /"),
+    ("/bin/rm -rf /", "rm -rf of /"),
+    ("rm -Rf /home", "rm -rf of /home"),
+    ("rm --recursive --force /", "rm -rf of /"),
+    ("rm --force /", None),
+    ("rm -rf build/", None),
+    ("git clean -fdx", None),
+])
+def test_danger_reason(command, expected):
+    from agent_server.tools.bash import danger_reason
+    assert danger_reason(command) == expected
 
 
 # ── Oversized output ────────────────────────────────────────────────────────

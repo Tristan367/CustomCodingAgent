@@ -445,6 +445,13 @@ async def delete_session(session_id: str):
     async with _write_lock:
         for table in ("messages", "compactions", "session_write_dirs"):
             await db.execute(f"DELETE FROM {table} WHERE session_id = ?", (session_id,))
+        # Mailbox has no foreign key to sessions, so it must be cleaned by hand
+        # or mail to a deleted session lingers and is silently re-delivered if
+        # the id is ever reused.
+        await db.execute(
+            "DELETE FROM mailbox WHERE to_session = ? OR from_session = ?",
+            (session_id, session_id),
+        )
         await db.execute("DELETE FROM sessions WHERE id = ?", (session_id,))
         await db.commit()
 

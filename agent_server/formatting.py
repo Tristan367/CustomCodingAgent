@@ -30,7 +30,7 @@ _PRETTIER_EXTS = {
     ".css", ".scss", ".sass", ".less", ".html", ".htm", ".svg",
     ".js", ".jsx", ".ts", ".tsx", ".mjs", ".cjs",
 }
-_JSON_EXTS = {".json", ".jsonc"}
+_JSON_EXTS = {".json"}
 
 
 class FormatError(Exception):

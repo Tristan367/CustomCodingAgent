@@ -30,8 +30,18 @@ PROTECTED_RM_TARGETS = {
 _BLOCK_DEV_RE = re.compile(r"/dev/(sd[a-z]+|hd[a-z]+|nvme\d+n\d+|vd[a-z]+|xvd[a-z]+|mmcblk\d+|disk|mapper)")
 
 
-def _has_flag(tokens: list[str], flag: str) -> bool:
-    return any(t.startswith("-") and flag in t for t in tokens)
+def _has_flag(tokens: list[str], flag: str, long: str = "") -> bool:
+    """True when a short flag (possibly in a `-rf` cluster) or its `--long`
+    spelling is present. Long options never match short flags: `--force` is not
+    `-f`, so `rm --force /` must not be mistaken for `rm -rf`. """
+    for t in tokens:
+        if long and t == long:
+            return True
+        if not t.startswith("-") or t.startswith("--"):
+            continue
+        if flag in t[1:].lower():
+            return True
+    return False
 
 
 def danger_reason(command: str) -> str | None:
@@ -47,16 +57,20 @@ def danger_reason(command: str) -> str | None:
     if re.search(r":\s*\(\s*\)\s*\{\s*:\s*\|\s*:\s*&\s*\}\s*;", s):
         return "fork bomb"
 
-    # rm with recursive+force flags targeting a protected path.
-    if re.search(r"(^|[\s;&|])\brm\b", s):
-        tokens = s.split()
-        if _has_flag(tokens, "r") and _has_flag(tokens, "f"):
-            for tok in tokens:
-                if tok.startswith("-"):
-                    continue
-                target = tok.rstrip("/") or "/"
-                if target in PROTECTED_RM_TARGETS:
-                    return f"rm -rf of {tok}"
+    # rm with recursive+force flags targeting a protected path. Match by token
+    # basename so a path-qualified `/bin/rm` is caught as well as a bare `rm`.
+    tokens = s.split()
+    if (
+        any(os.path.basename(t) == "rm" for t in tokens)
+        and _has_flag(tokens, "r", "--recursive")
+        and _has_flag(tokens, "f", "--force")
+    ):
+        for tok in tokens:
+            if tok.startswith("-"):
+                continue
+            target = tok.rstrip("/") or "/"
+            if target in PROTECTED_RM_TARGETS:
+                return f"rm -rf of {tok}"
 
     # Writing directly to a raw block device.
     if _BLOCK_DEV_RE.search(s) and re.search(r"\b(dd|mkfs\S*|fdisk|parted|sfdisk)\b", s):
@@ -84,12 +98,32 @@ def is_read_only(command: str) -> bool:
             return False
         cmd = os.path.basename(parts[0])
         if cmd == "git":
-            if len(parts) < 2 or parts[1] not in GIT_READ_ONLY:
+            if not _git_read_only(parts):
                 return False
             continue
+        if cmd == "find" and any(a in ("-delete", "-exec", "-execdir", "-ok", "-okdir") for a in parts[1:]):
+            return False
         if cmd not in READ_ONLY_PREFIXES:
             return False
     return True
+
+
+def _git_read_only(parts: list[str]) -> bool:
+    """`git <sub>` is observational only when the subcommand and its flags are.
+
+    `git branch` lists, but `git branch -D` deletes; `git remote` lists, but
+    `git remote add` mutates config. The bare subcommand whitelist alone was
+    therefore wrong.
+    """
+    if len(parts) < 2 or parts[1] not in GIT_READ_ONLY:
+        return False
+    flags = parts[2:]
+    sub = parts[1]
+    destructive = (
+        (sub == "branch" and any(a in ("-d", "-D", "--delete", "-m", "-M") for a in flags))
+        or (sub == "remote" and any(a in ("add", "remove", "rm", "set-url", "set-head") for a in flags))
+    )
+    return not destructive
 
 
 async def run_bash(

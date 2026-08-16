@@ -884,6 +884,9 @@ function addQueuedBubble(text, queueId) {
   actions.appendChild(button('undo', '', () => undoQueued(queueId)));
   side.append(actions, node.querySelector(':scope > .msg-time') || el('span', 'msg-time', clockTime()));
   node.appendChild(side);
+  // This node already carries its side column; a later setupMessageSide pass
+  // must not append a second one.
+  node.dataset.sideDone = '1';
   return node;
 }
 
@@ -3317,12 +3320,6 @@ const FileEditor = (() => {
         save();
       }
     });
-  }
-
-  function dirname(path) {
-    const p = String(path || '');
-    const i = p.lastIndexOf('/');
-    return i > 0 ? p.slice(0, i) : (p.startsWith('/') ? '/' : '.');
   }
 
   function show() {

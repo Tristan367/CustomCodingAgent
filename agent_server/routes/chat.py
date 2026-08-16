@@ -76,6 +76,11 @@ async def chat(session_id: str, request: Request, body: ChatRequest):
     text = body.message.strip()
     if not text:
         raise HTTPException(400, "Message is required")
+    # A turn already in flight: queue instead of persisting. Writing the message
+    # now would land it between an assistant tool_calls row and its results and
+    # corrupt the wire order for the model.
+    if agent.is_running(session_id) and agent.queue_message(session_id, text) is not None:
+        return _stream(session_id, request)
     # Persist before streaming. This is the step whose absence caused the model
     # to be prompted with no user turn at all.
     await db.add_message(session_id, "user", text)
@@ -103,8 +108,14 @@ async def chat_with_image(
     if not attachments:
         if not text:
             raise HTTPException(400, "Message or image is required")
+        if agent.is_running(session_id) and agent.queue_message(session_id, text) is not None:
+            return _stream(session_id, request)
         await db.add_message(session_id, "user", text)
         return _stream(session_id, request)
+
+    if agent.is_running(session_id):
+        # Images cannot be queued; they must be saved and added as a fresh turn.
+        raise HTTPException(409, "Finish the current run before attaching an image.")
 
     saved: list[str] = []
     for upload in attachments[:6]:

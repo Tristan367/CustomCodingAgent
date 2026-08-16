@@ -239,7 +239,7 @@ async def save_prompts(request: Request):
             )
         await db.save_prompt(
             name, body, SYSTEM,
-            disabled_tools=off or None,
+            disabled_tools=off,
             subagent_body=sa_body if sa_visible else None,
             subagent_disabled_tools=sa_off if sa_visible else None,
             subagent_parallel_cap=sa_cap if sa_visible else None,

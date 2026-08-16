@@ -53,6 +53,12 @@ async def grep_search(
         )
         stdout, stderr = await asyncio.wait_for(proc.communicate(), timeout=60)
     except TimeoutError:
+        # wait_for cancelled communicate() but left ripgrep running.
+        try:
+            proc.kill()
+            await proc.wait()
+        except (ProcessLookupError, AttributeError):
+            pass
         return ToolResult.error("search timed out after 60s", title)
     except Exception as e:
         return ToolResult.error(f"search failed: {e}", title)

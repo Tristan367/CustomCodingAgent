@@ -112,13 +112,13 @@ def test_every_handler_is_reachable():
         router = getattr(module, "router", None)
         if router is None:
             continue
-            # A router's own routes already carry its prefix in .path.
-            for route in router.routes:
-                methods = frozenset(getattr(route, "methods", None) or [])
-                if (route.path, methods) not in mounted:
-                    orphans.append(
-                        f"{sorted(methods)} {route.path} (agent_server/routes/{info.name}.py)"
-                    )
+        # A router's own routes already carry its prefix in .path.
+        for route in router.routes:
+            methods = frozenset(getattr(route, "methods", None) or [])
+            if (route.path, methods) not in mounted:
+                orphans.append(
+                    f"{sorted(methods)} {route.path} (agent_server/routes/{info.name}.py)"
+                )
     assert not orphans, "defined but not included in the app:\n" + "\n".join(orphans)
 
 

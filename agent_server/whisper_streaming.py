@@ -4,13 +4,14 @@ Whisper's architecture is non-streaming, so this is a sliding re-transcription:
 the accumulated audio is re-transcribed every couple of seconds and the result
 is pushed out as a partial. whisper runs far faster than realtime (especially on
 the GPU), so the re-transcription keeps up. This gives whisper's accuracy with
-live feedback -- the thing the sherpa-onnx zipformer model could not match.
+live feedback.
 """
 
 from __future__ import annotations
 
 import asyncio
 import io
+import re
 import wave
 
 import httpx
@@ -26,6 +27,16 @@ from agent_server.config import (
 SAMPLE_RATE = 16000
 # Re-transcribe only once this much NEW audio has accumulated.
 STEP_SECONDS = 1.5
+
+# whisper emits these for silence/music/etc; they read as noise in the chat.
+_NOISE = re.compile(
+    r"\[(?:BLANK[ _]AUDIO|MUSIC|LAUGHTER|APPLAUSE|NOISE)\]\s*|\(\s*(?:silence|noise|music|speech)\s*\)",
+    re.IGNORECASE,
+)
+
+
+def _clean(text: str) -> str:
+    return re.sub(r"\s+", " ", _NOISE.sub("", text)).strip()
 
 
 class WhisperStreamingError(RuntimeError):
@@ -80,7 +91,7 @@ class WhisperServer:
         )
         resp.raise_for_status()
         text = resp.json().get("text", "").strip()
-        return " ".join(text.split())  # collapse whisper's line-wrapped output
+        return _clean(" ".join(text.split()))  # collapse whisper's line-wrapped output
 
     async def shutdown(self) -> None:
         if self.client is not None:

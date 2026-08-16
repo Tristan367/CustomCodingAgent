@@ -25,3 +25,9 @@ def test_new_seconds_tracks_untrancribed_audio():
     assert session.new_seconds == 1.0
     session._last_transcribed = 16000
     assert session.new_seconds == 0.0
+
+
+def test_clean_strips_noise_markers():
+    assert whisper_streaming._clean("hello [BLANK_AUDIO] world") == "hello world"
+    assert whisper_streaming._clean("[blank_audio]  [MUSIC]  hi") == "hi"
+    assert whisper_streaming._clean("normal speech") == "normal speech"

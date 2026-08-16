@@ -2053,8 +2053,8 @@ const Dictation = {
     this.els.meter = document.getElementById('mic-meter');
     this.els.status = document.getElementById('stt-status');
     this.els.elapsed = document.getElementById('stt-elapsed');
-    // Streaming dictation needs the sherpa-onnx model server-side; the session
-    // page carries a flag only when it is available.
+    // Streaming dictation needs whisper-server server-side; the session page
+    // carries a flag only when it is available.
     const view = document.getElementById('session-view');
     this.streamingAvailable = !!(view && view.dataset.sttStreaming === '1');
     if (!this.els.button || this.els.button.dataset.bound) return;
@@ -2200,7 +2200,7 @@ const Dictation = {
     return text;
   },
 
-  /* ── Streaming dictation (sherpa-onnx) ─────────────────────────────────── */
+  /* ── Streaming dictation (whisper-server) ───────────────────────────────── */
 
   async loadWorklet() {
     if (!this.streamCtx || !this.streamCtx.audioWorklet) return false;
@@ -2260,7 +2260,14 @@ const Dictation = {
       this.ws.binaryType = 'arraybuffer';
       this.ws.onmessage = (e) => this.onStreamMessage(e);
       this.ws.onclose = () => { this.ws = null; };
-      this.ws.onerror = () => { appendNotice('error', 'Streaming dictation connection failed.'); this.teardown(); };
+      // A server-initiated close after finalize can surface as an error event
+      // in some browsers; only report it while we are actually dictating.
+      this.ws.onerror = () => {
+        if (this.recording) {
+          appendNotice('error', 'Streaming dictation connection failed.');
+          this.teardown();
+        }
+      };
     } catch (err) {
       appendNotice('error', `Could not start dictation: ${err.message}`);
       this.teardown();
@@ -2315,9 +2322,11 @@ const Dictation = {
     this.updateDictationSegment(this.partial);
   },
 
-  /* Live dictation writes straight into the textarea at the caret: replace the
-   * segment that started at insertAt with the latest hypothesis, so the rest of
-   * the draft is untouched and the caret stays at the end of the new words. */
+  /* Live dictation writes straight into the textarea at the caret. While the
+   * dictation still owns its segment it rewrites the whole thing (so whisper's
+   * later revisions of a word "word it better"); once the user edits that
+   * segment, ownership is dropped and only the new suffix is appended, so their
+   * edits are never reverted. */
   updateDictationSegment(text) {
     const ta = App.els.textarea;
     if (!ta) return;
@@ -2325,15 +2334,31 @@ const Dictation = {
     // on every partial would clear any selection the user is dragging and stop
     // them from typing alongside the recording.
     if (text === this.lastInserted) return;
-    this.lastInserted = text;
+
     const start = this.insertAt;
     const end = this.insertAt + this.insertedLen;
-    const before = ta.value.slice(0, start);
-    const after = ta.value.slice(end);
-    ta.value = before + text + after;
-    this.insertedLen = text.length;
+    const segment = ta.value.slice(start, end);
+
+    if (segment === this.lastInserted) {
+      // Still ours: replace the whole segment (revisions allowed).
+      ta.value = ta.value.slice(0, start) + text + ta.value.slice(end);
+      this.insertedLen = text.length;
+      this.lastInserted = text;
+      ta.setSelectionRange(start + text.length, start + text.length);
+    } else {
+      // The user edited the segment. Stop owning it and append only the new
+      // words at the caret, leaving their changes alone.
+      const caret = ta.selectionStart ?? ta.value.length;
+      const delta = text.slice(commonPrefixLen(this.lastInserted, text));
+      this.lastInserted = text;
+      if (delta) {
+        ta.value = ta.value.slice(0, caret) + delta + ta.value.slice(caret);
+        this.insertAt = caret;
+        this.insertedLen = 0;
+        ta.setSelectionRange(caret + delta.length, caret + delta.length);
+      }
+    }
     ta.focus();
-    ta.setSelectionRange(start + text.length, start + text.length);
     autosize(ta);
   },
 
@@ -2851,6 +2876,12 @@ function persistTabOrder() {
 }
 
 /* ── Misc helpers ────────────────────────────────────────────────────────── */
+
+function commonPrefixLen(a, b) {
+  let i = 0;
+  while (i < a.length && i < b.length && a[i] === b[i]) i++;
+  return i;
+}
 
 function autosize(textarea) {
   if (!textarea) return;

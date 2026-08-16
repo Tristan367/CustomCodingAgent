@@ -18,11 +18,15 @@ from fastapi import (
 )
 from fastapi.responses import FileResponse, JSONResponse, StreamingResponse
 
-from agent_server import agent, images, permissions, streaming_stt
+from agent_server import agent, images, permissions, streaming_stt, whisper_streaming
 from agent_server import database as db
 from agent_server import stt as stt_service
 from agent_server.compaction import compact_session_events, should_offer_compaction
-from agent_server.config import MIN_COMPACT_THRESHOLD, UPLOAD_DIR
+from agent_server.config import (
+    MIN_COMPACT_THRESHOLD,
+    UPLOAD_DIR,
+    whisper_streaming_available,
+)
 from agent_server.models import ChatRequest, CompactProfileRequest, ResolveRequest
 from agent_server.system_prompt import (
     COMPACTION,
@@ -461,6 +465,56 @@ async def stt_stream(websocket: WebSocket):
     partial hypotheses as the speech is decoded, then a final result when it
     sends a text message (or disconnects)."""
     await websocket.accept()
+    if whisper_streaming_available():
+        await _whisper_stream(websocket)
+    else:
+        await _sherpa_stream(websocket)
+
+
+async def _whisper_stream(websocket: WebSocket):
+    """Sliding-window re-transcription through whisper-server."""
+    try:
+        server = await whisper_streaming.get_server()
+    except whisper_streaming.WhisperStreamingError as e:
+        await websocket.send_json({"error": str(e)})
+        await websocket.close()
+        return
+
+    session = whisper_streaming.WhisperSession(server)
+    try:
+        should_finalize = True
+        while True:
+            message = await websocket.receive()
+            if message["type"] == "websocket.disconnect":
+                should_finalize = False
+                break
+            if message.get("text") is not None:
+                break  # the client asked to finalize the utterance
+            if message.get("bytes") is not None:
+                samples = np.frombuffer(message["bytes"], dtype=np.float32)
+                if samples.size:
+                    session.append(samples)
+                    if not session.busy and session.new_seconds >= whisper_streaming.STEP_SECONDS:
+                        session.busy = True
+                        try:
+                            partial = await session.transcribe()
+                            await websocket.send_json({"text": partial, "partial": True})
+                        except Exception:
+                            pass  # a failed partial is dropped; the final still runs
+                        finally:
+                            session.busy = False
+        if should_finalize:
+            try:
+                final = await session.transcribe()
+                await websocket.send_json({"text": final, "partial": False})
+            except Exception:
+                await websocket.send_json({"text": "", "partial": False})
+    except WebSocketDisconnect:
+        pass
+
+
+async def _sherpa_stream(websocket: WebSocket):
+    """Fallback: a true streaming decoder via sherpa-onnx zipformer."""
     try:
         recognizer = streaming_stt.get_recognizer()
     except streaming_stt.StreamingSTTError as e:

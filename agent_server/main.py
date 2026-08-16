@@ -73,6 +73,23 @@ async def _discover_deepseek_models():
         log.warning("deepseek model discovery failed", exc_info=True)
 
 
+async def _warm_whisper():
+    """Preload whisper-server so the first dictation doesn't wait on the model.
+
+    whisper-server loads the model when it starts, which takes a few seconds;
+    doing it here, in the background, means the first toggle is instant.
+    """
+    from agent_server import whisper_streaming
+
+    if not whisper_streaming.whisper_streaming_available():
+        return
+    try:
+        await whisper_streaming.get_server()
+        log.info("whisper-server ready for streaming dictation")
+    except Exception:
+        log.warning("whisper-server warm-up failed; streaming dictation will retry", exc_info=True)
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     from agent_server.logging_setup import configure
@@ -99,10 +116,13 @@ async def lifespan(app: FastAPI):
 
     set_theme((await db.get_setting("theme")) or "green")
     reaper = asyncio.create_task(_reap_browsers())
+    whisper_warmup = asyncio.create_task(_warm_whisper())
 
     yield
 
     reaper.cancel()
+    whisper_warmup.cancel()
+    from agent_server import whisper_streaming
     from agent_server.tools import browser
 
     # Stop in-flight turns before closing the database underneath them. A run
@@ -110,6 +130,7 @@ async def lifespan(app: FastAPI):
     # connection that had just been closed, losing the assistant message and
     # raising into a background task nobody was watching.
     await agent.shutdown()
+    await whisper_streaming.shutdown()
     await browser.close_browser()
     await close_db()
 

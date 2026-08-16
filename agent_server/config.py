@@ -319,10 +319,17 @@ def _find_whisper_model() -> str:
 
 WHISPER_MODEL = _find_whisper_model()
 FFMPEG_BIN = os.getenv("FFMPEG_BIN") or shutil.which("ffmpeg")
+WHISPER_SERVER_BIN = os.getenv("WHISPER_SERVER_BIN") or shutil.which("whisper-server")
+WHISPER_SERVER_PORT = int(os.getenv("WHISPER_SERVER_PORT", "8177"))
 
 
 def stt_available() -> bool:
     return bool(WHISPER_BIN and WHISPER_MODEL and FFMPEG_BIN)
+
+
+def whisper_streaming_available() -> bool:
+    """whisper-server (whisper.cpp) for accurate streaming dictation."""
+    return bool(WHISPER_SERVER_BIN and WHISPER_MODEL)
 
 
 def _find_sherpa_model_dir() -> str:

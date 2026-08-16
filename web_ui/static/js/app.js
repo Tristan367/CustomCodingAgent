@@ -2040,6 +2040,7 @@ const Dictation = {
   finalText: '',
   insertAt: 0,         // caret offset where the live dictation segment starts
   insertedLen: 0,      // length of the text currently occupying that segment
+  lastInserted: '',    // last partial written to the textarea (skip no-op writes)
   analyser: null,
   rafId: null,
   meterGeneration: 0,   // stale animation loops check this and exit
@@ -2202,11 +2203,12 @@ const Dictation = {
   /* ── Streaming dictation (sherpa-onnx) ─────────────────────────────────── */
 
   async loadWorklet() {
-    if (this._workletReady) return true;
     if (!this.streamCtx || !this.streamCtx.audioWorklet) return false;
+    // addModule is per-context; only re-add when the context is new.
+    if (this._workletContext === this.streamCtx) return true;
     try {
       await this.streamCtx.audioWorklet.addModule('/static/js/stt-worklet.js');
-      this._workletReady = true;
+      this._workletContext = this.streamCtx;
       return true;
     } catch (_) { return false; }
   },
@@ -2232,11 +2234,16 @@ const Dictation = {
     const ta = App.els.textarea;
     this.insertAt = ta ? (ta.selectionStart ?? ta.value.length) : 0;
     this.insertedLen = 0;
+    this.lastInserted = '';
 
     try {
-      // A 16 kHz context: Chrome resamples the input, so the worklet sees
-      // exactly the PCM the recognizer wants.
-      this.streamCtx = new (window.AudioContext || window.webkitAudioContext)({ sampleRate: 16000 });
+      // A 16 kHz context, reused across dictation sessions: Chrome resamples
+      // the input, and keeping one context means the worklet module stays
+      // registered and addModule() is not re-run every toggle.
+      if (!this.streamCtx || this.streamCtx.state === 'closed') {
+        this.streamCtx = new (window.AudioContext || window.webkitAudioContext)({ sampleRate: 16000 });
+      }
+      if (this.streamCtx.state === 'suspended') this.streamCtx.resume();
       const src = this.streamCtx.createMediaStreamSource(stream);
       this.gain = this.streamCtx.createGain();
       this.gain.gain.value = Math.pow(10, micGainDb() / 20);
@@ -2314,6 +2321,11 @@ const Dictation = {
   updateDictationSegment(text) {
     const ta = App.els.textarea;
     if (!ta) return;
+    // Only rewrite the textarea when the hypothesis actually changed: rewriting
+    // on every partial would clear any selection the user is dragging and stop
+    // them from typing alongside the recording.
+    if (text === this.lastInserted) return;
+    this.lastInserted = text;
     const start = this.insertAt;
     const end = this.insertAt + this.insertedLen;
     const before = ta.value.slice(0, start);
@@ -2395,12 +2407,9 @@ const Dictation = {
     this.src = null;
     this.gain = null;
     this.dest = null;
-    if (this.streamCtx) {
-      const ctx = this.streamCtx;
-      try { ctx.close(); } catch (_) {}
-      if (this.audioCtx === ctx) this.audioCtx = null;
-    }
-    this.streamCtx = null;
+    // streamCtx is deliberately kept open: AudioWorklet modules are registered
+    // per-context, so closing it would require addModule() again before the next
+    // AudioWorkletNode, and a fresh node would otherwise throw "Unknown name".
     if (this.streamRef) {
       this.streamRef.getTracks().forEach((t) => t.stop());
       this.streamRef = null;

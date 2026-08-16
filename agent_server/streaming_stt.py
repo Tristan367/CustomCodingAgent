@@ -82,7 +82,7 @@ def get_recognizer():
                 num_threads=2,
                 sample_rate=SAMPLE_RATE,
                 feature_dim=80,
-                decoding_method="greedy_search",
+                decoding_method="modified_beam_search",
             )
     return _recognizer
 

@@ -165,6 +165,51 @@ templates.env.filters["duration"] = duration_label
 # render can reach it without an async DB read per request; seeded at startup
 # and updated when the user picks a new one.
 _theme = "green"
+_custom_color = ""  # hex accent for the "custom" theme, "" when not in use
+
+_HEX_RE = re.compile(r"^#[0-9a-fA-F]{6}$")
+
+
+def _hex_to_rgb(value: str):
+    h = value.lstrip("#")
+    return tuple(int(h[i : i + 2], 16) for i in (0, 2, 4))
+
+
+def _rgb_to_hex(rgb) -> str:
+    return f"#{rgb[0]:02x}{rgb[1]:02x}{rgb[2]:02x}"
+
+
+def _mix(rgb, target, t):
+    return tuple(round(c + (target[i] - c) * t) for i, c in enumerate(rgb))
+
+
+def _lum(rgb) -> float:
+    return (0.299 * rgb[0] + 0.587 * rgb[1] + 0.114 * rgb[2]) / 255.0
+
+
+def theme_vars(value: str) -> dict:
+    """Derive the four accent variables from one picked hex colour.
+
+    The text accent is clamped to ~50% perceived brightness so inline code,
+    links and other accent text stay readable, while the button and dim shades
+    track the picked colour as dark as the user wants them. Kept in step with
+    the JS ``deriveTheme`` in index_content.html.
+    """
+    rgb = _hex_to_rgb(value)
+    lum = _lum(rgb)
+    if lum < 0.5:
+        t = (0.5 - lum) / (1.0 - lum)
+        text = _mix(rgb, (255, 255, 255), t)
+    else:
+        text = rgb
+    btn = _mix(rgb, (0, 0, 0), 0.28)  # ~72% brightness, like the presets
+    dim = _mix(rgb, (0, 0, 0), 0.50)  # ~50%, for hover backgrounds and borders
+    return {
+        "accent": _rgb_to_hex(text),
+        "accent_rgb": f"{text[0]}, {text[1]}, {text[2]}",
+        "accent_dim": _rgb_to_hex(dim),
+        "accent_btn": _rgb_to_hex(btn),
+    }
 
 
 def set_theme(value: str) -> None:
@@ -176,6 +221,28 @@ def current_theme() -> str:
     return _theme
 
 
+def set_custom_color(value: str) -> None:
+    global _custom_color
+    _custom_color = value if _HEX_RE.match(value or "") else ""
+
+
+def custom_color() -> str:
+    return _custom_color
+
+
+def custom_theme_style() -> str:
+    """Inline ``--accent*`` declarations for the custom theme, or ``''``."""
+    if _theme != "custom" or not _custom_color:
+        return ""
+    v = theme_vars(_custom_color)
+    return (
+        f"--accent:{v['accent']};--accent-rgb:{v['accent_rgb']};"
+        f"--accent-dim:{v['accent_dim']};--accent-btn:{v['accent_btn']};"
+    )
+
+
 templates.env.globals["current_theme"] = current_theme
+templates.env.globals["custom_color"] = custom_color
+templates.env.globals["custom_theme_style"] = custom_theme_style
 
 

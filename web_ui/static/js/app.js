@@ -3727,7 +3727,7 @@ const FileEditor = (() => {
   function mem(sessionId) {
     if (!sessions[sessionId]) {
       sessions[sessionId] = {
-        open: false, path: null,
+        open: false, path: null, split: false,
         savedContent: '', buffer: '', scrollTop: 0, caret: 0,
         line: null, lineEnd: null,
         history: [], hi: -1,
@@ -3886,7 +3886,6 @@ const FileEditor = (() => {
     }
     dlg.classList.remove('open');
     document.body.classList.remove('editor-open');
-    document.body.classList.remove('editor-split');
     if (s.sessionId) mem(s.sessionId).open = false;
   }
 
@@ -4105,6 +4104,7 @@ const FileEditor = (() => {
     if (opts.record !== false) recordNav(data.path);
     updateNavButtons();
     syncEditorButton();
+    applySplit(memCurrent().split);
     if (s.line) scrollToTarget();
     else textareaEl.scrollTop = 0;
     return true;
@@ -4161,6 +4161,7 @@ const FileEditor = (() => {
     const m = mem(s.sessionId);
     m.open = true;
     m.path = s.path;
+    m.split = document.body.classList.contains('editor-split');
     m.savedContent = s.content;
     m.buffer = textareaEl.value;
     m.scrollTop = textareaEl.scrollTop;
@@ -4169,7 +4170,6 @@ const FileEditor = (() => {
     m.lineEnd = s.lineEnd;
     dlg.classList.remove('open');
     document.body.classList.remove('editor-open');
-    document.body.classList.remove('editor-split');
     s.dirty = false;
   }
 
@@ -4179,6 +4179,7 @@ const FileEditor = (() => {
     if (!App.sessionId) { syncEditorButton(); return; }
     const m = mem(App.sessionId);
     syncEditorButton();
+    applySplit(m.split);
     if (!m.open || !m.path) return;
     ensure();
     if (m.buffer !== m.savedContent) {
@@ -4200,6 +4201,7 @@ const FileEditor = (() => {
       updateButtons();
       show();
       updateNavButtons();
+      applySplit(m.split);
       textareaEl.scrollTop = m.scrollTop;
       textareaEl.setSelectionRange(m.caret, m.caret);
     } else if (await open(m.path, { record: false, quiet: true })) {
@@ -4304,11 +4306,18 @@ const FileEditor = (() => {
 
   /* Split view: shrink the editor to half height so the chat history stays
    * visible above it. Default is full height. */
+  function applySplit(half) {
+    document.body.classList.toggle('editor-split', half);
+    if (splitBtn) {
+      splitBtn.classList.toggle('active', half);
+      splitBtn.textContent = half ? '\u229E' : '\u229F';  // ⊞ expand / ⊟ collapse
+      splitBtn.title = half ? 'Full height' : 'Half height';
+    }
+  }
   function toggleSplit() {
-    const half = document.body.classList.toggle('editor-split');
-    splitBtn.classList.toggle('active', half);
-    splitBtn.textContent = half ? '\u229E' : '\u229F';  // ⊞ expand / ⊟ collapse
-    splitBtn.title = half ? 'Full height' : 'Half height';
+    const half = !document.body.classList.contains('editor-split');
+    applySplit(half);
+    memCurrent().split = half;
   }
 
   function applyWrap() {
@@ -4413,7 +4422,6 @@ const FileEditor = (() => {
     if (!dlg) return;
     dlg.classList.remove('open');
     document.body.classList.remove('editor-open');
-    document.body.classList.remove('editor-split');
     s.dirty = false;
     if (s.sessionId) mem(s.sessionId).open = false;
   }

@@ -173,12 +173,18 @@ async function stopCodeAgent(button) {
         </div>
         <label class="field-label">Color theme
             <span class="control-row theme-swatches">
-                {% for name, color in [('green', '#8ea24f'), ('red', '#c06a5f'), ('blue', '#7d9bb3'), ('gray', '#a4aca9')] %}
+                {% for name, color in [('green', '#8ea24f'), ('red', '#c06a5f'), ('blue', '#8fb0c7'), ('gray', '#a4aca9')] %}
                 <button type="button" class="theme-swatch" style="background:{{ color }}"
                         data-theme="{{ name }}" title="{{ name | title }}"
                         {% if settings.get('theme', 'green') == name %}aria-pressed="true"{% endif %}
                         onclick="setTheme(this)"></button>
                 {% endfor %}
+                <label class="theme-swatch theme-custom" title="Custom colour"
+                       aria-pressed="{{ 'true' if settings.get('theme', 'green') == 'custom' else 'false' }}">
+                    <input type="color" value="{{ custom_color() or '#8ea24f' }}"
+                           oninput="applyCustomTheme(this.value)"
+                           onchange="setCustomTheme(this.value)">
+                </label>
             </span>
         </label>
         <p class="hint" style="margin-top:6px">
@@ -352,12 +358,64 @@ function saveExpandTools() {
 function setTheme(btn) {
     // Apply instantly (the CSS keys off body[data-theme]); persist in the background.
     document.body.dataset.theme = btn.dataset.theme;
+    clearCustomVars();
     document.querySelectorAll('.theme-swatch').forEach((b) => {
         b.setAttribute('aria-pressed', b === btn ? 'true' : 'false');
     });
     const form = new FormData();
     form.append('theme', btn.dataset.theme);
     fetch('/_settings/theme', { method: 'POST', body: form });
+}
+
+/* The custom accent derives from one hex: the text accent is clamped to ~50%
+   brightness, the button and dim shades track the picked colour darker. This
+   mirrors agent_server/templating.theme_vars -- keep them in step. */
+function deriveTheme(hex) {
+    const n = parseInt(hex.slice(1), 16);
+    const r = n >> 16 & 255, g = n >> 8 & 255, b = n & 255;
+    const lum = (0.299 * r + 0.587 * g + 0.114 * b) / 255;
+    let tr = r, tg = g, tb = b;
+    if (lum < 0.5) {
+        const t = (0.5 - lum) / (1 - lum);
+        tr = Math.round(r + (255 - r) * t);
+        tg = Math.round(g + (255 - g) * t);
+        tb = Math.round(b + (255 - b) * t);
+    }
+    const btn = [r, g, b].map((c) => Math.round(c * 0.72));
+    const dim = [r, g, b].map((c) => Math.round(c * 0.5));
+    const hexOf = (rr, gg, bb) => '#' + [rr, gg, bb].map((c) => c.toString(16).padStart(2, '0')).join('');
+    return {
+        '--accent': hexOf(tr, tg, tb),
+        '--accent-rgb': `${tr}, ${tg}, ${tb}`,
+        '--accent-dim': hexOf(dim[0], dim[1], dim[2]),
+        '--accent-btn': hexOf(btn[0], btn[1], btn[2]),
+    };
+}
+
+function clearCustomVars() {
+    for (const k of ['--accent', '--accent-rgb', '--accent-dim', '--accent-btn']) {
+        document.body.style.removeProperty(k);
+    }
+}
+
+function setCustomTheme(hex) {
+    if (!/^#[0-9a-fA-F]{6}$/.test(hex)) return;
+    applyCustomTheme(hex);
+    const form = new FormData();
+    form.append('theme', 'custom');
+    form.append('custom', hex);
+    fetch('/_settings/theme', { method: 'POST', body: form });
+}
+
+/* Instant recolor while the picker is dragged; no server round-trip. */
+function applyCustomTheme(hex) {
+    if (!/^#[0-9a-fA-F]{6}$/.test(hex)) return;
+    const v = deriveTheme(hex);
+    document.body.dataset.theme = 'custom';
+    for (const [k, val] of Object.entries(v)) document.body.style.setProperty(k, val);
+    document.querySelectorAll('.theme-swatch').forEach((b) => {
+        b.setAttribute('aria-pressed', b.classList.contains('theme-custom') ? 'true' : 'false');
+    });
 }
 
 /* Judging a voice from its name is hopeless, so play a line with the current

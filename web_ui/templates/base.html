@@ -18,7 +18,8 @@
 <body data-sound="{{ 'off' if sound_enabled is defined and not sound_enabled else 'on' }}"
       data-sound-volume="{{ settings.get('sound_volume', '0.5') if settings is defined else '0.5' }}"
       data-sound-kind="{{ settings.get('sound_choice', 'click') if settings is defined else 'click' }}"
-      data-theme="{{ current_theme() }}">
+      data-theme="{{ current_theme() }}"
+      {% if current_theme() == 'custom' %}style="{{ custom_theme_style() }}"{% endif %}>
     <header id="top-bar">
         <a href="/" class="logo" title="Home">CodeAgent</a>
         <nav id="tab-bar"><div class="tab-scroll" id="tab-scroll"></div></nav>

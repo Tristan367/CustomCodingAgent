@@ -112,9 +112,10 @@ async def lifespan(app: FastAPI):
         log.warning("custom tool problem: %s", problem)
     await load_custom_endpoint_providers()
     await _discover_deepseek_models()
-    from agent_server.templating import set_theme
+    from agent_server.templating import set_custom_color, set_theme
 
     set_theme((await db.get_setting("theme")) or "green")
+    set_custom_color((await db.get_setting("theme_custom")) or "")
     reaper = asyncio.create_task(_reap_browsers())
     whisper_warmup = asyncio.create_task(_warm_whisper())
 

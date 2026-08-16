@@ -2,13 +2,14 @@
 
 
 import json
+import re
 
 from fastapi import APIRouter, Form, Request
 
 from agent_server import database as db
 from agent_server.providers import get_provider, get_provider_settings_fields
 from agent_server.routes.context import _clamp, _home_context
-from agent_server.templating import templates
+from agent_server.templating import set_custom_color, set_theme, templates
 
 router = APIRouter()
 
@@ -85,13 +86,17 @@ async def save_expand_setting(request: Request):
 
 @router.post("/_settings/theme")
 async def save_theme(request: Request):
-    """The accent colour family: green (default), red, blue, or gray."""
+    """The accent colour family: green (default), red, blue, gray, or custom."""
     form = await request.form()
     theme = str(form.get("theme", "")).strip()
-    if theme not in ("green", "red", "blue", "gray"):
+    if theme not in ("green", "red", "blue", "gray", "custom"):
         return {"ok": False}
+    if theme == "custom":
+        custom = str(form.get("custom", "")).strip()
+        if not re.fullmatch(r"#[0-9a-fA-F]{6}", custom):
+            return {"ok": False}
+        await db.set_setting("theme_custom", custom)
+        set_custom_color(custom)
     await db.set_setting("theme", theme)
-    from agent_server.templating import set_theme
-
     set_theme(theme)
     return {"ok": True}

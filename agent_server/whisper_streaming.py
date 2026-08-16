@@ -45,12 +45,15 @@ _NOISE = re.compile(
 _DASH = re.compile(r"(?<!\S)--(?!\S)")
 # whisper sometimes runs a sentence straight into the next ("done.Next").
 _MISSING_SPACE = re.compile(r"([.!?])([A-Z])")
+# whisper sometimes leaves a space before punctuation ("even ?").
+_SPACE_PUNCT = re.compile(r"\s+([,.;:!?])")
 
 
 def _clean(text: str) -> str:
     text = _NOISE.sub(" ", text)
     text = _DASH.sub(" ", text)
     text = _MISSING_SPACE.sub(r"\1 \2", text)
+    text = _SPACE_PUNCT.sub(r"\1", text)
     return re.sub(r"\s+", " ", text).strip()
 
 

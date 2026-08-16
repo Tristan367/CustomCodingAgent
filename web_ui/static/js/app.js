@@ -128,9 +128,10 @@ function initSession() {
     detachStream();
     pendingImages = [];
     renderAttachments();
-    // The editor lives inside the old session view, which this swap replaces;
-    // close it so switching back starts with a fresh session, not a stale editor.
-    FileEditor.forceClose();
+    // Snapshot the old session's editor (buffer, scroll, open state) into
+    // memory and hide it, then reopen the new session's editor.
+    FileEditor.suspend();
+    FileEditor.restore();
   }
   App.els = {
     form: document.getElementById('chat-form'),
@@ -3000,6 +3001,13 @@ document.addEventListener('keydown', (e) => {
     if (!e.repeat) Dictation.toggle();
     return;
   }
+  // Ctrl+E reopens the editor at this session's last file (or closes nothing).
+  if (e.code === 'KeyE' && e.ctrlKey && !e.altKey && !e.metaKey && !e.shiftKey
+      && !isTyping(e.target)) {
+    e.preventDefault();
+    FileEditor.reopen();
+    return;
+  }
   // Space reads the newest reply, the way it plays and pauses a video. Right
   // Alt was the plan until it turned out Firefox owns it. Only when the caret
   // is not in a field, and Space must still scroll nothing.
@@ -3711,6 +3719,24 @@ const FileEditor = (() => {
     lineEnd: null,
   };
 
+  // Per-session memory: the last open file, the back/forward history, and the
+  // open/closed state. Switching sessions snapshots the old one and restores the
+  // new, so the editor survives a tab change with its buffer and scroll intact.
+  const sessions = {}; // sessionId -> { open, path, history, hi, ... }
+
+  function mem(sessionId) {
+    if (!sessions[sessionId]) {
+      sessions[sessionId] = {
+        open: false, path: null,
+        savedContent: '', buffer: '', scrollTop: 0, caret: 0,
+        line: null, lineEnd: null,
+        history: [], hi: -1,
+      };
+    }
+    return sessions[sessionId];
+  }
+  function memCurrent() { return mem(s.sessionId); }
+
   // Mirrors the server's lang_for_path so a rename that changes the extension
   // still gets syntax highlighting without a round-trip.
   const EXT_LANG = {
@@ -3731,7 +3757,7 @@ const FileEditor = (() => {
     '.tf': 'hcl', '.tfvars': 'hcl',
   };
 
-  let bodyEl, highlightEl, textareaEl, statusEl, pathEl, wrapBtn, saveBtn, formatBtn, menuBtn, menu;
+  let bodyEl, highlightEl, textareaEl, statusEl, pathEl, wrapBtn, saveBtn, formatBtn, menuBtn, menu, backBtn, fwdBtn;
 
   function mountEditor() {
     // Lives inside the session view, between the chat history and the composer,
@@ -3755,6 +3781,8 @@ const FileEditor = (() => {
       '<div class="fe-head">' +
         '<span class="fe-path"></span>' +
         '<span class="fe-actions">' +
+          '<button type="button" class="fe-btn" data-fe="back" title="Back">&#8592;</button>' +
+          '<button type="button" class="fe-btn" data-fe="fwd" title="Forward">&#8594;</button>' +
           '<button type="button" class="fe-btn" data-fe="copy" title="Copy path and line number">Copy path</button>' +
           '<button type="button" class="fe-btn" data-fe="wrap" title="Toggle line wrap">Wrap</button>' +
           '<button type="button" class="fe-btn" data-fe="format" title="Format document">Format</button>' +
@@ -3775,10 +3803,13 @@ const FileEditor = (() => {
     saveBtn = dlg.querySelector('[data-fe=save]');
     formatBtn = dlg.querySelector('[data-fe=format]');
     menuBtn = dlg.querySelector('[data-fe=menu]');
+    backBtn = dlg.querySelector('[data-fe=back]');
+    fwdBtn = dlg.querySelector('[data-fe=fwd]');
     bodyEl = dlg.querySelector('.fe-body');
     highlightEl = dlg.querySelector('.fe-highlight');
     textareaEl = dlg.querySelector('.fe-textarea');
     statusEl = dlg.querySelector('.fe-status');
+    applyWrap();
 
     menu = el('div', 'fe-menu');
     menu.hidden = true;
@@ -3803,6 +3834,9 @@ const FileEditor = (() => {
     wrapBtn.addEventListener('click', toggleWrap);
     saveBtn.addEventListener('click', save);
     formatBtn.addEventListener('click', formatDocument);
+    backBtn.addEventListener('click', goBack);
+    fwdBtn.addEventListener('click', goForward);
+    updateNavButtons();
     // Header buttons must not steal focus, or the caret/selection highlight in
     // the textarea vanishes when one is clicked.
     dlg.querySelectorAll('.fe-actions button').forEach((b) => {
@@ -3825,6 +3859,7 @@ const FileEditor = (() => {
       dlg.classList.add('open');
       document.body.classList.add('editor-open');
     }
+    if (s.sessionId) mem(s.sessionId).open = true;
   }
 
   async function close() {
@@ -3837,6 +3872,7 @@ const FileEditor = (() => {
     }
     dlg.classList.remove('open');
     document.body.classList.remove('editor-open');
+    if (s.sessionId) mem(s.sessionId).open = false;
   }
 
   /* The clipboard reference is the absolute path, with the cursor's line (or the
@@ -3881,7 +3917,8 @@ const FileEditor = (() => {
    * dirty state. Crucially, s.path changes BEFORE the next save, so an edit made
    * after a rename goes to the new file rather than recreating the old one. */
   function setPath(newPath) {
-    const oldSuffix = suffixOf(s.path);
+    const oldPath = s.path;
+    const oldSuffix = suffixOf(oldPath);
     s.path = newPath;
     pathEl.textContent = newPath;
     pathEl.title = newPath;
@@ -3889,6 +3926,11 @@ const FileEditor = (() => {
       s.lang = langForPath(newPath);
       renderHighlight();
     }
+    // Keep the session's memory in step: the reopen button and back/forward
+    // history point at the current path.
+    const m = memCurrent();
+    m.path = newPath;
+    if (m.history[m.hi] === oldPath) m.history[m.hi] = newPath;
     updateStatus();
   }
 
@@ -3955,7 +3997,7 @@ const FileEditor = (() => {
       return;
     }
     const data = await resp.json();
-    setStatus(`Duplicated as ${baseName(data.path)}`);
+    await open(data.path, {});
   }
 
   async function deleteFile() {
@@ -3997,56 +4039,171 @@ const FileEditor = (() => {
   }
 
   async function open(path, opts = {}) {
-    if (!App.sessionId) return;
+    if (!App.sessionId) return false;
     ensure();
-    s.sessionId = App.sessionId;
-    s.path = path;
-    s.line = opts.line || null;
-    s.lineEnd = opts.lineEnd || null;
-    s.dirty = false;
-    s.readonly = false;
-    caretPlaced = false;
-    applyWrap();
-    s.content = '';
-    s.lang = '';
-    s.truncated = false;
-
-    // Load first, so a missing file never flashes an empty editor.
+    // Load first, so a missing file never disturbs the current buffer. On
+    // success the editor state is committed; on failure it is left untouched.
     let data;
     try {
       const resp = await fetch(
         `/api/files/read?session_id=${encodeURIComponent(App.sessionId)}&path=${encodeURIComponent(path)}`);
       if (resp.status === 404) {
-        await ui.alert('Sorry, that file does not exist, so it cannot be opened or edited.', 'File not found');
-        return;
+        if (!opts.quiet) {
+          await ui.alert('Sorry, that file does not exist, so it cannot be opened or edited.', 'File not found');
+        }
+        return false;
       }
       if (!resp.ok) {
-        let msg = `Could not open ${path}`;
-        try { const j = await resp.json(); msg = j.detail || msg; } catch (_) {}
-        await ui.alert(msg, 'Could not open file');
-        return;
+        if (!opts.quiet) {
+          let msg = `Could not open ${path}`;
+          try { const j = await resp.json(); msg = j.detail || msg; } catch (_) {}
+          await ui.alert(msg, 'Could not open file');
+        }
+        return false;
       }
       data = await resp.json();
     } catch (err) {
-      await ui.alert(`Could not open ${path}: ${err}`, 'Could not open file');
-      return;
+      if (!opts.quiet) await ui.alert(`Could not open ${path}: ${err}`, 'Could not open file');
+      return false;
     }
 
+    s.sessionId = App.sessionId;
     s.path = data.path;
     s.content = data.content;
     s.lang = data.lang || '';
     s.truncated = data.truncated;
     // A truncated file is view-only: saving would silently discard the tail.
     s.readonly = !!data.truncated;
+    s.dirty = false;
+    s.line = opts.line || null;
+    s.lineEnd = opts.lineEnd || null;
+    caretPlaced = false;
     pathEl.textContent = data.path;
     pathEl.title = data.path;
+    memCurrent().path = data.path;
 
-    textareaEl.value = s.content;
+    textareaEl.value = data.content;
     renderHighlight();
     updateStatus();
     updateButtons();
     show();
-    scrollToTarget();
+    if (opts.record !== false) recordNav(data.path);
+    updateNavButtons();
+    if (s.line) scrollToTarget();
+    else textareaEl.scrollTop = 0;
+    return true;
+  }
+
+  /* ── Back / forward ─────────────────────────────────────────────────────── */
+
+  function recordNav(path) {
+    const m = memCurrent();
+    if (m.history[m.hi] === path) return;
+    m.history = m.history.slice(0, m.hi + 1);
+    m.history.push(path);
+    m.hi = m.history.length - 1;
+    updateNavButtons();
+  }
+  function updateNavButtons() {
+    if (!backBtn || !fwdBtn) return;
+    const m = memCurrent();
+    backBtn.disabled = m.hi <= 0;
+    fwdBtn.disabled = m.hi >= m.history.length - 1;
+  }
+  async function goBack() {
+    const m = memCurrent();
+    while (m.hi > 0) {
+      m.hi--;
+      if (await open(m.history[m.hi], { record: false, quiet: true })) { updateNavButtons(); return; }
+      m.history.splice(m.hi, 1);  // gone: drop it and keep walking back
+    }
+    updateNavButtons();
+    setStatus('That file no longer exists', true);
+  }
+  async function goForward() {
+    const m = memCurrent();
+    while (m.hi < m.history.length - 1) {
+      m.hi++;
+      if (await open(m.history[m.hi], { record: false, quiet: true })) { updateNavButtons(); return; }
+      m.history.splice(m.hi, 1);
+      m.hi--;
+    }
+    updateNavButtons();
+    setStatus('That file no longer exists', true);
+  }
+
+  /* ── Session switch: suspend / restore ─────────────────────────────────── */
+
+  // Snapshot the current editor into its session's memory and hide it, so a tab
+  // switch never shows a stale editor. Unsaved edits are kept in memory.
+  function suspend() {
+    if (!dlg || !s.sessionId) return;
+    const m = mem(s.sessionId);
+    m.open = dlg.classList.contains('open');
+    m.path = s.path;
+    m.savedContent = s.content;
+    m.buffer = textareaEl.value;
+    m.scrollTop = textareaEl.scrollTop;
+    m.caret = textareaEl.selectionStart;
+    m.line = s.line;
+    m.lineEnd = s.lineEnd;
+    dlg.classList.remove('open');
+    document.body.classList.remove('editor-open');
+    s.dirty = false;
+  }
+
+  // Reopen the remembered file for the new session. A clean buffer is re-read
+  // so on-disk changes show up; a dirty one is restored in place.
+  async function restore() {
+    if (!App.sessionId) return;
+    const m = mem(App.sessionId);
+    if (!m.open || !m.path) return;
+    ensure();
+    if (m.buffer !== m.savedContent) {
+      s.sessionId = App.sessionId;
+      s.path = m.path;
+      s.content = m.savedContent;
+      s.lang = langForPath(m.path);
+      s.truncated = false;
+      s.readonly = false;
+      s.dirty = true;
+      s.line = m.line;
+      s.lineEnd = m.lineEnd;
+      caretPlaced = false;
+      pathEl.textContent = m.path;
+      pathEl.title = m.path;
+      textareaEl.value = m.buffer;
+      renderHighlight();
+      updateStatus();
+      updateButtons();
+      show();
+      updateNavButtons();
+      textareaEl.scrollTop = m.scrollTop;
+      textareaEl.setSelectionRange(m.caret, m.caret);
+    } else if (await open(m.path, { record: false, quiet: true })) {
+      textareaEl.scrollTop = m.scrollTop;
+    }
+  }
+
+  // Reopen the last file this session had open (the session-bar button).
+  function reopen() {
+    if (!App.sessionId) return;
+    if (dlg && dlg.classList.contains('open')) return;
+    const m = mem(App.sessionId);
+    if (m.path) open(m.path, {});
+  }
+
+  /* The file manager mutates files out from under us; keep the open buffer's
+   * path (or close it) so edits never recreate a moved/deleted file. */
+  function onRenamed(oldPath, newPath) {
+    if (s.path === oldPath) setPath(newPath);
+  }
+  function onMoved(oldPaths, destDir) {
+    if (!s.path || !oldPaths.includes(s.path)) return;
+    setPath(String(destDir).replace(/\/+$/, '') + '/' + baseName(s.path));
+  }
+  function onDeleted(paths) {
+    if (s.path && paths.includes(s.path)) forceClose();
   }
 
   function lineCount() {
@@ -4211,6 +4368,10 @@ const FileEditor = (() => {
   document.addEventListener('keydown', (e) => {
     if (e.key !== 'Escape') return;
     if (!dlg || !dlg.classList.contains('open')) return;
+    // A modal dialog (file manager, confirm, prompt) is open: leave the event
+    // alone so its native Esc handling closes it first. Esc then unwinds the
+    // file manager before the editor.
+    if (document.querySelector('dialog[open]')) return;
     e.preventDefault();
     close();
   });
@@ -4222,9 +4383,10 @@ const FileEditor = (() => {
     dlg.classList.remove('open');
     document.body.classList.remove('editor-open');
     s.dirty = false;
+    if (s.sessionId) mem(s.sessionId).open = false;
   }
 
-  return { open, close, forceClose };
+  return { open, close, forceClose, suspend, restore, reopen, onRenamed, onMoved, onDeleted };
 })();
 
 const FileBrowser = (() => {
@@ -4505,6 +4667,9 @@ const FileBrowser = (() => {
     const resp = await apiPost('/api/files/rename',
       { session_id: App.sessionId, path, name });
     if (!(await checkOk(resp, 'Could not rename'))) return;
+    let newPath = null;
+    if (resp) { try { newPath = (await resp.json()).path; } catch (_) {} }
+    if (newPath) FileEditor.onRenamed(path, newPath);
     open(basePath);
   }
 
@@ -4527,6 +4692,7 @@ const FileBrowser = (() => {
       const resp = await apiPost('/api/files/delete', { session_id: App.sessionId, path });
       if (!(await checkOk(resp, 'Could not delete'))) return;
     }
+    FileEditor.onDeleted(paths);
     open(basePath);
   }
 
@@ -4549,11 +4715,13 @@ const FileBrowser = (() => {
     const resp = await apiPost('/api/files/move',
       { session_id: App.sessionId, paths: [...moving], dest: basePath });
     if (!(await checkOk(resp, 'Could not move'))) return;
+    const oldPaths = [...moving];
     const movedPaths = [];
     if (resp) { try { movedPaths.push(...((await resp.json()).paths || [])); } catch (_) {} }
     const cb = moveCallback;
     moveCallback = null;
     moving = null;
+    FileEditor.onMoved(oldPaths, basePath);
     open(basePath);
     if (cb) cb(movedPaths);
   }
@@ -4638,4 +4806,9 @@ const FileBrowser = (() => {
 /* Session bar button: open the shared file manager at its last directory. */
 function openFileManager() {
   FileBrowser.open();
+}
+
+/* Session bar button: reopen the editor at this session's last file. */
+function openEditorLast() {
+  FileEditor.reopen();
 }

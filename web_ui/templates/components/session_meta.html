@@ -6,6 +6,8 @@
         <code class="session-dir" title="{{ session.project_dir }}">{{ session.project_dir | tildepath }}</code>
         <button type="button" class="icon-btn session-browse" onclick="openFileManager()"
                 title="Browse files">&#128193;</button>
+        <button type="button" class="icon-btn session-browse" onclick="openEditorLast()"
+                title="Open editor (Ctrl+E)">&#9998;</button>
         <span class="chip">{{ session.model }}</span>
         <span class="chip">{{ session.prompt_profile }}</span>
         <span class="chip">thinking: {{ session.thinking_effort or 'high' }}</span>

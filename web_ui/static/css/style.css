@@ -471,9 +471,13 @@ a.file-ref {
 }
 a.file-ref:hover { border-bottom-style: solid; color: var(--text); background: var(--bg-inset); }
 
+/* ``overflow-wrap: break-word`` (not ``anywhere``, which the message body uses)
+ * so a column's minimum width is its longest word -- short columns like a file
+ * name or "Language" stay on one line instead of breaking mid-word. Long prose
+ * columns still wrap at spaces and fill the leftover width. */
 .content-text table { border-collapse: collapse; margin: 0 0 10px; font-size: 12.5px; display: block; overflow-x: auto; }
-.content-text th, .content-text td { border: 1px solid var(--border); padding: 4px 9px; text-align: left; }
-.content-text th { background: var(--bg-inset); font-weight: 600; }
+.content-text th, .content-text td { border: 1px solid var(--border); padding: 4px 9px; text-align: left; overflow-wrap: break-word; }
+.content-text th { background: var(--bg-inset); font-weight: 600; white-space: nowrap; }
 
 /* Code blocks */
 .code-block {

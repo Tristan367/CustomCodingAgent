@@ -44,6 +44,11 @@ def test_clean_inserts_space_after_sentence_punctuation():
     assert whisper_streaming._clean("keep 3.14 and foo.py") == "keep 3.14 and foo.py"
 
 
+def test_clean_strips_space_before_punctuation():
+    assert whisper_streaming._clean("worth it even ?") == "worth it even?"
+    assert whisper_streaming._clean("hello , world") == "hello, world"
+
+
 def test_ensure_period():
     ensure = whisper_streaming.WhisperSession._ensure_period
     assert ensure("hello world") == "hello world."

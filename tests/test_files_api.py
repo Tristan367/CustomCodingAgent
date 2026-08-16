@@ -6,6 +6,7 @@ import pytest
 from fastapi import HTTPException
 
 from agent_server import database as db
+from agent_server import formatting
 from agent_server.formatting import formatter_for
 from agent_server.routes.files import (
     FormatRequest,
@@ -69,6 +70,23 @@ def test_formatter_for_maps_extensions():
     assert formatter_for("a.sh") == "shell"
     assert formatter_for("a.json") == "json"
     assert formatter_for("a.txt") is None
+
+
+async def test_python_format_pins_target_to_running_interpreter(monkeypatch):
+    import sys
+
+    captured = {}
+
+    async def fake_run(cmd, text, label, hint):
+        captured["cmd"] = cmd
+        return "formatted"
+
+    monkeypatch.setattr(formatting, "_run", fake_run)
+    result = await formatting.format_text("a.py", "x=1\n")
+    assert result == "formatted"
+    cmd = captured["cmd"]
+    i = cmd.index("--target-version")
+    assert cmd[i + 1] == f"py{sys.version_info.major}{sys.version_info.minor}"
 
 
 async def test_format_json_through_route(session):

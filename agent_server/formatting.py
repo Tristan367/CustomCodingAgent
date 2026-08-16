@@ -111,9 +111,14 @@ async def format_text(path: str, text: str) -> str:
         # current interpreter rather than assuming its bin directory is on PATH.
         if importlib.util.find_spec("black") is None:
             raise FormatError("black is not installed — pip install black")
+        # black 26.x defaults to targeting every Python up to the newest, so its
+        # AST safety check re-parses with this interpreter and warns that 3.13
+        # "cannot parse code formatted for 3.15". Pin the target to the running
+        # interpreter so the safety check always matches.
+        target = f"py{sys.version_info.major}{sys.version_info.minor}"
         return await _run(
-            [sys.executable, "-m", "black", "--quiet", "-"], text, "black",
-            "pip install black",
+            [sys.executable, "-m", "black", "--quiet", "--target-version", target, "-"],
+            text, "black", "pip install black",
         )
     if formatter == "prettier":
         return await _run(

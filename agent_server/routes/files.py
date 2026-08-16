@@ -190,6 +190,7 @@ async def move_entries(body: MoveRequest):
     if not dest.is_dir():
         raise HTTPException(404, f"Not a directory: {dest}")
     await _require_write(body.session_id, dest, session["project_dir"])
+    moved = []
     for src in body.paths:
         p = _resolve(session, src)
         await _require_write(body.session_id, p, session["project_dir"])
@@ -200,7 +201,8 @@ async def move_entries(body: MoveRequest):
             shutil.move(str(p), str(target))
         except OSError as e:
             raise HTTPException(403, f"Cannot move {p}: {e}") from None
-    return {"ok": True}
+        moved.append(str(target))
+    return {"ok": True, "paths": moved}
 
 
 @router.post("/copy")

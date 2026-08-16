@@ -3687,7 +3687,27 @@ const FileEditor = (() => {
     lineEnd: null,
   };
 
-  let bodyEl, highlightEl, textareaEl, statusEl, pathEl, wrapBtn, saveBtn, formatBtn;
+  // Mirrors the server's lang_for_path so a rename that changes the extension
+  // still gets syntax highlighting without a round-trip.
+  const EXT_LANG = {
+    '.py': 'python', '.pyw': 'python', '.js': 'javascript', '.mjs': 'javascript',
+    '.cjs': 'javascript', '.jsx': 'javascript', '.ts': 'typescript', '.tsx': 'typescript',
+    '.json': 'json', '.jsonc': 'json', '.sh': 'bash', '.bash': 'bash', '.zsh': 'bash',
+    '.fish': 'bash', '.html': 'xml', '.htm': 'xml', '.xml': 'xml', '.svg': 'xml',
+    '.css': 'css', '.scss': 'css', '.sass': 'css', '.less': 'css', '.md': 'markdown',
+    '.markdown': 'markdown', '.go': 'go', '.rs': 'rust', '.c': 'c', '.h': 'c',
+    '.cpp': 'cpp', '.cc': 'cpp', '.cxx': 'cpp', '.hpp': 'cpp', '.hh': 'cpp',
+    '.java': 'java', '.kt': 'kotlin', '.kts': 'kotlin', '.sql': 'sql',
+    '.yaml': 'yaml', '.yml': 'yaml', '.toml': 'ini', '.ini': 'ini', '.cfg': 'ini',
+    '.conf': 'ini', '.rb': 'ruby', '.php': 'php', '.cs': 'csharp', '.swift': 'swift',
+    '.scala': 'scala', '.lua': 'lua', '.r': 'r', '.pl': 'perl', '.vim': 'vim',
+    '.cmake': 'cmake', '.graphql': 'graphql', '.proto': 'protobuf', '.diff': 'diff',
+    '.patch': 'diff', '.nix': 'nix', '.hs': 'haskell', '.ex': 'elixir',
+    '.exs': 'elixir', '.erl': 'erlang', '.clj': 'clojure', '.dart': 'dart',
+    '.tf': 'hcl', '.tfvars': 'hcl',
+  };
+
+  let bodyEl, highlightEl, textareaEl, statusEl, pathEl, wrapBtn, saveBtn, formatBtn, menuBtn, menu;
 
   function mountEditor() {
     // Lives inside the session view, between the chat history and the composer,
@@ -3715,6 +3735,7 @@ const FileEditor = (() => {
           '<button type="button" class="fe-btn" data-fe="wrap" title="Toggle line wrap">Wrap</button>' +
           '<button type="button" class="fe-btn" data-fe="format" title="Format document">Format</button>' +
           '<button type="button" class="fe-btn fe-save" data-fe="save" title="Save (Ctrl+S)">Save</button>' +
+          '<button type="button" class="fe-btn" data-fe="menu" title="File actions (rename, move, delete)">\u22ef</button>' +
           '<button type="button" class="fe-btn" data-fe="close" title="Close">&times;</button>' +
         '</span>' +
       '</div>' +
@@ -3729,10 +3750,28 @@ const FileEditor = (() => {
     wrapBtn = dlg.querySelector('[data-fe=wrap]');
     saveBtn = dlg.querySelector('[data-fe=save]');
     formatBtn = dlg.querySelector('[data-fe=format]');
+    menuBtn = dlg.querySelector('[data-fe=menu]');
     bodyEl = dlg.querySelector('.fe-body');
     highlightEl = dlg.querySelector('.fe-highlight');
     textareaEl = dlg.querySelector('.fe-textarea');
     statusEl = dlg.querySelector('.fe-status');
+
+    menu = el('div', 'fe-menu');
+    menu.hidden = true;
+    menu.appendChild(menuAction('Rename', renameFile, false));
+    menu.appendChild(menuAction('Move\u2026', moveFile, false));
+    menu.appendChild(menuAction('Delete', deleteFile, true));
+    dlg.querySelector('.fe-actions').appendChild(menu);
+
+    menuBtn.addEventListener('click', (e) => {
+      e.stopPropagation();
+      menu.hidden = !menu.hidden;
+    });
+    document.addEventListener('click', (e) => {
+      if (menu && !menu.hidden && !menu.contains(e.target) && !menuBtn.contains(e.target)) {
+        menu.hidden = true;
+      }
+    });
 
     dlg.querySelector('[data-fe=close]').addEventListener('click', close);
     dlg.querySelector('[data-fe=copy]').addEventListener('click', copyRef);
@@ -3794,6 +3833,130 @@ const FileEditor = (() => {
     navigator.clipboard.writeText(ref).then(showCopyToast).catch(() => {});
   }
 
+  /* ── Rename / move / delete ─────────────────────────────────────────────── */
+
+  function baseName(path) {
+    const p = String(path || '');
+    const i = p.lastIndexOf('/');
+    return i >= 0 ? p.slice(i + 1) : p;
+  }
+  function dirName(path) {
+    const p = String(path || '');
+    const i = p.lastIndexOf('/');
+    return i > 0 ? p.slice(0, i) : (p.startsWith('/') ? '/' : '.');
+  }
+  function suffixOf(path) {
+    const name = baseName(path).toLowerCase();
+    const i = name.lastIndexOf('.');
+    return i > 0 ? name.slice(i) : '';
+  }
+  function langForPath(path) {
+    const name = baseName(path).toLowerCase();
+    if (name === 'dockerfile') return 'dockerfile';
+    if (name === 'makefile') return 'makefile';
+    return EXT_LANG[suffixOf(path)] || '';
+  }
+
+  /* Point the editor at a new path without disturbing the buffer, scroll, or
+   * dirty state. Crucially, s.path changes BEFORE the next save, so an edit made
+   * after a rename goes to the new file rather than recreating the old one. */
+  function setPath(newPath) {
+    const oldSuffix = suffixOf(s.path);
+    s.path = newPath;
+    pathEl.textContent = newPath;
+    pathEl.title = newPath;
+    if (suffixOf(newPath) !== oldSuffix) {
+      s.lang = langForPath(newPath);
+      renderHighlight();
+    }
+    updateStatus();
+  }
+
+  function menuAction(label, fn, danger) {
+    const b = document.createElement('button');
+    b.type = 'button';
+    b.textContent = label;
+    if (danger) b.className = 'danger';
+    b.addEventListener('click', () => { menu.hidden = true; fn(); });
+    return b;
+  }
+
+  async function renameFile() {
+    if (s.readonly || !s.path) return;
+    const current = baseName(s.path);
+    const name = await ui.prompt('Rename file', { value: current, confirmLabel: 'Rename' });
+    if (!name || name === current) return;
+    let resp;
+    try {
+      resp = await fetch('/api/files/rename', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ session_id: s.sessionId, path: s.path, name }),
+      });
+    } catch (err) {
+      setStatus(`Could not rename: ${err}`, true);
+      return;
+    }
+    if (!resp.ok) {
+      let msg = 'Could not rename';
+      try { const j = await resp.json(); msg = j.detail || msg; } catch (_) {}
+      setStatus(msg, true);
+      return;
+    }
+    setPath((await resp.json()).path);
+  }
+
+  async function moveFile() {
+    if (s.readonly || !s.path) return;
+    const dest = await ui.prompt('Move to directory', { value: dirName(s.path), confirmLabel: 'Move' });
+    if (!dest) return;
+    let resp;
+    try {
+      resp = await fetch('/api/files/move', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ session_id: s.sessionId, paths: [s.path], dest }),
+      });
+    } catch (err) {
+      setStatus(`Could not move: ${err}`, true);
+      return;
+    }
+    if (!resp.ok) {
+      let msg = 'Could not move';
+      try { const j = await resp.json(); msg = j.detail || msg; } catch (_) {}
+      setStatus(msg, true);
+      return;
+    }
+    const data = await resp.json();
+    if (data.paths && data.paths[0]) setPath(data.paths[0]);
+  }
+
+  async function deleteFile() {
+    if (s.readonly || !s.path) return;
+    const ok = await ui.confirm(`Delete "${baseName(s.path)}"? This cannot be undone.`, {
+      title: 'Delete file', confirmLabel: 'Delete', danger: true,
+    });
+    if (!ok) return;
+    let resp;
+    try {
+      resp = await fetch('/api/files/delete', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ session_id: s.sessionId, path: s.path }),
+      });
+    } catch (err) {
+      setStatus(`Could not delete: ${err}`, true);
+      return;
+    }
+    if (!resp.ok) {
+      let msg = 'Could not delete';
+      try { const j = await resp.json(); msg = j.detail || msg; } catch (_) {}
+      setStatus(msg, true);
+      return;
+    }
+    forceClose();
+  }
+
   function setStatus(text, error) {
     statusEl.textContent = text;
     statusEl.classList.toggle('fe-status-error', !!error);
@@ -3802,6 +3965,7 @@ const FileEditor = (() => {
   function updateButtons() {
     saveBtn.hidden = s.readonly || !s.dirty;
     formatBtn.hidden = s.readonly;
+    if (menuBtn) menuBtn.hidden = s.readonly;
     wrapBtn.classList.toggle('active', wrapOn);
   }
 

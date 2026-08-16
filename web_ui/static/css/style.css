@@ -1998,7 +1998,7 @@ dialog.file-browser::backdrop { background: rgba(0, 0, 0, 0.55); }
   text-overflow: ellipsis;
   white-space: nowrap;
 }
-.fe-actions { display: flex; gap: 4px; flex: 0 0 auto; }
+.fe-actions { display: flex; gap: 4px; flex: 0 0 auto; position: relative; }
 .fe-btn {
   background: none;
   border: 1px solid var(--border);
@@ -2012,6 +2012,33 @@ dialog.file-browser::backdrop { background: rgba(0, 0, 0, 0.55); }
 .fe-btn:hover { color: var(--text); border-color: var(--border-strong); }
 .fe-btn.active { color: var(--accent); border-color: var(--accent-dim); }
 .fe-btn.fe-save { color: var(--accent); }
+
+/* The "⋯" file-actions dropdown (rename / move / delete). */
+.fe-menu {
+  position: absolute;
+  right: 0;
+  top: calc(100% + 4px);
+  min-width: 150px;
+  padding: 4px;
+  background: var(--bg-raised);
+  border: 1px solid var(--border-strong);
+  border-radius: 6px;
+  z-index: 30;
+  display: flex;
+  flex-direction: column;
+}
+.fe-menu button {
+  text-align: left;
+  background: none;
+  border: none;
+  color: var(--text);
+  padding: 7px 10px;
+  border-radius: 4px;
+  font-size: 12.5px;
+  cursor: pointer;
+}
+.fe-menu button:hover { background: var(--bg-hover); }
+.fe-menu button.danger { color: var(--danger); }
 
 .fe-body {
   flex: 1 1 auto;

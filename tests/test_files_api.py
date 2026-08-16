@@ -179,6 +179,7 @@ async def test_move_entry(session):
         MoveRequest(session_id=session["id"], paths=[str(p)], dest=str(Path(session["project_dir"]) / "sub"))
     )
     assert result["ok"] is True
+    assert result["paths"] == [str(Path(session["project_dir"]) / "sub" / "m.txt")]
     assert (Path(session["project_dir"]) / "sub" / "m.txt").exists()
     assert not p.exists()
 

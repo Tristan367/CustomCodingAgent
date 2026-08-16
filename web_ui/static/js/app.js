@@ -2060,6 +2060,16 @@ const Dictation = {
     if (!this.els.button || this.els.button.dataset.bound) return;
     this.els.button.dataset.bound = '1';
     this.els.button.addEventListener('click', () => this.toggle());
+    // Dictation anchors its live segment at the caret, so a manual edit shifts
+    // those offsets and corrupts the transcript. Any user edit while recording
+    // therefore just stops dictation (a clean abandon) and leaves the text
+    // alone; toggle again to keep dictating from the new caret.
+    if (App.els.textarea && !App.els.textarea.dataset.dictBound) {
+      App.els.textarea.dataset.dictBound = '1';
+      App.els.textarea.addEventListener('input', () => {
+        if (this.recording) this.teardown();
+      });
+    }
   },
 
   async toggle() {

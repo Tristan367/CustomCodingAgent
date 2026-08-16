@@ -353,7 +353,6 @@ def list_whisper_models() -> list[str]:
     return found
 
 
-WHISPER_MODEL = _whisper_model
 FFMPEG_BIN = os.getenv("FFMPEG_BIN") or shutil.which("ffmpeg")
 WHISPER_SERVER_BIN = os.getenv("WHISPER_SERVER_BIN") or shutil.which("whisper-server")
 WHISPER_SERVER_PORT = int(os.getenv("WHISPER_SERVER_PORT", "8177"))

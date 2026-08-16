@@ -831,7 +831,6 @@ button:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
 }
 .icon-btn:hover { background: var(--bg-hover); color: var(--text); border-color: var(--border-strong); }
 .icon-btn.danger:hover { color: var(--danger); border-color: var(--danger); }
-.icon-btn.busy { opacity: 0.5; pointer-events: none; }
 
 /* ── Microphone ──────────────────────────────────────────────────────────── */
 
@@ -937,16 +936,6 @@ button:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
 #home-page > *, #prompts-page > *, #tools-page > * {
   max-width: 860px;
   margin-inline: auto;
-}
-/* `margin-inline: auto` only centres block-level boxes, so a bare <button> as a
-   direct child ignored it and sat against the page padding while the headings
-   beside it were centred 90px further in. Anything inline-level at this level
-   needs a block row of its own. */
-.page-row {
-  display: flex;
-  gap: var(--s2);
-  align-items: center;
-  flex-wrap: wrap;
 }
 
 .panel {
@@ -1243,7 +1232,6 @@ input[type="checkbox"] { accent-color: var(--accent); }
 .tools-table { width: 100%; border-collapse: collapse; font-size: 12px; margin-top: 10px; }
 .tools-table th, .tools-table td { border-bottom: 1px solid var(--border); padding: 6px 8px; text-align: left; vertical-align: top; }
 .tools-table th { color: var(--text-dim); font-weight: 600; font-size: 11px; text-transform: uppercase; }
-.tools-table td.num { font-family: var(--mono); color: var(--text-faint); text-align: right; }
 .tools-table code { color: var(--accent); }
 
 /* ── Modal ───────────────────────────────────────────────────────────────── */
@@ -1266,7 +1254,6 @@ input[type="checkbox"] { accent-color: var(--accent); }
   border-radius: 8px;
 }
 .modal-content h3 { font-size: var(--fs-lead); color: var(--text); margin-bottom: var(--s2); }
-.modal-content img { display: block; max-width: 100%; max-height: 220px; border-radius: 4px; margin-bottom: 10px; }
 .modal-content textarea { width: 100%; resize: vertical; }
 .modal-actions { display: flex; gap: var(--s2); margin-top: var(--s4); justify-content: flex-end; }
 
@@ -1289,7 +1276,6 @@ input[type="checkbox"] { accent-color: var(--accent); }
 .dialog p { color: var(--text-dim); line-height: 1.5; margin: 0; white-space: pre-wrap; }
 .dialog p code, .dialog p strong { color: var(--text); }
 .dialog input[type="text"] { width: 100%; margin-top: var(--s3); }
-.dialog .dialog-error { color: var(--danger); font-size: var(--fs-small); margin-top: var(--s2); }
 .dialog form { margin: 0; }
 
 /* ── Narrow screens ──────────────────────────────────────────────────────── */
@@ -1427,7 +1413,6 @@ body.selecting .msg-time { opacity: 0 !important; visibility: hidden !important;
 .diff-block .row { padding: 0 10px; }
 .diff-add  { background: rgba(var(--add-rgb), 0.13); color: var(--add); }
 .diff-del  { background: rgba(191, 95, 88, 0.13); color: #cf928d; }
-.diff-hunk { color: var(--text-faint); background: rgba(110, 118, 129, 0.10); }
 .diff-ctx  { color: var(--text-dim); }
 
 /* Line-number gutter shared by diffs and read/write code. --lnw is set in the
@@ -1642,9 +1627,6 @@ input:disabled, textarea:disabled { opacity: 0.6; background: var(--bg-inset); }
 #tools-page .tools-table td.row-actions { text-align: right; white-space: nowrap; }
 #tools-page .tools-table tr:not(:hover) .row-actions .hint { visibility: hidden; }
 
-/* Was flush against the viewport edge because it is a bare button after a
-   run of flex forms; give it the same rhythm as everything above it. */
-#tools-page .page-row { margin-top: var(--s3); }
 #tools-page #new-secret-form { max-width: 420px; flex: 1; }
 
 .get-key-link { font-size: 11px; font-weight: 400; color: var(--text-faint); margin-left: 4px; }
@@ -1679,7 +1661,6 @@ input:disabled, textarea:disabled { opacity: 0.6; background: var(--bg-inset); }
   font-size: 11.5px;
 }
 
-.tool-details .diff-details { margin-top: 4px; }
 .diff-stat {
   margin-left: auto;
   padding-left: 10px;
@@ -1687,7 +1668,6 @@ input:disabled, textarea:disabled { opacity: 0.6; background: var(--bg-inset); }
   font-size: 10.5px;
   color: var(--text-faint);
 }
-.diff-meta { color: var(--text-faint); }
 
 /* Marks where compacted turns were replaced by the summary above. */
 .compaction-boundary {

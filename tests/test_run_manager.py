@@ -21,12 +21,6 @@ def clean_runs():
     agent._queued.clear()
 
 
-def collect(session_id, replay=True):
-    async def go():
-        return [e async for e in agent.subscribe(session_id, replay=replay)]
-    return go
-
-
 def test_subscriber_that_joins_late_still_sees_the_whole_turn():
     async def go():
         handle = agent._Run()

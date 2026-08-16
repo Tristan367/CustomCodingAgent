@@ -1,9 +1,10 @@
-"""The `vision` tool: look at images on disk.
+"""The `capture` tool: screenshot the desktop and, when asked, describe it.
 
-Capture is somebody else's job -- `browser` for a web page, `capture` for
-anything that is not one. This only ever reads files, which is what makes a
-before/after comparison work: capture, act, capture, then pass both paths here
-and ask what changed.
+For anything Playwright cannot drive -- a native game, a desktop app, an
+emulator. Web pages go through `browser`, which can also interact with them.
+The frames come from `agent_server.capture`; description is dispatched to
+whatever `vision` tool is installed, so a before/after comparison can be asked
+in one call.
 """
 
 

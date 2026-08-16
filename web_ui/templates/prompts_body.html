@@ -41,7 +41,7 @@
                 Max possible concurrent: {{ max_conc if max_conc else 'unlimited' }}
             </span>
             <span id="theoretical-note" style="color:var(--text-faint); font-size:0.85em">
-                (per-call spawn: {{ mspawn if mspawn else 'unlimited' }})
+                (max theoretical: …)
             </span>
             <label class="hint" style="margin:0">
                 Session cap
@@ -386,9 +386,10 @@
 
         function calcTheoretical() {
             let product = 1;
+            let finite = false;
             const masterInp = document.querySelector('input[name="master_spawn"]');
             const master = (masterInp && !isNaN(parseInt(masterInp.value))) ? parseInt(masterInp.value) : 0;
-            if (master > 0) product *= master;
+            if (master > 0) { product *= master; finite = true; }
 
             for (let tier = 1; ; tier++) {
                 const prefix = tier === 1 ? 'sa_tool' : 'sa_tool_' + tier;
@@ -399,9 +400,9 @@
                     ? document.querySelector('input[name="sa_cap"]')
                     : document.querySelector(`input[name="sa_cap_${tier}"]`);
                 const cap = (capInp && !isNaN(parseInt(capInp.value))) ? parseInt(capInp.value) : 0;
-                if (cap > 0) product *= cap;
+                if (cap > 0) { product *= cap; finite = true; }
             }
-            return product || 'unlimited';
+            return finite ? product : 'unlimited';
         }
 
         function updateConcurrentDisplay() {
@@ -420,6 +421,7 @@
 
         document.getElementById('max-concurrent')?.addEventListener('input', updateConcurrentDisplay);
         document.querySelector('input[name="master_spawn"]')?.addEventListener('input', updateTheoreticalNote);
+        updateTheoreticalNote();
 
         document.addEventListener('change', (e) => {
             if (e.target.matches('input[type=checkbox]') || e.target.name?.startsWith('sa_cap'))

@@ -4,20 +4,10 @@ Nothing here talks to a vision model. Describing an image is a custom tool --
 a shell script the user supplies, because it needs a GPU or a paid account
 this app cannot assume. What is left is decoding, downscaling and describing
 the file itself, which uploads and `capture` both need regardless.
-Vision: image normalisation, browser capture, and the Ollama vision client.
 
-This replaces the previous dependency on an external VisionHelper package, which
-used Playwright's synchronous API and therefore could never run inside the
-server's event loop.
-
-Two hard-won details about the Ollama backend, both verified against the live rig:
-
-* It rejects WebP with *"Failed to load image or audio file"*. Uploads are
-  therefore decoded with Pillow and re-encoded as PNG rather than trusting the
-  filename, because browsers routinely hand over a WebP named ``.jpg``.
-* Passing several images on a single ``/api/chat`` message does not work -- the
-  model sees only one of them. Multiple images must each go on their own
-  message, which is what makes comparison prompts reliable.
+`normalize_image` re-encodes everything as PNG before it is sent anywhere:
+browsers routinely hand over a WebP named ``.jpg``, and some vision backends
+reject WebP outright, so trusting the filename would fail.
 """
 
 import asyncio

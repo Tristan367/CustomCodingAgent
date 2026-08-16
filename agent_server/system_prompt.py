@@ -13,6 +13,7 @@ platform.
 
 import asyncio
 import hashlib
+import json
 import platform
 import re
 from pathlib import Path
@@ -264,21 +265,28 @@ async def subagent_body(profile_name: str, tier: int = 0) -> str:
     return DEFAULT_SUBAGENT_PROMPT.strip()
 
 
-def _tier_body(row: dict, tier: int) -> str:
-    import json
+def _tier_entry(row: dict, tier: int) -> dict | None:
+    """The `subagent_tiers` entry for a hierarchy tier (2+), or None."""
     raw = (row.get("subagent_tiers") or "").strip()
     if not raw:
-        return ""
+        return None
     try:
         tiers = json.loads(raw)
     except (json.JSONDecodeError, TypeError):
-        return ""
+        return None
     idx = tier - 2  # tier 2 → index 0
     if isinstance(tiers, list) and 0 <= idx < len(tiers):
         entry = tiers[idx]
         if isinstance(entry, dict):
-            return str(entry.get("body", "")).strip()
-    return ""
+            return entry
+    return None
+
+
+def _tier_body(row: dict, tier: int) -> str:
+    entry = _tier_entry(row, tier)
+    if entry is None:
+        return ""
+    return str(entry.get("body", "")).strip()
 
 
 async def subagent_disabled_tools(profile_name: str, tier: int = 0) -> set[str]:
@@ -301,20 +309,10 @@ async def subagent_disabled_tools(profile_name: str, tier: int = 0) -> set[str]:
 
 
 def _tier_tools(row: dict, tier: int) -> str | None:
-    import json
-    raw = (row.get("subagent_tiers") or "").strip()
-    if not raw:
+    entry = _tier_entry(row, tier)
+    if entry is None:
         return None
-    try:
-        tiers = json.loads(raw)
-    except (json.JSONDecodeError, TypeError):
-        return None
-    idx = tier - 2  # tier 2 → index 0
-    if isinstance(tiers, list) and 0 <= idx < len(tiers):
-        entry = tiers[idx]
-        if isinstance(entry, dict):
-            return entry.get("disabled_tools", "")
-    return None
+    return entry.get("disabled_tools", "")
 
 
 def _default_subagent_off() -> set[str]:
@@ -351,24 +349,15 @@ async def subagent_parallel_cap(profile_name: str, tier: int = 0) -> int:
 
 
 def _tier_cap(row: dict, tier: int) -> int | None:
-    import json
-    raw = (row.get("subagent_tiers") or "").strip()
-    if not raw:
+    entry = _tier_entry(row, tier)
+    if entry is None:
         return None
-    try:
-        tiers = json.loads(raw)
-    except (json.JSONDecodeError, TypeError):
-        return None
-    idx = tier - 2  # tier 2 → index 0, tier 3 → index 1, …
-    if isinstance(tiers, list) and 0 <= idx < len(tiers):
-        entry = tiers[idx]
-        if isinstance(entry, dict):
-            cap = entry.get("parallel_cap")
-            if cap is not None:
-                try:
-                    return int(cap)
-                except (TypeError, ValueError):
-                    pass
+    cap = entry.get("parallel_cap")
+    if cap is not None:
+        try:
+            return int(cap)
+        except (TypeError, ValueError):
+            pass
     return None
 
 
@@ -403,18 +392,9 @@ async def subagent_model_name(profile_name: str, tier: int = 0) -> str:
             return val.strip()
         return (row.get("subagent_model") or "").strip()
     if tier >= 2:
-        import json
-        raw = (row.get("subagent_tiers") or "").strip()
-        if raw:
-            try:
-                tiers = json.loads(raw)
-            except (json.JSONDecodeError, TypeError):
-                return ""
-            idx = tier - 2
-            if isinstance(tiers, list) and 0 <= idx < len(tiers):
-                entry = tiers[idx]
-                if isinstance(entry, dict):
-                    return str(entry.get("model", "")).strip()
+        entry = _tier_entry(row, tier)
+        if entry is not None:
+            return str(entry.get("model", "")).strip()
     return ""
 
 
@@ -523,7 +503,6 @@ def _background_propagate(name: str):
                 await db.update_session(row["id"], pending_system_prompt=fresh)
             else:
                 await db.update_session(row["id"], system_prompt=fresh)
-    import asyncio
     try:
         loop = asyncio.get_running_loop()
     except RuntimeError:

@@ -17,6 +17,13 @@ from agent_server.system_prompt import list_prompt_names
 router = APIRouter(prefix="/api/sessions", tags=["sessions"])
 
 
+async def _require(session_id: str) -> dict:
+    session = await db.get_session(session_id)
+    if session is None:
+        raise HTTPException(404, "Session not found")
+    return session
+
+
 async def _validate(body: SessionCreate | SessionUpdate):
     if body.provider and body.provider not in list_providers():
         raise HTTPException(400, f"Unknown provider: {body.provider}")
@@ -63,16 +70,12 @@ async def list_sessions(archived: bool = False):
 
 @router.get("/{session_id}")
 async def get_session(session_id: str):
-    session = await db.get_session(session_id)
-    if session is None:
-        raise HTTPException(404, "Session not found")
-    return session
+    return await _require(session_id)
 
 
 @router.patch("/{session_id}")
 async def update_session(session_id: str, body: SessionUpdate):
-    if await db.get_session(session_id) is None:
-        raise HTTPException(404, "Session not found")
+    await _require(session_id)
     await _validate(body)
     updates = {k: v for k, v in body.model_dump(exclude_unset=True).items() if v is not None}
     # Switching model switches provider with it. The settings form only sends a
@@ -93,8 +96,7 @@ async def update_session(session_id: str, body: SessionUpdate):
 @router.get("/{session_id}/changes")
 async def session_changes(session_id: str):
     """Files changed since the last user message, for the persistent summary."""
-    if await db.get_session(session_id) is None:
-        raise HTTPException(404, "Session not found")
+    await _require(session_id)
     return await db.get_turn_changes(session_id)
 
 
@@ -106,9 +108,7 @@ async def get_system_prompt(session_id: str):
     change was displayed as though it were already in force, with no way to see
     the text actually being sent.
     """
-    session = await db.get_session(session_id)
-    if session is None:
-        raise HTTPException(404, "Session not found")
+    session = await _require(session_id)
     from agent_server.system_prompt import session_system_prompt
 
     return {
@@ -123,8 +123,7 @@ async def get_system_prompt(session_id: str):
 @router.delete("/{session_id}/system-prompt/pending")
 async def discard_pending_prompt(session_id: str):
     """Drop a queued change and stay on the prompt already in use."""
-    if await db.get_session(session_id) is None:
-        raise HTTPException(404, "Session not found")
+    await _require(session_id)
     await db.update_session(session_id, pending_system_prompt=None)
     return {"ok": True}
 
@@ -136,9 +135,7 @@ async def set_system_prompt(session_id: str, payload: dict):
     Changing it invalidates the cached prefix once, then the new text caches in
     its turn, so this is cheap to do between turns and expensive to do often.
     """
-    session = await db.get_session(session_id)
-    if session is None:
-        raise HTTPException(404, "Session not found")
+    session = await _require(session_id)
     text = (payload.get("prompt") or "").strip()
     custom = 1
     if not text:
@@ -189,8 +186,7 @@ async def set_system_prompt(session_id: str, payload: dict):
 
 @router.delete("/{session_id}")
 async def delete_session(session_id: str):
-    if await db.get_session(session_id) is None:
-        raise HTTPException(404, "Session not found")
+    await _require(session_id)
     agent.request_abort(session_id)
     await db.delete_session(session_id)
     agent.forget_session(session_id)
@@ -199,7 +195,6 @@ async def delete_session(session_id: str):
 
 @router.get("/{session_id}/messages")
 async def get_messages(session_id: str):
-    if await db.get_session(session_id) is None:
-        raise HTTPException(404, "Session not found")
+    await _require(session_id)
     return await db.get_messages(session_id)
 

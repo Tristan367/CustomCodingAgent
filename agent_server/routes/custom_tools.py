@@ -151,7 +151,6 @@ async def tools_page(request: Request, saved: bool = False):
 @router.post("/_save_custom_tool")
 async def save_custom_tool(request: Request):
     from agent_server.tools.custom import load_custom_tools
-    from agent_server.tools.registry import BUILT_IN_NAMES
 
     form = await request.form()
     name = _slug(str(form.get("name", "")))
@@ -281,14 +280,13 @@ async def test_custom_tool(request: Request):
         script_params = {}
 
     try:
-        params = script_params
         args = json.loads(test_args) if test_args else {}
     except json.JSONDecodeError:
         return HTMLResponse("<div class='notice-error'>Invalid JSON in test arguments</div>")
 
     # Build default args from schema properties
-    if not args and params.get("properties"):
-        for key, prop in params["properties"].items():
+    if not args and script_params.get("properties"):
+        for key, prop in script_params["properties"].items():
             ptype = prop.get("type", "string")
             if ptype == "string":
                 args[key] = prop.get("default", "")

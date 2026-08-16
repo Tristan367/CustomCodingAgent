@@ -1752,9 +1752,6 @@ document.addEventListener('keydown', (e) => {
   if (e.key === 'Escape') document.querySelectorAll('.modal').forEach((m) => { m.hidden = true; });
 });
 
-/* ── Retry and edit ──────────────────────────────────────────────────────── */
-
-/* Remove the stale DOM for turns the server is about to delete. */
 /* ── Session status + notification sounds ────────────────────────────────── */
 
 const POLL_INTERVAL_MS = 2000;
@@ -3334,12 +3331,6 @@ const Speech = {
     else if (this.audioEl) this.audioEl.volume = v;
     document.querySelectorAll('.vol-pop input').forEach((s) => { s.value = String(v); });
     this.save({ volume: v });
-  },
-
-  setTone(hz) {
-    this.tone = hz;
-    if (this.filter) this.filter.frequency.value = hz;
-    this.save({ tone: hz });
   },
 
   save(fields) {

@@ -9,10 +9,6 @@ from agent_server.templating import templates
 router = APIRouter()
 
 
-
-
-
-
 @router.get("/_browse")
 async def browse(request: Request, dir: str = "", show_hidden: bool = False):
     path = Path(dir).expanduser() if dir else Path.home()

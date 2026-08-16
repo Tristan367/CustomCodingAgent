@@ -136,8 +136,6 @@ def _append_results(parts, total_usage, results, offset=0):
         label = i + offset + 1
         if isinstance(r, Exception):
             parts.append(f"[agent {label}]: failed: {r}")
-        elif hasattr(r, 'is_error') and r.is_error:
-            parts.append(f"[agent {label}]: {r.output}")
         else:
             parts.append(f"[agent {label}]: {r.output}")
         if hasattr(r, 'usage') and r.usage:

@@ -56,13 +56,12 @@ async def _propagate(name: str) -> int:
 
 def _parse_tiers(p: dict) -> list[dict]:
     """Parse the subagent_tiers JSON column into a list of {body, off} dicts."""
-    import json as _json
     raw = (p.get("subagent_tiers") or "").strip()
     if not raw:
         return []
     try:
-        data = _json.loads(raw)
-    except (_json.JSONDecodeError, TypeError):
+        data = json.loads(raw)
+    except (json.JSONDecodeError, TypeError):
         return []
     if not isinstance(data, list):
         return []
@@ -272,7 +271,6 @@ async def save_prompts(request: Request):
 
 def _collect_tiers(form) -> str:
     """Collect higher subagent tiers from form fields into a JSON string."""
-    import json as _json
     tier = 2  # tier 1 uses dedicated columns; tiers 2+ use indexed form fields
     tiers = []
     while True:
@@ -291,7 +289,7 @@ def _collect_tiers(form) -> str:
         tier += 1
     if not tiers:
         return ""
-    return _json.dumps(tiers)
+    return json.dumps(tiers)
 
 
 @router.post("/_new_prompt")

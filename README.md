@@ -77,7 +77,7 @@ agent_server/
   images.py         decode, downscale and describe image files
   templating.py     the Jinja environment and its filters
   tools/            bash, browser, capture, edit, explore, glob, grep,
-                    read, skill, task, webfetch, websearch, write
+                    read, send_message, task, webfetch, websearch, write
   routes/           HTTP surface, one module per page
 web_ui/             Jinja templates, CSS, and ~4 files of vanilla JS
 ```
@@ -89,7 +89,7 @@ SQLite as it happens, so the stored transcript always matches what was actually
 sent to the API.
 
 Independent read-only calls (`read`, `grep`, `glob`, `webfetch`, `websearch`,
-`task`, `explore`, `skill`, `capture`) run concurrently, so three subagents cost
+`task`, `explore`, `capture`) run concurrently, so three subagents cost
 the slowest one rather than the sum. Anything that mutates state runs sequentially, because parallel writes to
 one file are not safe.
 

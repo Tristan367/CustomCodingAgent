@@ -28,8 +28,6 @@ log = logging.getLogger(__name__)
 router = APIRouter()
 
 
-
-
 @router.post("/_save_script")
 async def save_script(request: Request):
     form = await request.form()

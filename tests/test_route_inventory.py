@@ -8,8 +8,8 @@ in the suite would notice -- the handler's own tests keep passing because the
 function is still importable and still correct. Only the wiring is gone.
 
 So the full surface is written down here. If a route is added or removed on
-purpose, update ROUTES in the same commit and the diff will show exactly which
-URLs changed.
+purpose, update route_inventory.json in the same commit and the diff will show
+exactly which URLs changed.
 """
 
 import json

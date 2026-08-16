@@ -9,13 +9,10 @@ Run: .venv/bin/python -m pytest -m live tests/test_live_agent.py -q -s
 """
 
 import shutil
-import sys
 import tempfile
 from pathlib import Path
 
 import pytest
-
-sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from agent_server import agent
 from agent_server import database as db

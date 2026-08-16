@@ -493,7 +493,8 @@ async def stt_stream(websocket: WebSocket):
                         elif session.new_seconds >= whisper_streaming.STEP_SECONDS:
                             partial = await session.current_partial()
                             text = (session.finalized_text() + " " + partial).strip()
-                            await websocket.send_json({"text": text, "partial": True})
+                            if text:
+                                await websocket.send_json({"text": text, "partial": True})
                     except Exception:
                         pass  # a failed partial is dropped; the final still runs
                     finally:

@@ -2332,13 +2332,15 @@ const Dictation = {
       // The user edited the segment. Stop owning it and append only the new
       // words at the caret, leaving their changes alone.
       const caret = ta.selectionStart ?? ta.value.length;
-      const delta = text.slice(commonPrefixLen(this.lastInserted, text));
+      const delta = text.slice(commonPrefixLen(this.lastInserted, text)).trimStart();
       this.lastInserted = text;
       if (delta) {
-        ta.value = ta.value.slice(0, caret) + delta + ta.value.slice(caret);
+        const before = ta.value.slice(0, caret);
+        const sep = before && !/\s$/.test(before) ? ' ' : '';
+        ta.value = before + sep + delta + ta.value.slice(caret);
         this.insertAt = caret;
         this.insertedLen = 0;
-        ta.setSelectionRange(caret + delta.length, caret + delta.length);
+        ta.setSelectionRange(caret + sep.length + delta.length, caret + sep.length + delta.length);
       }
     }
     ta.focus();

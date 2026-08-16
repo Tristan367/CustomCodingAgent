@@ -29,8 +29,14 @@ def test_new_seconds_tracks_untrancribed_audio():
 
 def test_clean_strips_noise_markers():
     assert whisper_streaming._clean("hello [BLANK_AUDIO] world") == "hello world"
-    assert whisper_streaming._clean("[blank_audio]  [MUSIC]  hi") == "hi"
+    assert whisper_streaming._clean("[MUSIC] [INAUDIBLE] hi") == "hi"
+    assert whisper_streaming._clean("then (wind blowing) it stopped") == "then it stopped"
     assert whisper_streaming._clean("normal speech") == "normal speech"
+
+
+def test_clean_removes_em_dash_but_keeps_flags():
+    assert whisper_streaming._clean("one -- two") == "one two"
+    assert whisper_streaming._clean("run ls --help") == "run ls --help"
 
 
 def test_ensure_period():

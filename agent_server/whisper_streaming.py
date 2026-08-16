@@ -32,15 +32,23 @@ STEP_SECONDS = 1.5
 # period, so dictation can stay on and each burst of talking becomes a sentence.
 PAUSE_SECONDS = float(os.getenv("CODEAGENT_DICTATION_PAUSE", "10"))
 
-# whisper emits these for silence/music/etc; they read as noise in the chat.
+# whisper emits these for silence/background noise; they read as garbage in the
+# transcript. The first arm catches the special-event tokens ([BLANK_AUDIO],
+# [MUSIC], [INAUDIBLE], ...); the second catches sound descriptions such as
+# "(wind blowing)" and "(music)".
 _NOISE = re.compile(
-    r"\[(?:BLANK[ _]AUDIO|MUSIC|LAUGHTER|APPLAUSE|NOISE)\]\s*|\(\s*(?:silence|noise|music|speech)\s*\)",
-    re.IGNORECASE,
+    r"\[[A-Z_ ]+\]"             # all-caps/underscore/space, whisper's event tokens
+    r"|\([a-z]+(?: [a-z]+)*\)"  # lowercase sound descriptions
 )
+# A standalone "--" is whisper's way of writing an em-dash; dictation doesn't
+# want it. Word-boundary anchored so a flag like --help survives.
+_DASH = re.compile(r"(?<!\S)--(?!\S)")
 
 
 def _clean(text: str) -> str:
-    return re.sub(r"\s+", " ", _NOISE.sub("", text)).strip()
+    text = _NOISE.sub(" ", text)
+    text = _DASH.sub(" ", text)
+    return re.sub(r"\s+", " ", text).strip()
 
 
 class WhisperStreamingError(RuntimeError):

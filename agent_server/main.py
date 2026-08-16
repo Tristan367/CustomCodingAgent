@@ -124,6 +124,10 @@ async def lifespan(app: FastAPI):
 
     yield
 
+    # Only reached on a graceful stop (SIGTERM/SIGINT via the shutdown button,
+    # `codeagent stop`, or Ctrl-C). A hard kill (SIGKILL/OOM) skips this, so the
+    # absence of this line next to a silent death means the process was killed.
+    log.info("codeagent shutting down")
     reaper.cancel()
     whisper_warmup.cancel()
     from agent_server import whisper_streaming

@@ -2000,7 +2000,7 @@ function button(label, className, onClick) {
 
 /* ── Dictation ───────────────────────────────────────────────────────────── */
 
-const MIC_TITLE = 'Dictate \u2014 click to toggle, or hold Right Ctrl to talk';
+const MIC_TITLE = 'Dictate \u2014 click to toggle, or press Ctrl+M';
 
 /* Persisted microphone preferences: input gain (dB) and the chosen input
  * device. Both live in localStorage because they are browser/device concerns --
@@ -2025,7 +2025,6 @@ function withMicDevice(audio) {
 const Dictation = {
   recording: false,
   starting: false,      // set synchronously, before any await
-  pushToTalk: false,
   recorder: null,
   chunks: [],
   streamRef: null,
@@ -2063,28 +2062,12 @@ const Dictation = {
   },
 
   async toggle() {
-    this.pushToTalk = false;
     if (this.recording) {
       const text = await this.stop();
       if (text) insertAtCursor(App.els.textarea, text);
     } else {
       await this.start();
     }
-  },
-
-  /* Hold to talk: start on keydown, transcribe and insert on release. */
-  async hold() {
-    if (this.recording || this.starting) return;
-    this.pushToTalk = true;
-    await this.start();
-  },
-
-  async release() {
-    if (!this.pushToTalk) return;
-    this.pushToTalk = false;
-    if (!this.recording) return;
-    const text = await this.stop();
-    if (text) insertAtCursor(App.els.textarea, text);
   },
 
   async start() {
@@ -2256,14 +2239,18 @@ const Dictation = {
       };
       this.gain.connect(this.workletNode);
 
-      this.ws = new WebSocket((location.protocol === 'https:' ? 'wss://' : 'ws://') + location.host + '/api/stt/stream');
-      this.ws.binaryType = 'arraybuffer';
-      this.ws.onmessage = (e) => this.onStreamMessage(e);
-      this.ws.onclose = () => { this.ws = null; };
+      const ws = new WebSocket((location.protocol === 'https:' ? 'wss://' : 'ws://') + location.host + '/api/stt/stream');
+      this.ws = ws;
+      ws.binaryType = 'arraybuffer';
+      // Guard every handler with `this.ws === ws`: a previous socket's onclose
+      // fires asynchronously and must not wipe out a newer socket (that was the
+      // "dictation stops streaming after a few toggles" bug).
+      ws.onmessage = (e) => { if (this.ws === ws) this.onStreamMessage(e); };
+      ws.onclose = () => { if (this.ws === ws) this.ws = null; };
       // A WebSocket "error" event fires on many benign abnormal closures (e.g.
       // the server dropping the socket after finalize). Real failures come back
       // as {"error": ...} messages, so don't alarm the user from onerror alone.
-      this.ws.onerror = () => { this.ws = null; };
+      ws.onerror = () => { if (this.ws === ws) this.ws = null; };
     } catch (err) {
       appendNotice('error', `Could not start dictation: ${err.message}`);
       this.teardown();
@@ -2391,7 +2378,6 @@ const Dictation = {
     this.hideTranscribing();
     updateComposerButtons();
     this.starting = false;
-    this.pushToTalk = false;
     this.stopMeter();
     this.releaseStream();
     this.recorder = null;
@@ -2982,16 +2968,14 @@ function cssEscape(value) {
   return window.CSS && CSS.escape ? CSS.escape(value) : String(value).replace(/["\\]/g, '\\$&');
 }
 
-/* Right Ctrl, because a modifier is the only kind of key that is safe to hold.
- *
- * Caps Lock was the obvious candidate and is unusable: a page can read the caps
- * state but cannot set it, so holding it to talk leaves caps stuck on with no
- * way to put it back. A modifier has no state and no default action. */
-const PUSH_TO_TALK = { code: 'ControlRight', label: 'Right Ctrl' };
+/* Ctrl+M toggles dictation on and off. A chord is safe to bind (it can't fire
+ * while typing a letter), and a toggle beats hold-to-talk for long takes --
+ * dictation is on, you talk when you want, and pauses are turned into
+ * sentences. */
+const DICTATION_TOGGLE = { code: 'KeyM', label: 'Ctrl+M' };
 
-function isPushToTalk(e) {
-  // ctrlKey is set by this very key, so it cannot be a disqualifier.
-  return e.code === PUSH_TO_TALK.code && !e.altKey && !e.metaKey && !e.shiftKey;
+function isDictationToggle(e) {
+  return e.code === DICTATION_TOGGLE.code && e.ctrlKey && !e.altKey && !e.metaKey && !e.shiftKey;
 }
 
 document.addEventListener('keydown', (e) => {
@@ -3009,10 +2993,9 @@ document.addEventListener('keydown', (e) => {
     App.els.form?.requestSubmit();
     return;
   }
-  if (isPushToTalk(e)) {
+  if (isDictationToggle(e)) {
     e.preventDefault();
-    if (e.repeat) return;          // key auto-repeat, not a new press
-    Dictation.hold();
+    if (!e.repeat) Dictation.toggle();
     return;
   }
   // Space reads the newest reply, the way it plays and pauses a video. Right
@@ -3030,17 +3013,9 @@ document.addEventListener('keydown', (e) => {
   }
 });
 
-document.addEventListener('keyup', (e) => {
-  if (e.code === PUSH_TO_TALK.code) Dictation.release();
-});
-
-// Releasing the key outside the window would otherwise leave the mic hot.
-window.addEventListener('blur', () => Dictation.release());
-// Last-resort teardown: never leave a mic stream or animation loop running.
+// Toggling dictation on and leaving the window keeps it running (by design).
+// Only closing the page tears the mic down.
 window.addEventListener('pagehide', () => { Dictation.teardown(); stopAllElapsed(); });
-document.addEventListener('visibilitychange', () => {
-  if (document.hidden && Dictation.pushToTalk) Dictation.release();
-});
 
 document.addEventListener('input', (e) => {
   if (e.target.id === 'chat-textarea') {

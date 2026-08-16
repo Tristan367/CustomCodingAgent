@@ -43,11 +43,14 @@ _NOISE = re.compile(
 # A standalone "--" is whisper's way of writing an em-dash; dictation doesn't
 # want it. Word-boundary anchored so a flag like --help survives.
 _DASH = re.compile(r"(?<!\S)--(?!\S)")
+# whisper sometimes runs a sentence straight into the next ("done.Next").
+_MISSING_SPACE = re.compile(r"([.!?])([A-Z])")
 
 
 def _clean(text: str) -> str:
     text = _NOISE.sub(" ", text)
     text = _DASH.sub(" ", text)
+    text = _MISSING_SPACE.sub(r"\1 \2", text)
     return re.sub(r"\s+", " ", text).strip()
 
 

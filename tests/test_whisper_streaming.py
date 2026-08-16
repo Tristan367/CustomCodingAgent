@@ -39,6 +39,11 @@ def test_clean_removes_em_dash_but_keeps_flags():
     assert whisper_streaming._clean("run ls --help") == "run ls --help"
 
 
+def test_clean_inserts_space_after_sentence_punctuation():
+    assert whisper_streaming._clean("done.Next") == "done. Next"
+    assert whisper_streaming._clean("keep 3.14 and foo.py") == "keep 3.14 and foo.py"
+
+
 def test_ensure_period():
     ensure = whisper_streaming.WhisperSession._ensure_period
     assert ensure("hello world") == "hello world."

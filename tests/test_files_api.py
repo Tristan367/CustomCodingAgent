@@ -57,11 +57,16 @@ def test_formatter_for_maps_extensions():
     assert formatter_for("a.c") == "clang-format"
     assert formatter_for("a.java") == "clang-format"
     assert formatter_for("a.cs") == "clang-format"
+    assert formatter_for("a.m") == "clang-format"
+    assert formatter_for("a.proto") == "clang-format"
     assert formatter_for("a.py") == "python"
     assert formatter_for("a.js") == "prettier"
     assert formatter_for("a.ts") == "prettier"
     assert formatter_for("a.css") == "prettier"
     assert formatter_for("a.html") == "prettier"
+    assert formatter_for("a.rs") == "rust"
+    assert formatter_for("a.go") == "go"
+    assert formatter_for("a.sh") == "shell"
     assert formatter_for("a.json") == "json"
     assert formatter_for("a.txt") is None
 

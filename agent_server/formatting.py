@@ -21,7 +21,7 @@ _FORMAT_TIMEOUT_SEC = 15
 
 _CLANG_EXTS = {
     ".c", ".h", ".cc", ".cpp", ".cxx", ".hpp", ".hh",
-    ".cs", ".java",
+    ".cs", ".java", ".m", ".mm", ".proto",
 }
 _PY_EXTS = {".py", ".pyw"}
 # JavaScript/TypeScript use prettier rather than clang-format: clang-format's
@@ -31,6 +31,9 @@ _PRETTIER_EXTS = {
     ".js", ".jsx", ".ts", ".tsx", ".mjs", ".cjs",
 }
 _JSON_EXTS = {".json"}
+_RUST_EXTS = {".rs"}
+_GO_EXTS = {".go"}
+_SHELL_EXTS = {".sh", ".bash", ".zsh", ".fish"}
 
 
 class FormatError(Exception):
@@ -45,6 +48,12 @@ def formatter_for(path: str) -> str | None:
         return "json"
     if suf in _PY_EXTS:
         return "python"
+    if suf in _RUST_EXTS:
+        return "rust"
+    if suf in _GO_EXTS:
+        return "go"
+    if suf in _SHELL_EXTS:
+        return "shell"
     if suf in _PRETTIER_EXTS:
         return "prettier"
     return None
@@ -111,5 +120,14 @@ async def format_text(path: str, text: str) -> str:
             ["prettier", f"--stdin-filepath={name}"], text, "prettier",
             "npm install -g prettier",
         )
+    if formatter == "rust":
+        return await _run(
+            ["rustfmt", "--edition", "2021"], text, "rustfmt",
+            "install rustfmt (rustup component add rustfmt)",
+        )
+    if formatter == "go":
+        return await _run(["gofmt"], text, "gofmt", "install Go (gofmt)")
+    if formatter == "shell":
+        return await _run(["shfmt"], text, "shfmt", "install shfmt")
     suf = Path(path).suffix.lstrip(".")
     raise FormatError(f"No formatter for .{suf or '?'} files")

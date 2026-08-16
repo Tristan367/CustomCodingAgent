@@ -2031,14 +2031,15 @@ dialog.file-browser::backdrop { background: rgba(0, 0, 0, 0.55); }
   text-align: left;
   background: none;
   border: none;
-  color: var(--text);
+  color: var(--text-dim);
   padding: 7px 10px;
   border-radius: 4px;
   font-size: 12.5px;
   cursor: pointer;
 }
-.fe-menu button:hover { background: var(--bg-hover); }
+.fe-menu button:hover { background: var(--accent-dim); color: var(--text); }
 .fe-menu button.danger { color: var(--danger); }
+.fe-menu button.danger:hover { background: var(--danger); color: var(--bg); }
 
 .fe-body {
   flex: 1 1 auto;

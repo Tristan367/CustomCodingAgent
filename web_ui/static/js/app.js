@@ -3388,7 +3388,9 @@ function setupMessageSide() {
     // Copy button only appears on expanded tool/thinking rows, or always on user/assistant.
     const details = node.querySelector('.tool-details');
     if (details) {
-      wrap.style.display = 'none';
+      // A block that rendered with `open` never fires a toggle event, so set the
+      // initial visibility from its current state.
+      wrap.style.display = details.open ? '' : 'none';
       details.addEventListener('toggle', () => {
         wrap.style.display = details.open ? '' : 'none';
       });
@@ -3453,7 +3455,27 @@ function copyMessage(node) {
     navigator.clipboard.writeText(text.trim()).then(() => showCopyToast()).catch(() => {});
     return;
   }
-  const toolOut = node.querySelector('.tool-raw, .diff-block');
+  // Numbered code: copy only the .lc cells, never the line-number gutter.
+  const codeLines = node.querySelectorAll('.code-lines .lc');
+  if (codeLines.length) {
+    const text = [...codeLines].map((lc) => lc.textContent).join('\n').trim();
+    navigator.clipboard.writeText(text).then(() => showCopyToast()).catch(() => {});
+    return;
+  }
+  // Diff: reconstruct with the +/-/space prefix, no line numbers.
+  const diffRows = node.querySelectorAll('.diff-block .row');
+  if (diffRows.length) {
+    const text = [...diffRows].map((row) => {
+      const lc = row.querySelector('.lc');
+      if (!lc) return '';
+      const prefix = row.classList.contains('diff-add') ? '+'
+        : row.classList.contains('diff-del') ? '-' : ' ';
+      return prefix + lc.textContent;
+    }).join('\n').trim();
+    navigator.clipboard.writeText(text).then(() => showCopyToast()).catch(() => {});
+    return;
+  }
+  const toolOut = node.querySelector('.tool-raw');
   if (toolOut) {
     navigator.clipboard.writeText(toolOut.textContent.trim()).then(() => showCopyToast()).catch(() => {});
     return;
@@ -3762,6 +3784,7 @@ const FileEditor = (() => {
     menu.hidden = true;
     menu.appendChild(menuAction('Rename', renameFile, false));
     menu.appendChild(menuAction('Move\u2026', moveFile, false));
+    menu.appendChild(menuAction('Duplicate', duplicateFile, false));
     menu.appendChild(menuAction('Delete', deleteFile, true));
     dlg.querySelector('.fe-actions').appendChild(menu);
 
@@ -3842,11 +3865,6 @@ const FileEditor = (() => {
     const i = p.lastIndexOf('/');
     return i >= 0 ? p.slice(i + 1) : p;
   }
-  function dirName(path) {
-    const p = String(path || '');
-    const i = p.lastIndexOf('/');
-    return i > 0 ? p.slice(0, i) : (p.startsWith('/') ? '/' : '.');
-  }
   function suffixOf(path) {
     const name = baseName(path).toLowerCase();
     const i = name.lastIndexOf('.');
@@ -3908,29 +3926,36 @@ const FileEditor = (() => {
     setPath((await resp.json()).path);
   }
 
-  async function moveFile() {
+  function moveFile() {
     if (s.readonly || !s.path) return;
-    const dest = await ui.prompt('Move to directory', { value: dirName(s.path), confirmLabel: 'Move' });
-    if (!dest) return;
+    // The editor and the file manager share one move flow: open the manager in
+    // move mode for this file and let the user pick the destination there.
+    FileBrowser.openMove([s.path], (moved) => {
+      if (moved && moved[0]) setPath(moved[0]);
+    });
+  }
+
+  async function duplicateFile() {
+    if (s.readonly || !s.path) return;
     let resp;
     try {
-      resp = await fetch('/api/files/move', {
+      resp = await fetch('/api/files/copy', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ session_id: s.sessionId, paths: [s.path], dest }),
+        body: JSON.stringify({ session_id: s.sessionId, path: s.path }),
       });
     } catch (err) {
-      setStatus(`Could not move: ${err}`, true);
+      setStatus(`Could not duplicate: ${err}`, true);
       return;
     }
     if (!resp.ok) {
-      let msg = 'Could not move';
+      let msg = 'Could not duplicate';
       try { const j = await resp.json(); msg = j.detail || msg; } catch (_) {}
       setStatus(msg, true);
       return;
     }
     const data = await resp.json();
-    if (data.paths && data.paths[0]) setPath(data.paths[0]);
+    setStatus(`Duplicated as ${baseName(data.path)}`);
   }
 
   async function deleteFile() {
@@ -4215,6 +4240,7 @@ const FileBrowser = (() => {
   let basePath = '';           // current directory
   let lastIndex = null;        // for shift-range selection
   let moving = null;           // Set of paths being moved, or null
+  let moveCallback = null;     // editor callback invoked with the moved paths
   let ctxMenu = null;
   let ctxPath = null;
 
@@ -4241,7 +4267,7 @@ const FileBrowser = (() => {
         '<span class="fb-sel"></span>' +
         '<button type="button" class="fe-btn" data-fb="open">Open</button>' +
         '<button type="button" class="fe-btn" data-fb="rename">Rename</button>' +
-        '<button type="button" class="fe-btn" data-fb="copy">Copy</button>' +
+        '<button type="button" class="fe-btn" data-fb="copy">Duplicate</button>' +
         '<button type="button" class="fe-btn" data-fb="delete">Delete</button>' +
         '<button type="button" class="fe-btn" data-fb="move">Move\u2026</button>' +
       '</div>' +
@@ -4287,7 +4313,7 @@ const FileBrowser = (() => {
     dlg.querySelector('[data-fb=cancelmove]').addEventListener('click', cancelMove);
 
     listEl.addEventListener('contextmenu', onCtx);
-    dlg.addEventListener('close', () => { selected.clear(); moving = null; hideCtx(); });
+    dlg.addEventListener('close', () => { selected.clear(); moving = null; moveCallback = null; hideCtx(); });
   }
 
   function dirname(path) {
@@ -4485,7 +4511,7 @@ const FileBrowser = (() => {
   async function doCopy(paths) {
     for (const path of paths) {
       const resp = await apiPost('/api/files/copy', { session_id: App.sessionId, path });
-      if (!(await checkOk(resp, 'Could not copy'))) return;
+      if (!(await checkOk(resp, 'Could not duplicate'))) return;
     }
     open(basePath);
   }
@@ -4511,16 +4537,30 @@ const FileBrowser = (() => {
     updateUI();
   }
 
+  /* Open in move mode for paths the caller already knows (e.g. the editor's
+   * "Move" action), and report the new paths back once the move succeeds. */
+  function openMove(paths, onDone) {
+    moveCallback = onDone || null;
+    open(dirname(paths[0]));
+    startMove(paths);
+  }
+
   async function confirmMove() {
     const resp = await apiPost('/api/files/move',
       { session_id: App.sessionId, paths: [...moving], dest: basePath });
     if (!(await checkOk(resp, 'Could not move'))) return;
+    const movedPaths = [];
+    if (resp) { try { movedPaths.push(...((await resp.json()).paths || [])); } catch (_) {} }
+    const cb = moveCallback;
+    moveCallback = null;
     moving = null;
     open(basePath);
+    if (cb) cb(movedPaths);
   }
 
   function cancelMove() {
     moving = null;
+    moveCallback = null;
     updateUI();
   }
 
@@ -4557,7 +4597,7 @@ const FileBrowser = (() => {
     const items = [
       ['Open', () => { hideCtx(); openPath(ctxPath); }],
       ['Rename', () => { hideCtx(); doRename(ctxPath); }],
-      ['Copy', () => { hideCtx(); doCopy([ctxPath]); }],
+      ['Duplicate', () => { hideCtx(); doCopy([ctxPath]); }],
       ['Move here', () => { hideCtx(); startMove([ctxPath]); }],
       ['Delete', () => { hideCtx(); doDelete([ctxPath]); }],
     ];
@@ -4592,7 +4632,7 @@ const FileBrowser = (() => {
     if (!e.target.closest('.ctx-menu')) hideCtx();
   });
 
-  return { open };
+  return { open, openMove };
 })();
 
 /* Session bar button: open the shared file manager at its last directory. */

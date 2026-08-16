@@ -1,0 +1,231 @@
+# CodeAgent — feature index
+
+A single-user, self-hosted coding agent. FastAPI backend, HTMX + vanilla JS
+frontend (no framework), SQLite storage, one Playwright-driven Chromium. This
+document is a complete index of what the app does and, for each thing, a
+one-sentence note on how. The essay-length explanation lives in `README.md`.
+
+## Running and lifecycle
+
+- **Launcher** — `bin/codeagent` (symlinked on PATH) resolves the repo, frees the
+  port if needed, waits for the server, opens a browser, and `exec`s uvicorn so
+  Ctrl-C runs the shutdown hook. `run.sh` is the no-browser equivalent.
+- **Server** — `uvicorn agent_server.main:app` on `127.0.0.1:8219` by default.
+- **Startup** — `main.py` lifespan: configure logging, migrate the DB, prime the
+  credentials cache, load custom tools/endpoints, discover DeepSeek models, seed
+  theme + whisper model, then start two background tasks (browser reaper, whisper
+  warm-up).
+- **Shutdown** — stop in-flight turns first, then the whisper-server subprocess,
+  then the browser, then the DB. `POST /_shutdown` signals SIGTERM (so the hook
+  runs); `codeagent stop` sends SIGTERM, escalating to SIGKILL.
+- **Data** — `~/.local/share/codeagent/` (`CODEAGENT_DATA_DIR`), outside the
+  checkout so `git clean` can't destroy it. `agent.db` (SQLite/WAL), `codeagent.log`
+  (rotating), `browser_state/`, `tool-output/`.
+- **Logging** — root logger writes to stderr and `codeagent.log`; level via
+  `CODEAGENT_LOG_LEVEL`.
+
+## Sessions and runs
+
+- **Sessions** are named conversations pinned to a project directory. Each has its
+  own settings, permissions grants, browser context, and model.
+- **A run** is a server-owned task. Clients subscribe over SSE; closing the tab
+  only unsubscribes — the turn keeps going and is recorded. Reopening attaches and
+  replays outstanding calls.
+- **Queued messages** — composer stays live mid-run; messages sent then are held
+  and injected at the next turn boundary (never between a `tool_calls` message and
+  its results). Queued messages can be undone before delivery.
+- **Stop** cancels immediately; every tool call in a cancelled batch still gets a
+  result; an unanswered call is treated as pending and re-run next message.
+- **Doom-loop abort** — if a turn repeats the same tool call in a tight loop, the
+  run aborts rather than bill forever.
+- **Broadcast** (`/api/broadcast`) — a human sends one message to many sessions at
+  once.
+- **Tabs** — the top bar is real browser-tab behaviour: open/close/reorder/status
+  dots, persisted per browser.
+
+## Tools (13 built-in)
+
+Registered in `agent_server/tools/registry.py`. Independent read-only tools run
+concurrently; anything that mutates runs sequentially.
+
+| Tool | What it does | How |
+|---|---|---|
+| `read` | read a file | bytes → decoded text, with a `Did you mean` hint on miss |
+| `write` | create/overwrite a file | streams args (see progress below), returns a `diff` |
+| `edit` | targeted string replace | exact-match replace, errors on multiple matches |
+| `bash` | run a shell command | subprocess with timeout, own process group, permission gate |
+| `grep` | search file contents | ripgrep |
+| `glob` | find files by pattern | glob |
+| `webfetch` | fetch a URL to markdown | httpx |
+| `websearch` | web search | provider-backed |
+| `task` / `explore` | spawn a subagent | recursive agent loop (see hierarchy) |
+| `send_message` | message another session | mailbox table (see below) |
+| `capture` | screenshot the desktop | per-platform screen capture |
+| `browser` | drive Chromium | Playwright steps + accessibility snapshots |
+
+Tool results can carry a `diff`, which the UI renders inline with +/- highlighting.
+`read`/`edit`/`write` operate inside the session's project directory; writes
+outside it are gated by permissions.
+
+## Subagents and hierarchy
+
+- `task` spawns a subagent that can itself spawn more (`task`) up to a
+  user-configured tier hierarchy (`sa_tool`, `sa_tool_2`, … on the Prompts page).
+- Each tier has its own system prompt, model, disabled-tool set, and parallel cap
+  (`agent_server/system_prompt.py` reads the `subagent_tiers` JSON column).
+- `explore` is the read-only, research-only subagent.
+- `send_message` is `TOP_LEVEL_ONLY` — subagents can't message other sessions.
+
+## Inter-AI messaging
+
+- `send_message` sends to another session **by name** (cross-session). Self-target
+  is rejected. If the target is idle it's delivered and woken immediately; if
+  busy, it lands in the `mailbox` table and is injected at the next turn boundary.
+- The recipient sees a blue "mail" bubble (`mail_from`), and the prompt tells it to
+  reply with `send_message`. Tests in `tests/test_send_message.py`.
+
+## Permissions and safety
+
+Two independent gates (`agent_server/permissions.py`):
+
+- **Shell** — read-only commands run silently; anything mutating/redirecting/chaining
+  asks. Approve once, approve-all-for-the-process, or reject (fed back as a tool
+  result).
+- **Filesystem writes outside the project** — always ask, even with shell
+  auto-approve on. Allow once, or allow a directory for the session. `/proc`, `/sys`,
+  `/dev`, `/boot`, sudoers can never be granted.
+- **Grants are per-session** and dropped when the session is deleted.
+- **Sudo** — a `sudo` command always prompts for a password (never saved). The
+  password is injected once into that call, which is rewritten to `sudo -S` + stdin.
+- **`rm -rf` guard** — `danger_reason()` blocks `rm -rf /` (and protected paths,
+  including the `/bin/rm` form), fork bombs, and raw block-device writes. Deliberately
+  conservative: only the obvious catastrophes.
+
+## Speech
+
+### Dictation (STT) — streaming
+
+- Toggle via the mic button or **Ctrl+M**; hold to talk, release to transcribe.
+- Browser captures 16 kHz mono float32 via an AudioWorklet (`stt-worklet.js`) and
+  streams it over a WebSocket (`/api/stt/stream`).
+- Backend `whisper_streaming.py` drives a persistent `whisper-server` subprocess
+  and re-transcribes on a sliding window: audio older than `COMMIT_DELAY_SEC` is
+  committed using whisper's segment timestamps, so latency stays flat. A long pause
+  commits a sentence and adds a period.
+- A manual edit of the composer while recording tears the session down cleanly.
+- Model is runtime-selectable from the home page (`whisper_model` setting); a
+  non-bundled `ggml-*.bin` is picked from `~/opt/whisper.cpp/models`.
+- Batch STT (`stt.py`, `whisper-cli`) is the older non-streaming path used for
+  one-shot transcription.
+
+### TTS
+
+- Kokoro via `onnxruntime`, deliberately on CPU so the GPU is untouched. The model
+  is loaded once and kept. Plan → speak endpoints, tone settings, per-session voice.
+  (`agent_server/tts.py`.)
+
+## Vision, capture, browser
+
+- **Images** — attach with the paperclip; saved to disk and referenced by path.
+  Uploads are re-encoded to PNG (browsers mislabel WebP as `.jpg`).
+- **`browser`** — drives a real Chromium from a list of steps (click/fill/hover/
+  press/shoot/record/compare) with accessibility-tree snapshots and `expect`
+  assertions. One context per session, reaped when idle.
+- **`capture`** — desktop screenshots for anything that isn't a web page.
+- Neither `browser` nor `capture` describes images itself — there is **no built-in
+  `vision` tool** by design. They dispatch to whatever custom tool is named
+  `vision` (see `examples/vision-tool.sh`, Ollama).
+
+## Editor and file manager
+
+- **Editor** (right panel) — per-session memory (open file, unsaved buffer, scroll,
+  caret, split state) so it survives tab switches; back/forward history; reopen via
+  button or Ctrl+E; half/full-height split. Format via external formatters.
+- **File manager** — browse/mkdir/rename/move/delete/duplicate, wired so renames
+  and moves keep the open editor in sync.
+- **Formatters** — `agent_server/formatting.py` dispatches to clang-format
+  (C/C++/C#/Java/ObjC/proto), black (Python, target pinned to the running
+  interpreter), prettier, rustfmt, gofmt, shfmt, and JSON. Missing binary →
+  "install X".
+
+## UI chrome
+
+- **Themes** — presets green/red/blue/gray + a custom colour picker. `data-theme`
+  overrides CSS vars; accent is split into `--accent` (text) vs `--accent-btn`
+  (buttons); custom hex is derived server- and client-side.
+- **Notifications** — per-tab status dot (blue pulsing = working, amber = needs you,
+  green = done, red = error) plus a short synthesised tone on transitions.
+- **Sounds** — upload/play/delete custom sound files (`routes/sounds.py`).
+- **Collapsible tool/reasoning blocks** — `<details>` with a disclosure arrow,
+  collapsed by default except auto-expand tools (`write`, `edit`), with a per-tool
+  "expand by default" panel and persistence (`POST /_settings/expand`).
+- **Tool progress** — while a large `write` streams, a `tool_progress` event shows
+  the tool name + argument byte count. Full live rendering of the arguments was
+  deliberately skipped.
+
+## Prompts and profiles
+
+- **Profiles** (`/prompts`) — three built-in prompt profiles, a shared preferences
+  block, and compaction instructions. Clearing a field restores the default.
+- **Environment grounding** — every prompt ends with an auto-generated snapshot
+  (cwd, platform, date, git status, top-level contents), so the model doesn't invent
+  paths.
+- **Prompt edits are queued**, adopted at each session's next compaction (when the
+  prefix is rewritten anyway), so a shared edit never disturbs a running session.
+- The page lists every tool with its token cost (schemas are sent every request).
+
+## Custom tools, scripts, secrets
+
+- **Custom tools** — user-defined shell scripts with a JSON Schema, called by the
+  model; arguments arrive as `$TOOL_ARG_NAME`. Callable per prompt profile. Loaded
+  from the DB at startup.
+- **Scripts** — shell the *user* runs from the home page (never sent to the model,
+  no schema). Start/stop daemons are the motivating example (`ollama-start`).
+- **Secrets** — saved per-tool/script, exposed to their environment only.
+
+## Providers and endpoints
+
+- Adapters in `agent_server/providers/` for DeepSeek, Anthropic, OpenRouter, and any
+  OpenAI-compatible endpoint, plus **custom endpoints** you define in the UI
+  (`routes/endpoints.py`, `custom_openai.py`).
+- `conversation.py` enforces the provider wire-format rules (tool-call shape,
+  one `tool` message per `tool_call_id`, `reasoning_content` echo).
+- DeepSeek models are discovered dynamically at startup so new releases need no
+  code change.
+
+## Context, compaction, cost
+
+- **Compaction** (`compaction.py`) summarises long conversations, always cutting on
+  a group boundary (a `tool_calls` message and its results are one atomic unit).
+  Per-session threshold, adjustable with a slider or one-off instructions.
+- **Cache guard** (`cache_guard.py`) predicts prefix-cache misses before they're
+  paid for by diffing the about-to-send bytes against the last send.
+- **Usage ring** — live token/cache/spend stats from real API `usage` numbers.
+
+## Internals
+
+- **`dir_watcher.py`** — watchfiles/inotify to detect a project directory rename
+  and re-point the session at its new location.
+- **`capture.py`/`images.py`** — screen capture backends probed per platform; image
+  decode/downscale.
+- **`formatting.py`** — external formatter dispatch (see Editor).
+- **`templating.py`** — the Jinja environment, filters, and theme derivation.
+
+## Configuration
+
+- Env (see `.env.example`): provider keys, `WHISPER_MODEL`, `WHISPER_SERVER_PORT`
+  (8177), `CODEAGENT_DATA_DIR`, `CODEAGENT_DB`, `CODEAGENT_LOG_LEVEL`,
+  `CODEAGENT_DICTATION_COMMIT_DELAY`, `CODEAGENT_DICTATION_PAUSE`, browser/vision
+  paths.
+- Runtime settings live in the `settings` DB table (theme, custom colour, expand
+  tools, whisper model, sound, TTS tone, auto-approve, thresholds, …).
+
+## Tests
+
+```bash
+.venv/bin/python -m pytest tests/ -q                    # unit tests, no network
+.venv/bin/python -m pytest tests/test_live_agent.py -s  # hits the real API
+```
+
+`tests/route_inventory.json` pins the HTTP surface and is regenerated/checked by
+`test_route_inventory.py` — update it whenever a route changes.

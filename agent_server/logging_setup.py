@@ -5,6 +5,7 @@ codebase gets a module-level `log = logging.getLogger(__name__)` and does
 not touch the root logger directly.
 """
 
+import faulthandler
 import logging
 import os
 from logging.handlers import RotatingFileHandler
@@ -49,6 +50,13 @@ def configure(level: str | None = None) -> None:
         datefmt="%H:%M:%S",
     ))
     root.addHandler(file_handler)
+
+    # A segfault in a native extension (numpy, onnxruntime, watchfiles, Playwright)
+    # kills the process with no Python traceback. Point faulthandler at the log so
+    # a fatal signal (SIGSEGV/SIGFPE/SIGABRT/SIGBUS/SIGILL) leaves a stack trace
+    # instead of a silent death. SIGKILL (OOM) still can't be caught, but at least
+    # we stop misreading a segfault as "no error".
+    faulthandler.enable(file_handler.stream)
 
     # Quieten noisy third-party loggers
     for name in ("httpx", "httpcore", "urllib3", "asyncio",

@@ -3,8 +3,13 @@
 Whisper's architecture is non-streaming, so this is a sliding re-transcription:
 the accumulated audio is re-transcribed every couple of seconds and the result
 is pushed out as a partial. whisper runs far faster than realtime (especially on
-the GPU), so the re-transcription keeps up. This gives whisper's accuracy with
-live feedback.
+the GPU), so the re-transcription keeps up.
+
+To stop latency growing with a long utterance, the buffer is bounded the way
+whisper.cpp's own stream example bounds it: audio older than a fixed window is
+finalised and trimmed, so each re-transcription only covers the recent tail.
+The cut uses whisper's segment timestamps, and enough trailing audio is kept
+under review that whisper can still revise the last sentence or two.
 """
 
 from __future__ import annotations
@@ -31,6 +36,10 @@ STEP_SECONDS = 1.5
 # A pause this long (with speech before it) commits the sentence and adds a
 # period, so dictation can stay on and each burst of talking becomes a sentence.
 PAUSE_SECONDS = float(os.getenv("CODEAGENT_DICTATION_PAUSE", "10"))
+# Audio older than this is committed and trimmed, so the re-transcription only
+# ever covers the recent tail. Sized to keep the last couple of sentences under
+# review, since whisper sometimes revises them when more context arrives.
+COMMIT_DELAY_SEC = float(os.getenv("CODEAGENT_DICTATION_COMMIT_DELAY", "6"))
 
 # whisper emits these for silence/background noise; they read as garbage in the
 # transcript. The first arm catches the special-event tokens ([BLANK_AUDIO],
@@ -80,6 +89,9 @@ class WhisperServer:
             "--host", "127.0.0.1",
             "--port", str(WHISPER_SERVER_PORT),
             "-l", "en",
+            # Skip the language-probability pass: it re-runs detection on every
+            # request and doubles transcription time for a field we never read.
+            "-nlp",
             stdout=asyncio.subprocess.DEVNULL,
             stderr=asyncio.subprocess.DEVNULL,
         )
@@ -98,18 +110,35 @@ class WhisperServer:
                 raise WhisperStreamingError("whisper-server did not become ready")
         self.client = httpx.AsyncClient(timeout=60)
 
-    async def transcribe(self, wav_bytes: bytes) -> str:
+    async def transcribe(self, wav_bytes: bytes) -> tuple[str, list[dict]]:
+        """Return ``(cleaned_text, segments)`` for one wav.
+
+        ``segments`` is a list of ``{"start", "end", "text"}`` with times in
+        seconds, from whisper's ``verbose_json`` output -- used to cut the audio
+        buffer at a word/sentence boundary when committing.
+        """
         if self.client is None:
             await self.start()
         assert self.client is not None
         resp = await self.client.post(
             self.url,
             files={"file": ("audio.wav", wav_bytes, "audio/wav")},
-            data={"response_format": "json", "temperature": "0.0"},
+            data={"response_format": "verbose_json", "temperature": "0.0"},
         )
         resp.raise_for_status()
-        text = resp.json().get("text", "").strip()
-        return _clean(" ".join(text.split()))  # collapse whisper's line-wrapped output
+        data = resp.json()
+        text = _clean(" ".join(str(data.get("text", "")).split()))
+        segments = []
+        for seg in data.get("segments", []):
+            try:
+                start = float(seg.get("start", 0.0))
+                end = float(seg.get("end", 0.0))
+            except (TypeError, ValueError):
+                continue
+            segments.append(
+                {"start": start, "end": end, "text": _clean(str(seg.get("text", "")))}
+            )
+        return text, segments
 
     async def shutdown(self) -> None:
         if self.client is not None:
@@ -202,12 +231,35 @@ class WhisperSession:
         return out.getvalue()
 
     async def current_partial(self) -> str:
-        """Transcribe the in-progress buffer; empty if nothing has been said."""
+        """Transcribe the in-progress buffer; empty if nothing has been said.
+
+        Finalises and trims any audio old enough to be stable, so the buffer
+        never grows past the review window and each transcription stays fast.
+        Returns only the text still under review.
+        """
         if not self._speech:
             return ""
-        wav = self._to_wav()
+        text, segments = await self.server.transcribe(self._to_wav())
+        buf_sec = len(self._buf) // 4 / SAMPLE_RATE
+        cutoff = buf_sec - COMMIT_DELAY_SEC
+        commit_idx = 0
+        for i, seg in enumerate(segments):
+            if seg["end"] <= cutoff:
+                commit_idx = i + 1
+            else:
+                break
+        if commit_idx:
+            committed = [s["text"] for s in segments[:commit_idx] if s["text"]]
+            if committed:
+                self._finalized.append(" ".join(committed))
+            trim = min(int(segments[commit_idx - 1]["end"] * SAMPLE_RATE), len(self._buf) // 4)
+            if trim > 0:
+                del self._buf[: trim * 4]
+            remaining = " ".join(s["text"] for s in segments[commit_idx:] if s["text"])
+        else:
+            remaining = text
         self._last_transcribed = len(self._buf) // 4
-        return await self.server.transcribe(wav)
+        return remaining
 
     @staticmethod
     def _ensure_period(text: str) -> str:

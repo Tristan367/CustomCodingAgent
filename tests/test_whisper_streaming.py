@@ -67,3 +67,45 @@ def test_pause_finalization_requires_long_silence():
     assert not session.should_finalize
     session.append(np.zeros(int((whisper_streaming.PAUSE_SECONDS + 1) * 16000), dtype=np.float32))
     assert session.should_finalize
+
+
+class _FakeServer:
+    """Returns canned segments instead of calling whisper."""
+
+    def __init__(self, segments):
+        self._segments = segments
+
+    async def transcribe(self, wav_bytes):
+        text = " ".join(s["text"] for s in self._segments)
+        return text, self._segments
+
+
+def _session_with(segments, seconds):
+    session = whisper_streaming.WhisperSession(server=None)
+    session.server = _FakeServer(segments)
+    session.append(np.full(int(16000 * seconds), 0.5, dtype=np.float32))
+    return session
+
+
+async def test_partial_commits_old_segments_and_trims():
+    segs = [
+        {"start": 0.0, "end": 2.0, "text": "first sentence."},
+        {"start": 2.1, "end": 5.0, "text": "second sentence."},
+        {"start": 5.1, "end": 9.0, "text": "still under review."},
+    ]
+    # 12s of audio, 6s commit delay: anything ending before 6.0s commits.
+    session = _session_with(segs, seconds=12)
+    partial = await session.current_partial()
+    assert session.finalized_text() == "first sentence. second sentence."
+    assert partial == "still under review."
+    # The last committed segment ended at 5.0s, so the buffer is trimmed to it.
+    assert len(session._buf) // 4 == int(7.0 * 16000)
+
+
+async def test_partial_keeps_recent_audio_under_review():
+    segs = [{"start": 0.0, "end": 2.0, "text": "hello world."}]
+    session = _session_with(segs, seconds=3)
+    partial = await session.current_partial()
+    assert session.finalized_text() == ""
+    assert partial == "hello world."
+    assert len(session._buf) // 4 == 3 * 16000  # nothing trimmed

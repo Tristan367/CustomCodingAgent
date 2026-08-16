@@ -199,12 +199,11 @@ async function stopCodeAgent(button) {
         <p class="hint" style="margin-top:6px">
             Dictation:
             {% if stt.available %}
-            ready &mdash; <code>{{ stt.model }}</code> via whisper.cpp
+            ready &mdash; click the mic or press <kbd>Ctrl+M</kbd> to toggle
             {% else %}
             unavailable. Install <code>whisper-cli</code> and <code>ffmpeg</code>, or set
             <code>WHISPER_BIN</code> / <code>WHISPER_MODEL</code>.
             {% endif %}
-            Click the mic or press <kbd>Ctrl+M</kbd> to toggle dictation.
         </p>
         <div class="tool-grid" style="margin-top:12px">
             <span class="hint" style="grid-column:1/-1;margin:0">Expand these tool results automatically:</span>

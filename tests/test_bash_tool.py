@@ -74,6 +74,9 @@ def test_timeout_still_applies_to_foreground_commands():
     ("git branch -D foo", False),
     ("git remote add origin url", False),
     ("/bin/rm -rf x", False),
+    ("cat foo & rm -rf build", False),
+    ("ls\nrm -rf build", False),
+    ("cat <(rm -rf build)", False),
 ])
 def test_read_only_classification(command, expected):
     from agent_server.tools.bash import is_read_only

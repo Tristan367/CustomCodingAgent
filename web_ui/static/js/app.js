@@ -241,6 +241,7 @@ async function refreshTranscript() {
     if (fresh && App.els.messages) {
       App.els.messages.replaceWith(fresh);
       App.els.messages = fresh;
+      disposeDetachedSides();
       renderStoredMessages();
       scrollToBottom(true);
     }
@@ -258,6 +259,7 @@ function renderStoredMessages() {
   markOpenableTools(document);
   setupMessageSide();
   refreshRevertButtons();
+  attachPlayButtons();
 }
 
 /* ── Sending ─────────────────────────────────────────────────────────────── */
@@ -416,6 +418,9 @@ async function streamRequest(url, options, attached = false) {
     App.abortController = null;
     refreshRevertButtons();
     refreshMeta();
+    // Reattaching replays only the tail of an in-flight reply; pull the full,
+    // now-persisted transcript so the earlier part is not missing.
+    if (stream.attached && stream.sessionId === App.sessionId) refreshTranscript();
   }
 }
 
@@ -1933,18 +1938,30 @@ const Notifier = {
 
   play(kind) {
     if (!this.enabled) return;
-    const sound = kind || this.kind || 'click';
+    // "waiting" and "error" always use a distinct attention tone; every other
+    // notification plays the user's chosen sound (click/chime/knock/upload).
+    if (kind === 'waiting') return this._beep([660, 880]);
+    if (kind === 'error') return this._beep([300, 220]);
+    this._playSound(this.kind || 'click');
+  },
+
+  _playSound(sound) {
+    if (sound === 'chime') this._beep([1047, 1319, 1568]);
+    else if (sound === 'knock') this._beep([200, 300, 200]);
+    else if (sound === 'click') this._beep([1200, 1500]);
+    else {
+      // A user-uploaded file: play it through an Audio element.
+      const audio = new Audio('/_settings/sounds/' + encodeURIComponent(sound) + '/play');
+      audio.volume = this.volume || 0.5;
+      audio.play().catch(() => {});
+    }
+  },
+
+  _beep(tones) {
+    const vol = this.volume || 0.5;
     try {
       this.ctx = this.ctx || new (window.AudioContext || window.webkitAudioContext)();
       if (this.ctx.state === 'suspended') this.ctx.resume();
-      const vol = this.volume || 0.5;
-      let tones;
-      if (sound === 'chime') tones = [1047, 1319, 1568];
-      else if (sound === 'knock') tones = [200, 300, 200];
-      else if (sound === 'click') tones = [1200, 1500];
-      else if (kind === 'waiting') tones = [660, 880];
-      else if (kind === 'error') tones = [300, 220];
-      else tones = [880];
       tones.forEach((freq, i) => {
         const osc = this.ctx.createOscillator();
         const gain = this.ctx.createGain();
@@ -2049,14 +2066,8 @@ function previewSound() {
   const sel = document.getElementById('sound-choice');
   const vol = parseFloat(document.getElementById('sound-volume')?.value || '0.5');
   const val = sel.value;
-  if (['click', 'chime', 'knock'].includes(val)) {
-    Notifier.volume = vol;
-    Notifier.play(val);
-  } else {
-    const audio = new Audio('/_settings/sounds/' + encodeURIComponent(val) + '/play');
-    audio.volume = vol;
-    audio.play().catch(() => {});
-  }
+  Notifier.volume = vol;
+  Notifier._playSound(val);
 }
 
 async function saveSoundSetting() {

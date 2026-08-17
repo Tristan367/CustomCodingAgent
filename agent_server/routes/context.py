@@ -347,11 +347,8 @@ async def _home_context(
             is_pw = f.get("kind") == "password"
             preview = ""
             if raw and is_pw:
-                # Shows the first and last quarter so a key is recognisable.
-                # Half of it reaches the page either way, which is more than
-                # identification needs -- worth revisiting.
-                edge = max(0, len(raw) // 4)
-                preview = raw[:edge] + "\u2026" + raw[len(raw) - edge:]
+                # Recognisable without leaking the key: only a sliver at each end.
+                preview = raw[:4] + "\u2026" + raw[-4:] if len(raw) > 8 else "\u2022" * len(raw)
             f_list.append(dict(f, value=("\u2022" * 12), has_value=bool(raw) and is_pw, preview=preview))
         provider_settings.append({"name": ps["name"], "fields": f_list})
 

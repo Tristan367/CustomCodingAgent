@@ -13,6 +13,7 @@ Two independent gates:
   `~/.ssh/config`. Grants are per-directory and per-session.
 """
 
+import asyncio
 import logging
 import subprocess
 from pathlib import Path
@@ -81,7 +82,7 @@ async def write_allowed(session_id: str, path: Path, project_dir: str) -> bool:
     return any(_is_within(path, allowed) for allowed in await list_allowed(session_id))
 
 
-def grant_scope(path: Path) -> str:
+async def grant_scope(path: Path) -> str:
     """The directory an 'always allow' grant should cover.
 
     Prefers the enclosing git repository, which is what a user means by "this
@@ -89,7 +90,8 @@ def grant_scope(path: Path) -> str:
     """
     directory = path if path.is_dir() else path.parent
     try:
-        result = subprocess.run(
+        result = await asyncio.to_thread(
+            subprocess.run,
             ["git", "-C", str(directory), "rev-parse", "--show-toplevel"],
             capture_output=True, text=True, timeout=2,
         )
@@ -131,7 +133,7 @@ async def check(
             "kind": "denied" if is_denied(path) else "path",
             "tool": name,
             "path": str(path),
-            "scope": grant_scope(path),
+            "scope": await grant_scope(path),
             "project_dir": project_dir,
         }
 

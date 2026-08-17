@@ -39,7 +39,7 @@
             <input type="text" name="base_url" value="{{ ep.base_url }}"
                    placeholder="http://localhost:8888/v1" autocomplete="off" spellcheck="false" style="flex:1">
             {% if ep.api_key %}
-            <span class="key-preview" onclick="this.hidden=true;this.nextElementSibling.hidden=false;this.nextElementSibling.focus()" style="cursor:pointer;flex:1">{{ ep.api_key[:ep.api_key|length//4] if ep.api_key|length > 4 else '••••' }}{% if ep.api_key|length > 4 %}…{{ ep.api_key[-(ep.api_key|length//4):] }}{% endif %}</span>
+            <span class="key-preview" onclick="this.hidden=true;this.nextElementSibling.hidden=false;this.nextElementSibling.focus()" style="cursor:pointer;flex:1">{{ ep.api_key[:4] if ep.api_key|length > 8 else '••••' }}{% if ep.api_key|length > 8 %}…{{ ep.api_key[-4:] }}{% endif %}</span>
             <input type="password" name="api_key" hidden
                    placeholder="sk-..." autocomplete="off" spellcheck="false" style="flex:1" oninput="this.form.querySelector('button[type=submit]').disabled=false">
             {% else %}

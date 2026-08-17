@@ -591,6 +591,18 @@ async def _loop(
                 if not result.get("ok"):
                     yield {"type": "error", "message": result.get("reason", "Compaction failed")}
                     return
+                # Compaction adopts `pending_system_prompt` and clears the tool
+                # descriptions, so the copies frozen above are now stale. Rebuild
+                # them before the next request, otherwise that request still sends
+                # the old prompt and only the turn after it gets the new one -- an
+                # avoidable full-context cache miss.
+                session = await db.get_session(session_id) or session
+                system_prompt = await session_system_prompt(session)
+                tools = tool_schemas(
+                    include_vision=not provider.supports_vision(),
+                    exclude=await disabled_tools(session),
+                    descriptions=await session_tool_descriptions(session),
+                )
                 continue
 
         rows = await db.get_messages(session_id)

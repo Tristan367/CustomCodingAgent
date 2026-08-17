@@ -86,8 +86,13 @@ def is_read_only(command: str) -> bool:
     stripped = command.strip()
     if not stripped:
         return True
-    # Anything that can redirect into a file or chain unknown commands is unsafe.
-    if any(tok in stripped for tok in (">", ">>", "&&", "||", ";", "`", "$(", "sudo")):
+    # Anything that can redirect into a file, chain unknown commands, or spawn a
+    # subshell is unsafe. `>` also covers `>>`, `2>`, `>&`, `<>`; `<` covers
+    # `<<`, `<<<`, and `<(cmd)` process substitution.
+    if any(tok in stripped for tok in (">", "&&", "||", ";", "`", "$(", "sudo", "<", "\n", "\r")):
+        return False
+    # A bare `&` backgrounds or chains (`cmd1 & cmd2`); `&&` was caught above.
+    if re.search(r"(?<!&)&(?!&)", stripped):
         return False
     for segment in stripped.split("|"):
         try:

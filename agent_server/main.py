@@ -131,7 +131,7 @@ async def lifespan(app: FastAPI):
     # First line in the file after every restart. Without it an empty log is
     # ambiguous between "nothing happened" and "logging is not working", and
     # there is nothing to correlate a restart against.
-    log.info("codeagent starting: data=%s db=%s", DATA_DIR, DB_PATH.name)
+    log.info("myriadcode starting: data=%s db=%s", DATA_DIR, DB_PATH.name)
     await init_db()
     await migrate_prompts()
     from agent_server.providers import credentials
@@ -158,9 +158,9 @@ async def lifespan(app: FastAPI):
     yield
 
     # Only reached on a graceful stop (SIGTERM/SIGINT via the shutdown button,
-    # `codeagent stop`, or Ctrl-C). A hard kill (SIGKILL/OOM) skips this, so the
+    # `myriadcode stop`, or Ctrl-C). A hard kill (SIGKILL/OOM) skips this, so the
     # absence of this line next to a silent death means the process was killed.
-    log.info("codeagent shutting down")
+    log.info("myriadcode shutting down")
     reaper.cancel()
     whisper_warmup.cancel()
     # Await the cancellation so the warm-up task is actually done before the
@@ -184,7 +184,7 @@ async def lifespan(app: FastAPI):
         _exec_self()
 
 
-app = FastAPI(title="CodeAgent", lifespan=lifespan)
+app = FastAPI(title="MyriadCode", lifespan=lifespan)
 app.mount("/static", StaticFiles(directory=str(STATIC_DIR)), name="static")
 app.include_router(sessions.router)
 app.include_router(chat.router)

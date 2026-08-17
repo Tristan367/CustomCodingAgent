@@ -1,4 +1,4 @@
-# CodeAgent
+# MyriadCode
 
 A personal coding agent: FastAPI + HTMX, running against your local filesystem.
 DeepSeek, Anthropic, OpenRouter, or any OpenAI-compatible endpoint. Thirteen
@@ -10,19 +10,19 @@ browser it can drive to check its own work.
 ```bash
 uv venv && uv pip install -r requirements.txt
 cp .env.example .env        # optional; the key can also be saved in the UI
-ln -s "$PWD/bin/codeagent" ~/.local/bin/codeagent
-codeagent                   # starts the server and opens the browser
+ln -s "$PWD/bin/myriadcode" ~/.local/bin/myriadcode
+myriadcode                  # starts the server and opens the browser
 ```
 
 | | |
 |---|---|
-| `codeagent` | start, and open a browser at it |
-| `codeagent stop` | stop it cleanly |
-| `codeagent restart` | stop it, then start in this terminal |
-| `codeagent status` | running or not, and on what pid |
-| `codeagent open` | open a browser at one already running |
+| `myriadcode` | start, and open a browser at it |
+| `myriadcode stop` | stop it cleanly |
+| `myriadcode restart` | stop it, then start in this terminal |
+| `myriadcode status` | running or not, and on what pid |
+| `myriadcode open` | open a browser at one already running |
 
-Ctrl-C stops a server started in this terminal; `codeagent stop` stops one
+Ctrl-C stops a server started in this terminal; `myriadcode stop` stops one
 started elsewhere.
 
 Add your DeepSeek API key on the home page (or set `DEEPSEEK_API_KEY`, which wins),

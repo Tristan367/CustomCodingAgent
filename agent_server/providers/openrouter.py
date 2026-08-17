@@ -7,8 +7,8 @@ from agent_server.providers.openai_compat import OpenAICompatibleProvider
 # Sent on every request. OpenRouter uses these for attribution and for
 # rate-limit tiering; without them requests are treated as anonymous.
 _ATTRIBUTION = {
-    "HTTP-Referer": "https://github.com/local/codeagent",
-    "X-Title": "CodeAgent",
+    "HTTP-Referer": "https://github.com/local/myriadcode",
+    "X-Title": "MyriadCode",
 }
 
 

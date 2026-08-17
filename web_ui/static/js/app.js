@@ -1,4 +1,4 @@
-/* CodeAgent front-end: SSE streaming, tool approval, dictation, tabs. */
+/* MyriadCode front-end: SSE streaming, tool approval, dictation, tabs. */
 'use strict';
 
 /* ── Dialogs ─────────────────────────────────────────────────────────────── */

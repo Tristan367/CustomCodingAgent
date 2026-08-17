@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Start CodeAgent and open it in the browser.
+# Start MyriadCode and open it in the browser.
 #
 # Installed as a symlink on PATH, so this resolves the link to find the repo
 # rather than assuming where it was called from.
@@ -29,7 +29,7 @@ open_browser() {
     fi
     sleep 0.25
   done
-  echo "codeagent: server did not come up at $URL" >&2
+  echo "myriadcode: server did not come up at $URL" >&2
 }
 
 # -sTCP:LISTEN is essential: without it lsof also lists every client connected
@@ -42,14 +42,14 @@ running_pid() { lsof -ti:"$PORT" -sTCP:LISTEN 2>/dev/null | head -1 || true; }
 stop_server() {
   local pid
   pid="$(running_pid)"
-  [ -n "$pid" ] || { echo "codeagent: not running"; return 1; }
+  [ -n "$pid" ] || { echo "myriadcode: not running"; return 1; }
   # SIGTERM, not -9: uvicorn's shutdown hook is what unloads the vision model.
   kill "$pid" 2>/dev/null || true
   for _ in $(seq 1 40); do
     sleep 0.25
-    [ -n "$(running_pid)" ] || { echo "codeagent: stopped"; return 0; }
+    [ -n "$(running_pid)" ] || { echo "myriadcode: stopped"; return 0; }
   done
-  echo "codeagent: did not stop; sending SIGKILL" >&2
+  echo "myriadcode: did not stop; sending SIGKILL" >&2
   kill -9 "$pid" 2>/dev/null || true
   return 0
 }
@@ -66,9 +66,9 @@ case "${1:-}" in
   status)
     pid="$(running_pid)"
     if [ -n "$pid" ]; then
-      echo "codeagent: running at $URL (pid $pid)"
+      echo "myriadcode: running at $URL (pid $pid)"
     else
-      echo "codeagent: not running"
+      echo "myriadcode: not running"
     fi
     exit 0
     ;;
@@ -78,14 +78,14 @@ case "${1:-}" in
     ;;
   -h|--help)
     cat <<'EOF'
-codeagent            start the server and open it in your browser
-codeagent stop       stop it cleanly (this is what unloads the vision model)
-codeagent restart    stop it, then start in this terminal
-codeagent status     is it running, and on what pid
-codeagent open       just open the browser at a server already running
-codeagent --no-open  start without opening a browser
+myriadcode            start the server and open it in your browser
+myriadcode stop       stop it cleanly (this is what unloads the vision model)
+myriadcode restart    stop it, then start in this terminal
+myriadcode status     is it running, and on what pid
+myriadcode open       just open the browser at a server already running
+myriadcode --no-open  start without opening a browser
 
-Ctrl-C stops a server started in this terminal. Use `codeagent stop` for one
+Ctrl-C stops a server started in this terminal. Use `myriadcode stop` for one
 started somewhere else. Both run the shutdown hook; kill -9 does not.
 
 The vision rig is started on demand; see VISION_* in .env.example.
@@ -94,19 +94,19 @@ EOF
     ;;
 esac
 
-[ -d .venv ] || { echo "codeagent: no .venv. Run: uv venv && uv pip install -r requirements.txt" >&2; exit 1; }
+[ -d .venv ] || { echo "myriadcode: no .venv. Run: uv venv && uv pip install -r requirements.txt" >&2; exit 1; }
 
 # Already running? Just show it, rather than killing someone's in-flight turn.
 if curl -sf -o /dev/null --max-time 1 "$URL/"; then
-  echo "codeagent: already running at $URL (pid $(running_pid))"
-  echo "           opening it. Use 'codeagent stop' or 'codeagent restart' to take it down."
+  echo "myriadcode: already running at $URL (pid $(running_pid))"
+  echo "           opening it. Use 'myriadcode stop' or 'myriadcode restart' to take it down."
   [ "${1:-}" = "--no-open" ] || open_browser
   exit 0
 fi
 
 [ "${1:-}" = "--no-open" ] || open_browser &
 
-echo "codeagent: starting at $URL  (Ctrl-C to stop)"
+echo "myriadcode: starting at $URL  (Ctrl-C to stop)"
 # exec, so Ctrl-C reaches uvicorn directly and its shutdown hook runs: that is
 # what unloads the vision model from the rig.
 exec .venv/bin/python -m uvicorn agent_server.main:app --host "$HOST" --port "$PORT"

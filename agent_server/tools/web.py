@@ -64,7 +64,7 @@ async def webfetch(ctx: ToolContext, *, url: str, **_) -> ToolResult:
             timeout=TIMEOUT,
             follow_redirects=False,
             headers={
-                "User-Agent": "Mozilla/5.0 (compatible; CodeAgent/1.0)",
+                "User-Agent": "Mozilla/5.0 (compatible; MyriadCode/1.0)",
                 "Accept": "text/html,application/xhtml+xml,text/plain,*/*",
             },
         ) as client:
@@ -166,7 +166,7 @@ async def websearch(ctx: ToolContext, *, query: str, **_) -> ToolResult:
         async with httpx.AsyncClient(
             timeout=TIMEOUT,
             follow_redirects=True,
-            headers={"User-Agent": "Mozilla/5.0 (compatible; CodeAgent/1.0)"},
+            headers={"User-Agent": "Mozilla/5.0 (compatible; MyriadCode/1.0)"},
         ) as client:
             resp = await client.post(
                 "https://lite.duckduckgo.com/lite/",

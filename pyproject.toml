@@ -1,5 +1,5 @@
 [project]
-name = "codeagent"
+name = "myriadcode"
 version = "0.1.0"
 description = "A personal coding agent: FastAPI + HTMX, running against your local filesystem."
 requires-python = ">=3.11"

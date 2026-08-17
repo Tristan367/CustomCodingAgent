@@ -1,4 +1,4 @@
-# CodeAgent — feature index
+# MyriadCode — feature index
 
 A single-user, self-hosted coding agent. FastAPI backend, HTMX + vanilla JS
 frontend (no framework), SQLite storage, one Playwright-driven Chromium. This
@@ -7,7 +7,7 @@ one-sentence note on how. The essay-length explanation lives in `README.md`.
 
 ## Running and lifecycle
 
-- **Launcher** — `bin/codeagent` (symlinked on PATH) resolves the repo, frees the
+- **Launcher** — `bin/myriadcode` (symlinked on PATH) resolves the repo, frees the
   port if needed, waits for the server, opens a browser, and `exec`s uvicorn so
   Ctrl-C runs the shutdown hook. `run.sh` is the no-browser equivalent.
 - **Server** — `uvicorn agent_server.main:app` on `127.0.0.1:8219` by default.
@@ -17,7 +17,7 @@ one-sentence note on how. The essay-length explanation lives in `README.md`.
   warm-up).
 - **Shutdown** — stop in-flight turns first, then the whisper-server subprocess,
   then the browser, then the DB. `POST /_shutdown` signals SIGTERM (so the hook
-  runs); `codeagent stop` sends SIGTERM, escalating to SIGKILL.
+  runs); `myriadcode stop` sends SIGTERM, escalating to SIGKILL.
 - **Data** — `~/.local/share/codeagent/` (`CODEAGENT_DATA_DIR`), outside the
   checkout so `git clean` can't destroy it. `agent.db` (SQLite/WAL), `codeagent.log`
   (rotating), `browser_state/`, `tool-output/`.

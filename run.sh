@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Start the CodeAgent server.
+# Start the MyriadCode server.
 set -euo pipefail
 cd "$(dirname "$0")"
 

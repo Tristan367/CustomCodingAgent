@@ -55,24 +55,24 @@
         {% endfor %}
         <button type="button" class="btn-secondary" onclick="newEndpoint()">Add endpoint</button>
         <script>
-async function stopCodeAgent(button) {
+async function stopMyriadCode(button) {
     const ok = await ui.confirm(
         'The server will stop. Any running agent turn is lost, and the page stops working.',
-        { title: 'Stop CodeAgent', confirmLabel: 'Stop' });
+        { title: 'Stop MyriadCode', confirmLabel: 'Stop' });
     if (!ok) return;
     button.disabled = true;
     button.textContent = 'Stopping\u2026';
     // The connection drops as the process goes away, which is the success case.
     try { await fetch('/_shutdown', { method: 'POST' }); } catch (e) { /* expected */ }
     document.body.innerHTML =
-        '<p style="padding:2rem;font-family:system-ui">CodeAgent has stopped. ' +
-        'Run <code>codeagent</code> to start it again.</p>';
+        '<p style="padding:2rem;font-family:system-ui">MyriadCode has stopped. ' +
+        'Run <code>myriadcode</code> to start it again.</p>';
 }
 
-async function restartCodeAgent(button) {
+async function restartMyriadCode(button) {
     const ok = await ui.confirm(
         'The server will restart to pick up code changes. Any running agent turn is lost.',
-        { title: 'Restart CodeAgent', confirmLabel: 'Restart' });
+        { title: 'Restart MyriadCode', confirmLabel: 'Restart' });
     if (!ok) return;
     button.disabled = true;
     button.textContent = 'Restarting\u2026';
@@ -89,7 +89,7 @@ async function restartCodeAgent(button) {
             clearInterval(poll);
             document.body.innerHTML =
                 '<p style="padding:2rem;font-family:system-ui">The server is taking a while ' +
-                'to come back. Run <code>codeagent</code> if it does not return.</p>';
+                'to come back. Run <code>myriadcode</code> if it does not return.</p>';
         }
     }, 500);
 }
@@ -354,13 +354,13 @@ async function restartCodeAgent(button) {
     </section>
 
     <div class="page-footer">
-        <button type="button" class="btn-secondary btn-sm" onclick="restartCodeAgent(this)">
-            Restart CodeAgent
+        <button type="button" class="btn-secondary btn-sm" onclick="restartMyriadCode(this)">
+            Restart MyriadCode
         </button>
-        <button type="button" class="btn-danger btn-sm" onclick="stopCodeAgent(this)">
-            Stop CodeAgent
+        <button type="button" class="btn-danger btn-sm" onclick="stopMyriadCode(this)">
+            Stop MyriadCode
         </button>
-        <span class="hint">Shuts the server down. Start it again with <code>codeagent</code>.</span>
+        <span class="hint">Shuts the server down. Start it again with <code>myriadcode</code>.</span>
     </div>
 </div>
 

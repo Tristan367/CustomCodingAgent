@@ -1,9 +1,7 @@
 # MyriadCode
 
-A personal coding agent you run on your own machine. FastAPI + HTMX, no
-framework, no account. It does the usual things — the agent reads and edits
-files, runs shell commands, drives a browser — but what it's built around is
-that you can configure every part of it, and the agents talk to each other.
+A coding agent whose sessions talk to each other, with sub-agents in a
+hierarchy you define and every prompt, tool, and endpoint configurable.
 
 ## What makes it different
 
@@ -19,8 +17,7 @@ thread.
 
 `task` spawns a sub-agent that can spawn its own, up to a tier hierarchy you
 configure (`sa_tool`, `sa_tool_2`, …). Each tier gets its own system prompt,
-model, disabled-tool list, and parallel cap. `explore` is the read-only
-research agent.
+model, disabled-tool list, and parallel cap.
 
 ### Everything is custom
 

@@ -89,7 +89,7 @@ async def create_profile():
     # Build Tier 2 tools: same
     all_tool_names = [
         "read", "write", "edit", "bash", "grep", "glob", "webfetch",
-        "websearch", "task", "explore", "capture", "browser",
+        "websearch", "task", "capture", "browser",
     ]
 
     data = {

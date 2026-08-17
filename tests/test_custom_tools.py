@@ -42,10 +42,10 @@ def noop_tool(name, parameters=None):
 
 
 def test_the_built_in_names_are_discovered_not_listed():
-    """The hardcoded list had gone stale -- it was missing websearch, explore
+    """The hardcoded list had gone stale -- it was missing websearch
     and every browser tool, all of which were therefore shadowable."""
     for name in ("read", "edit", "write", "bash", "grep", "glob", "webfetch",
-                 "websearch", "task", "explore", "capture", "browser"):
+                 "websearch", "task", "capture", "browser"):
         assert name in BUILT_IN_NAMES, name
 
 

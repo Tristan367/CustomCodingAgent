@@ -43,7 +43,7 @@ one-sentence note on how. The essay-length explanation lives in `README.md`.
 - **Tabs** — the top bar is real browser-tab behaviour: open/close/reorder/status
   dots, persisted per browser.
 
-## Tools (13 built-in)
+## Tools (12 built-in)
 
 Registered in `agent_server/tools/registry.py`. Independent read-only tools run
 concurrently; anything that mutates runs sequentially.
@@ -58,7 +58,7 @@ concurrently; anything that mutates runs sequentially.
 | `glob` | find files by pattern | glob |
 | `webfetch` | fetch a URL to markdown | httpx |
 | `websearch` | web search | provider-backed |
-| `task` / `explore` | spawn a subagent | recursive agent loop (see hierarchy) |
+| `task` | spawn a subagent | recursive agent loop (see hierarchy) |
 | `send_message` | message another session | mailbox table (see below) |
 | `capture` | screenshot the desktop | per-platform screen capture |
 | `browser` | drive Chromium | Playwright steps + accessibility snapshots |
@@ -73,7 +73,6 @@ outside it are gated by permissions.
   user-configured tier hierarchy (`sa_tool`, `sa_tool_2`, … on the Prompts page).
 - Each tier has its own system prompt, model, disabled-tool set, and parallel cap
   (`agent_server/system_prompt.py` reads the `subagent_tiers` JSON column).
-- `explore` is the read-only, research-only subagent.
 - `send_message` is `TOP_LEVEL_ONLY` — subagents can't message other sessions.
 
 ## Inter-AI messaging

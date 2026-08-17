@@ -320,14 +320,13 @@ def _tier_tools(row: dict, tier: int) -> str | None:
 
 
 def _default_subagent_off() -> set[str]:
-    """`task`/`explore` and any custom tool scripts are off by default.
+    """`task` and any custom tool scripts are off by default for subagents.
 
-    Both `task` and `explore` share the subagent loop; leaving `explore` enabled
-    while `task` was off would let a subagent recurse unboundedly by calling
-    `explore` instead.
+    Recursive subagents would otherwise spawn unboundedly by calling `task`
+    from inside `task`.
     """
     from agent_server.tools.registry import _custom_tool_names
-    off = {"task", "explore"}
+    off = {"task"}
     off.update(_custom_tool_names)
     return off
 

@@ -277,7 +277,7 @@ def test_truncation_says_what_to_do_not_just_what_happened():
     out = truncate("x" * 5000, 300, "grep", spill=True)
     assert len(out) <= 300
     assert "tool-output" in out, "the spill path must be named"
-    assert "explore" in out and "grep" in out
+    assert "task" in out and "grep" in out
     assert "Do not re-run" in out
 
 

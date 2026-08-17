@@ -311,30 +311,6 @@ register(Tool(
 ))
 
 register(Tool(
-    name="explore",
-    description=(
-        "Dispatch a narrow subagent to search the codebase for specific facts — "
-        "file locations, class definitions, call sites, config patterns. Read-only, "
-        "lighter than `task`. Give it a focused question with concrete expected output. "
-        "Use `task` for open-ended research; use `explore` when you know exactly what "
-        "you need to find."
-    ),
-    parameters={
-        "type": "object",
-        "properties": {
-            "description": {"type": "string", "description": "3-5 word label"},
-            "prompt": {
-                "type": "string",
-                "description": "Specific question with expected output format",
-            },
-        },
-        "required": ["description", "prompt"],
-    },
-    handler=run_task,
-    parallel_safe=True,
-))
-
-register(Tool(
     name="send_message",
     description=(
         "Send a message to another agent session by name. The target receives it when "
@@ -566,7 +542,7 @@ def get_tool(name: str) -> Tool | None:
 async def _subagent_guard(name: str, args: dict, ctx: ToolContext) -> ToolResult | None:
     """Enforce the hard permission boundaries for subagents.
 
-    A subagent runs autonomously inside `task`/`explore` and cannot prompt the
+    A subagent runs autonomously inside `task` and cannot prompt the
     user, so the prompt-driven gates the main loop applies (permissions.check)
     never run for it. Instead of letting it write outside the project or run
     arbitrary shell, reject those calls here. Writes inside the project and

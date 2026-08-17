@@ -126,8 +126,9 @@ Two independent gates (`agent_server/permissions.py`):
 
 ## Vision, capture, browser
 
-- **Images** — attach with the paperclip; saved to disk and referenced by path.
-  Uploads are re-encoded to PNG (browsers mislabel WebP as `.jpg`).
+- **Attachments** — attach files or directories with the paperclip; the agent is
+  sent the absolute path and decides what to do with it. Images preview inline,
+  other files and folders render as chips. Drag-drop works the same way.
 - **`browser`** — drives a real Chromium from a list of steps (click/fill/hover/
   press/shoot/record/compare) with accessibility-tree snapshots and `expect`
   assertions. One context per session, reaped when idle.

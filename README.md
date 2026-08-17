@@ -1,11 +1,163 @@
 # MyriadCode
 
-A personal coding agent: FastAPI + HTMX, running against your local filesystem.
-DeepSeek, Anthropic, OpenRouter, or any OpenAI-compatible endpoint. Thirteen
-built-in tools, per-session settings that don't leak into each other, and a
-browser it can drive to check its own work.
+A personal coding agent you run on your own machine. FastAPI backend, HTMX +
+vanilla-JS frontend (no framework), SQLite storage. It reads and edits your
+filesystem, runs shell commands only with your permission, drives a real browser
+to check its own work, and talks to DeepSeek, Anthropic, OpenRouter, or any
+OpenAI-compatible endpoint.
 
-## Running it
+---
+
+## Features
+
+### Sessions & runs
+
+- **Sessions** are named conversations pinned to a project directory. Each has
+  its own model, prompt profile, permissions, browser context, and settings —
+  nothing leaks between them.
+- **Runs outlive the browser tab.** A turn is a server-owned task; the UI
+  subscribes over SSE. Closing the tab only unsubscribes — the turn keeps going
+  and is recorded. Reopening a running session reattaches and replays the tool
+  calls still outstanding.
+- **Message mid-run.** The composer stays live; messages sent while the agent
+  works are held and injected at the next turn boundary (never between a tool
+  call and its results). Queued messages can be undone before delivery.
+- **Broadcast** one message to many sessions at once.
+- **Doom-loop abort** — a turn stuck repeating the same tool call in a tight loop
+  aborts rather than billing forever.
+- **Tabs** — the top bar is real browser-tab behaviour: open, close, reorder,
+  and per-tab status dots, persisted between restarts.
+
+### Tools (13 built-in)
+
+| Tool | What it does |
+|---|---|
+| `read` | read a file (with a `Did you mean` hint on miss) |
+| `write` | create/overwrite a file, returns a `diff` |
+| `edit` | exact-match string replacement (errors on multiple matches) |
+| `bash` | run a shell command (timeout, own process group, permission gate) |
+| `grep` | search file contents (ripgrep) |
+| `glob` | find files by pattern |
+| `webfetch` | fetch a URL and convert it to markdown |
+| `websearch` | search the web |
+| `task` | spawn a subagent (which can spawn its own) |
+| `explore` | spawn a read-only research subagent |
+| `send_message` | message another session by name |
+| `capture` | screenshot the desktop |
+| `browser` | drive a real Chromium from a list of steps |
+
+Independent read-only calls (`read`, `grep`, `glob`, `webfetch`, `websearch`,
+`task`, `explore`, `capture`) run concurrently, so three subagents cost the
+slowest one rather than the sum. Anything that mutates runs sequentially.
+Tool results can carry a `diff`, which the UI renders inline.
+
+### Subagents & inter-agent messaging
+
+- `task` spawns a subagent that can itself spawn more, up to a user-configured
+  tier hierarchy (`sa_tool`, `sa_tool_2`, …). Each tier has its own system
+  prompt, model, disabled-tool set, and parallel cap.
+- `explore` is the read-only, research-only subagent.
+- `send_message` sends to another session **by name**. A self-target is rejected;
+  an idle target is woken immediately, a busy one queues the message in a mailbox
+  and receives it at its next turn boundary.
+
+### Safety & permissions
+
+Two independent gates (`agent_server/permissions.py`):
+
+- **Shell** — read-only commands (`ls`, `cat`, `git status`, …) run silently.
+  Anything that can redirect, chain, or mutate asks first. Approve once,
+  approve-all-for-the-process, or reject (fed back as a tool result so the model
+  can adapt).
+- **Filesystem writes outside the project directory** — always ask, even with
+  shell auto-approval on. Allow once, or allow a directory for the session.
+  `/proc`, `/sys`, `/dev`, `/boot`, and the sudoers files can never be granted.
+
+Every grant is scoped to one session and dropped when the session is deleted.
+`sudo` always prompts for a password (never saved), injected once into a call
+rewritten to `sudo -S`. A `danger_reason()` guard blocks `rm -rf /` (and
+protected paths), fork bombs, and raw block-device writes.
+
+### Editor, file manager, formatters
+
+- **Editor** (side panel) — per-session memory (open file, unsaved buffer, scroll,
+  caret, split state) so it survives tab switches; back/forward history; reopen
+  via the session-bar button or **Ctrl+E**; half/full-height split.
+- **File manager** — browse, mkdir, rename, move, delete, duplicate, wired so
+  renames and moves keep the open editor in sync.
+- **Formatters** — dispatch to clang-format (C/C++/C#/Java/ObjC/proto), black
+  (Python), prettier, rustfmt, gofmt, shfmt, and JSON. A missing binary shows
+  "install X" instead of failing.
+
+### Attachments
+
+Attach files or directories with the paperclip; the agent is sent the absolute
+path and decides what to do with it (read it, glob it, call `vision` on it, …).
+Images preview inline; other files and folders render as chips with their size.
+Drag-and-drop works anywhere in the window — on Linux the real path is handed
+over directly, and elsewhere the file is copied into the app's upload dir.
+Attachments can be reordered by dragging and cleared all at once.
+
+### Speech
+
+- **Dictation** — click the mic button or press **Ctrl+M** to toggle recording.
+  A level meter sits on the composer while recording. Streaming transcription
+  via `whisper-server` commits audio older than a fixed delay using the model's
+  own segment timestamps, so latency stays flat. Everything is local; no audio
+  leaves the machine.
+- **TTS** — Kokoro (via `onnxruntime`, deliberately on CPU) reads replies aloud,
+  with tone settings and a per-session voice.
+
+### Vision, browser, capture
+
+- **`browser`** drives a real Chromium from a list of `steps` in one call
+  (click/fill/hover/press/shoot/record/compare) with accessibility-tree snapshots
+  and `expect` assertions, so a UI change can be proven rather than asserted in
+  prose. One context per session, reaped when idle.
+- **`capture`** screenshots the desktop for anything that isn't a web page.
+- **No built-in `vision` tool** — looking at an image needs a GPU or a paid
+  account, so `browser` and `capture` dispatch to whatever custom tool is named
+  `vision`. `examples/vision-tool.sh` is a working one for Ollama.
+
+### Prompts, custom tools, scripts, secrets
+
+- **Profiles** (`/prompts`) — three built-in prompt profiles, a shared
+  preferences block, and compaction instructions. Every prompt ends with an
+  auto-generated environment snapshot (cwd, platform, date, git status,
+  top-level contents), so the model doesn't invent absolute paths.
+- **Custom tools** — shell scripts with a JSON Schema, called by the model;
+  arguments arrive as `$TOOL_ARG_NAME`. Which sessions may call one is chosen per
+  prompt profile.
+- **Scripts** — shell the *user* runs from the home page (never shown to the
+  model, no schema). Starting/stopping daemons is the motivating example.
+- **Secrets** — saved per tool/script and exposed to their environment only.
+
+### UI polish
+
+- **Themes** — green (default), red, blue, gray, plus a custom colour picker.
+- **Notifications** — per-tab status dot (blue pulsing = working, amber = needs
+  you, green = done, red = error) and a short synthesised tone on transitions.
+- **Collapsible tool/reasoning blocks** — `<details>` with a disclosure arrow,
+  collapsed by default except auto-expand tools (`write`, `edit`), with a
+  per-tool "expand by default" panel.
+
+### Cost & prompt caching
+
+DeepSeek bills a cached prompt prefix at roughly **1/120th** of an uncached one,
+so essentially all cost control is keeping the prefix byte-stable. The system
+prompt is snapshotted per session, shared-prompt edits are adopted only at a
+session's next compaction, and `reasoning_content` is echoed back only where the
+API requires it. A healthy session sits at 90%+ cached; a **usage ring** in the
+session bar reports live tokens, cache hit rate, and spend. A **cache guard**
+predicts prefix misses before they are paid for.
+
+When a session crosses its compaction threshold the run pauses and asks — with a
+box for one-off instructions and a slider to raise the threshold instead. The
+split always lands on a turn boundary, never between a tool call and its results.
+
+---
+
+## Quick start
 
 ```bash
 uv venv && uv pip install -r requirements.txt
@@ -25,33 +177,22 @@ myriadcode                  # starts the server and opens the browser
 Ctrl-C stops a server started in this terminal; `myriadcode stop` stops one
 started elsewhere.
 
-Add your DeepSeek API key on the home page (or set `DEEPSEEK_API_KEY`, which wins),
-pick a project directory, and create a session.
+Add your DeepSeek API key on the home page (or set `DEEPSEEK_API_KEY`, which
+wins), pick a project directory, and create a session.
 
-**This is a single-user tool with no authentication.** It reads and writes anywhere
-your user account can and runs arbitrary shell commands. Bind it to `127.0.0.1`
-(the default) and do not expose it to a network.
+> **This is a single-user tool with no authentication.** It reads and writes
+> anywhere your user account can and runs arbitrary shell commands. Bind it to
+> `127.0.0.1` (the default) and do not expose it to a network.
 
-## Tools
+## Configuration
 
-Thirteen built in. `browser` drives a real Chromium from a list of `steps` in one
-call, with accessibility-tree snapshots and `expect` assertions, so a UI change
-can be proven rather than asserted in prose. `capture` screenshots the desktop for
-anything that is not a web page.
+Environment (see `.env.example`): provider keys, `HOST`/`PORT`, `WHISPER_BIN` /
+`WHISPER_MODEL` / `FFMPEG_BIN`, the `VISION_*` block, `MAX_TOOL_ROUNDS`,
+`MAX_TOOL_RESULT_CHARS`, `COMPACT_THRESHOLD_TOKENS`, and `CODEAGENT_DATA_DIR`.
 
-Neither can describe what it captured. Looking at an image needs a GPU or a paid
-account, so this ships no `vision` tool — `examples/vision-tool.sh` is a working
-one for Ollama that you paste in on the Tools page. `browser` and `capture`
-dispatch to whatever tool is named `vision`, so a custom one wires itself in.
-
-**Custom tools** are shell scripts with a JSON Schema, called by the model.
-Arguments arrive as `$TOOL_ARG_NAME`. Which sessions may call one is chosen per
-prompt profile, on the Prompts page — every schema is sent on every request, so a
-tool a profile will never use is a standing cost.
-
-**Scripts** are the other thing: shell you run yourself from the home page, never
-shown to the model and carrying no schema. `ollama-start` and `ollama-stop` are
-the motivating examples.
+Runtime settings (theme, custom colour, expand tools, whisper model, sound, TTS
+tone, auto-approve, thresholds, …) live in the `settings` DB table and are edited
+from the UI.
 
 ## Where your data lives
 
@@ -70,11 +211,11 @@ agent_server/
   database.py       SQLite (one connection, WAL)
   system_prompt.py  prompt profiles + environment grounding
   stt.py            whisper.cpp transcription
+  tts.py            Kokoro speech synthesis
   providers/        one adapter per model vendor
   permissions.py    what the agent may do without asking
   browser.py        Playwright engine: one context per session
   capture.py        desktop screenshots, probed per platform
-  images.py         decode, downscale and describe image files
   templating.py     the Jinja environment and its filters
   tools/            bash, browser, capture, edit, explore, glob, grep,
                     read, send_message, task, webfetch, websearch, write
@@ -82,185 +223,15 @@ agent_server/
 web_ui/             Jinja templates, CSS, and ~4 files of vanilla JS
 ```
 
-A turn runs like this: your message is persisted, the full transcript is serialised
-to the wire format, the provider streams back reasoning/content/tool calls, tools
-execute, and the loop repeats until the model answers. Every step is written to
-SQLite as it happens, so the stored transcript always matches what was actually
-sent to the API.
+A turn runs like this: your message is persisted, the full transcript is
+serialised to the wire format, the provider streams back reasoning/content/tool
+calls, tools execute, and the loop repeats until the model answers. Every step
+is written to SQLite as it happens, so the stored transcript always matches what
+was actually sent to the API.
 
-Independent read-only calls (`read`, `grep`, `glob`, `webfetch`, `websearch`,
-`task`, `explore`, `capture`) run concurrently, so three subagents cost
-the slowest one rather than the sum. Anything that mutates state runs sequentially, because parallel writes to
-one file are not safe.
-
-### Runs outlive the request
-
-A run is a task owned by the server; clients subscribe to it over SSE. Closing the
-tab, reloading, or switching sessions only unsubscribes — the turn keeps going and
-its results are still recorded. Reopening a running session attaches to it and shows
-the calls still outstanding. Only an explicit stop ends a run, and stopping cancels
-the work immediately rather than waiting for it to notice a flag.
-
-Every tool call in a cancelled batch is still given a result. An unanswered tool
-call is treated as pending work and re-run on the next message, which is how a
-stopped batch would otherwise restart itself.
-
-### Messages sent while it is working
-
-The composer stays live during a run. A message sent mid-turn is held in memory and
-injected at the next turn boundary — never between an assistant `tool_calls` message
-and its results, which would make the request invalid. Several queued messages are
-delivered as one.
-
-Because nothing is persisted until that moment, a pending message can be taken back:
-undo removes it and returns the text to the composer, and the model never learns it
-existed.
-
-### Prompt caching
-
-DeepSeek prices a cached prefix at about 1/120th of an uncached one and matches
-on prefix, so one changed character at the front re-bills the whole
-conversation. Everything below exists for that reason:
-
-- A session's system prompt is rendered once and stored. It used to be rebuilt
-  every request, which meant the date rolling over at midnight, or a restart
-  picking up files the agent had created, silently changed it.
-- Editing a shared prompt does not touch running sessions. It is queued and
-  adopted at each session's next compaction, which is when the prefix is being
-  rewritten anyway, so the switch is free. Sessions with their own prompt are
-  never touched.
-- The environment block is a snapshot, not a live directory listing.
-- `reasoning_content` is included based on an immutable property of the row
-  (whether it has tool calls), not on anything that could vary between renders.
-
-A healthy session sits at 90%+ cached. `/api/usage` reports the rate; if it
-drops, something is varying in the prefix.
-
-### The provider contract
-
-DeepSeek's thinking mode has three rules that produce hard 400s if you get them
-wrong. `conversation.py` exists to enforce them:
-
-1. `tool_calls` must be `{"id", "type": "function", "function": {...}}`. The flat
-   `{"id", "name", "arguments"}` shape fails with *missing field `type`*.
-2. Every `tool_call_id` needs exactly one matching `role: "tool"` message.
-3. `reasoning_content` must be echoed back on any assistant turn that called a tool.
-
-`temperature` and `top_p` are accepted but ignored in thinking mode, so this app
-does not send them. Effort is controlled by `reasoning_effort`
-(`none`/`minimal`/`low`/`medium`/`high`/`xhigh`/`max`).
-
-### Permissions
-
-Two independent gates, because they protect against different things.
-
-**Shell.** Read-only commands (`ls`, `cat`, `git status`, ...) run silently.
-Anything that can redirect, chain, or mutate asks first. You can approve once,
-approve everything for the rest of the server process, or reject. A rejection is
-fed back as a tool result so the model can adapt instead of the conversation
-dead-ending.
-
-**Filesystem writes outside the project directory.** These *always* ask, and
-shell auto-approval deliberately does not cover them — letting an agent run
-`npm test` in your repo is not the same as letting it rewrite `~/.ssh/config`.
-You can allow once, or allow a directory for the rest of the session (it offers
-the enclosing git repo when there is one). `/proc`, `/sys`, `/dev`, `/boot` and
-the sudoers files can never be granted.
-
-**Every grant is scoped to one session.** Nothing you allow in one session
-applies to another, and deleting a session drops its grants. Shell auto-approval
-and the writable-directory list both live in that session's ⋮ menu.
-
-Pauses are derived from unanswered tool calls in the database rather than held in
-memory, so reloading the page mid-prompt re-offers the same decision, and a
-crash cannot strand a session with a half-finished turn.
-
-### Images and vision
-
-Attach images with the paperclip; they are saved and referenced by path in your
-message. The agent then calls `vision` on those paths itself, choosing its own
-question — you do not write a vision prompt. Uploads are decoded and re-encoded
-as PNG rather than trusted by extension, because browsers routinely hand over a
-WebP named `.jpg` and the Ollama backend rejects WebP outright.
-
-`browser` captures pages: a `shoot` step saves a frame, `record` takes a timed
-sequence for animations and loading states, and `compare` puts existing images
-alongside the new ones so a mockup and the live page are checked in one call.
-Earlier steps can click, fill, hover or press to reach a particular state first.
-`capture` does the same for anything that is not a web page.
-
-Both return file paths, and both can pass the frames straight to `vision` in the
-same call with an `ask`. Several paths at once are labelled by filename, which is
-how before/after comparison works.
-
-Nothing starts your vision host automatically. The app has no business waking a
-machine on the chance an image turns up, so the shipped `vision` tool starts what
-it needs when it is called, and `ollama-start` / `ollama-stop` on the home page
-are there for doing it by hand.
-
-Vision runs against Ollama on `VISION_OLLAMA_URL` (default `vision-host.local:11434`,
-model `qwen3-vl:32b`). Browser capture uses Playwright's async API in-process.
-
-### Notifications
-
-Tabs carry a status dot: blue and pulsing while the agent works, amber when it
-needs you, green when it finished, red on error. A short synthesised tone plays
-on the same transitions unless you turn it off in Preferences. The dot clears
-when you look at the session.
-
-### Dictation
-
-If `whisper-cli` and `ffmpeg` are on `PATH`, a mic button appears. Click it to
-toggle recording, or hold **Right Ctrl** to push-to-talk. Releasing transcribes
-and inserts at the cursor; pressing Enter while recording stops, transcribes and
-sends in one go. A level meter sits on the bottom edge of the composer while
-recording. Everything stays local; no audio leaves the machine.
-
-Point `WHISPER_MODEL` at a different `ggml-*.bin` to trade accuracy for speed.
-
-### Context and compaction
-
-The ring in the session bar shows how much of your compaction threshold is in
-use; hover it for exact tokens, the model window, cache hit rate, and session
-spend. All of it comes from real `usage` numbers returned by the API, priced at
-the model's cache-hit/cache-miss/output rates.
-
-When a session crosses its threshold the run pauses and asks. The dialog has a
-box for one-off instructions ("keep the deployment steps"), and the alternative
-action is a slider that raises the threshold instead, from 4K up to the model's
-full window. The threshold is stored per session.
-
-The split always lands on a turn boundary — never between an assistant's tool
-call and its results, which would corrupt the session permanently. Recent turns
-are kept verbatim.
-
-### Cost
-
-DeepSeek bills a cached prompt prefix at roughly **1/120th** of an uncached one
-($0.003625 vs $0.435 per 1M on V4 Pro), so essentially all of the cost control is
-in keeping the prefix byte-stable. Two rules follow, and both are load-bearing:
-
-* The system prompt must be identical on every request in a session. The
-  environment block is therefore snapshotted once per session — an earlier
-  version recomputed a live directory listing, and every file the agent created
-  invalidated the whole conversation. Measured hit rate went from 11-26% back to
-  95-97% when that was fixed.
-* `reasoning_content` is echoed back only on assistant messages that carry
-  `tool_calls`, which is exactly where the API requires it. The rule keys on an
-  immutable property of the row, so a message's serialisation never changes
-  after the fact.
-
-Running totals and the overall cache hit rate are on the home page.
-
-## Prompts
-
-`/prompts` edits the three built-in profiles, a preferences block appended to all of
-them, and the compaction instructions. Clearing a field restores the default. The
-page also lists every tool with its token cost, since schemas are sent on every call.
-
-Each prompt ends with an auto-generated environment block (working directory,
-platform, date, git status, top-level contents). This matters: without it the model
-will confidently invent absolute paths from its training data.
+The provider contract is subtle (DeepSeek's thinking mode returns hard 400s for
+a wrong `tool_calls` shape, a `tool_call_id` without a matching `tool` message,
+or a missing `reasoning_content` echo). `conversation.py` exists to enforce it.
 
 ## Tests
 
@@ -269,31 +240,8 @@ will confidently invent absolute paths from its training data.
 .venv/bin/python -m pytest tests/test_live_agent.py -s  # hits the real API
 ```
 
-`test_conversation.py` covers the serialization rules above and the compaction
-split, including that compaction always leaves a real window of recent turns and
-never just a summary. `test_permissions.py` covers both gates, including the two
-cases that matter most: shell auto-approval must not imply filesystem access, and
-grants must not leak between sessions. `test_run_manager.py` covers the run
-lifecycle: a late subscriber still sees the whole turn, no event is duplicated or
-lost across the subscribe boundary, a cancelled batch records a result for every
-call, and an undone message is never delivered. `test_bash_tool.py` pins the
-background-process behaviour. `test_live_agent.py` runs four real conversations —
-a greeting, a multi-round tool loop, a shell approval, and a rejection — which are
-the scenarios that used to be broken.
-
-The browser side is worth stress-testing with Playwright's CDP performance
-metrics when you touch streaming, timers, or the microphone. Three leaks got
-through review because they only showed up under load or over time: markdown
-re-rendered per token (O(n^2) once code blocks appear), a dictation race that
-leaked an animation-frame loop, and a per-tool-call interval that kept firing
-after its node was detached. The pattern is the same each time — something that
-must stop has no owner once the DOM changes underneath it — so check that timers
-end themselves when `isConnected` goes false. Headless Chromium has no
-microphone, so run the mic path with
-`--use-fake-device-for-media-stream` or it stays untested.
-
-Two-session behaviour needs a browser: start a run in one session, switch to
-another, come back, and confirm the run is still going and still visible.
+`tests/route_inventory.json` pins the HTTP surface and is regenerated/checked by
+`test_route_inventory.py` — update it whenever a route changes.
 
 ## Adding things
 
@@ -301,7 +249,6 @@ another, come back, and confirm the run is still going and still visible.
 `agent_server/tools/`, then `register(Tool(...))` in `registry.py`. If it needs
 to ask before running, add the rule to `permissions.check` rather than to the
 tool, so the agent loop and the page-reload restore path cannot disagree.
-
 Return a `diff` on the `ToolResult` and the UI renders it inline.
 
 **A provider** — subclass `Provider` in `agent_server/providers/`, yield

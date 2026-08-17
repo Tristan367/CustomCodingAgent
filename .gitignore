@@ -8,3 +8,7 @@ __pycache__/
 .vscode/
 .pytest_cache/
 .ruff_cache/
+
+# Personal scratch notes, not part of the project.
+NOTES.md
+bughunt.txt

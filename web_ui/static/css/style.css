@@ -413,7 +413,10 @@ hr { border: 0; border-top: 1px solid var(--border); margin: 6px 0; }
   text-align: right;
   overflow: hidden;
   text-overflow: ellipsis;
+  opacity: 0;
+  transition: opacity 120ms ease;
 }
+.message:hover .msg-role { opacity: 1; }
 .message.user     .msg-role { color: var(--role-user); }
 .message.mail     .msg-role { color: var(--role-mail); }
 .message.assistant .msg-role { visibility: hidden; }
@@ -606,13 +609,6 @@ a.file-ref:hover { border-bottom-style: solid; color: var(--text); background: v
   gap: 6px;
 }
 .tool-summary::-webkit-details-marker { display: none; }
-.tool-summary::before { content: '\25B8'; color: var(--text-faint); font-size: 9px; }
-.tool-details[open] > .tool-summary::before { content: '\25BE'; }
-/* Reasoning has no role in the gutter, so the disclosure marker would float
-   alone as a stray dot; hide it there, expanded or not. The [open] variant ties
-   the collapsed/expanded rules above and, coming later, wins. */
-.reasoning-details > .tool-summary::before,
-.reasoning-details[open] > .tool-summary::before { content: none; }
 .tool-summary:hover { color: var(--text); }
 .message.tool-error .tool-summary { color: var(--danger); }
 
@@ -1370,12 +1366,15 @@ input[type="checkbox"] { accent-color: var(--accent); }
 body.selecting .msg-actions,
 body.selecting .msg-copy,
 body.selecting .msg-time { opacity: 0 !important; visibility: hidden !important; }
-.msg-actions { position: absolute; top: 40px; right: -2px; display: flex; gap: 4px; opacity: 0; visibility: hidden; transition: opacity 120ms ease, visibility 0s 120ms; z-index: 3; }
+.msg-actions { position: absolute; top: 50px; left: 0; right: 0; display: flex; justify-content: center; gap: 4px; opacity: 0; visibility: hidden; transition: opacity 120ms ease, visibility 0s 120ms; z-index: 3; }
 .message:hover .msg-actions { opacity: 1; visibility: visible; transition: opacity 120ms ease, visibility 0s 0s; }
 .msg-copy {
   position: absolute;
   top: 18px;
-  right: -2px;
+  left: 0;
+  right: 0;
+  display: flex;
+  justify-content: center;
   opacity: 0;
   transition: opacity 120ms ease;
   z-index: 2;
@@ -1386,11 +1385,13 @@ body.selecting .msg-time { opacity: 0 !important; visibility: hidden !important;
   border: 0;
   color: var(--text-faint);
   cursor: pointer;
-  padding: 2px;
+  padding: 4px;
   display: flex;
   align-items: center;
+  border-radius: 4px;
+  transition: background 120ms ease, color 120ms ease;
 }
-.msg-copy button:hover { color: var(--accent); }
+.msg-copy button:hover { color: var(--accent); background: var(--bg-hover); }
 .msg-actions button {
   background: none;
   border: 0;
@@ -1398,8 +1399,11 @@ body.selecting .msg-time { opacity: 0 !important; visibility: hidden !important;
   font-family: var(--mono);
   font-size: 10px;
   cursor: pointer;
-  padding: 1px 4px;
+  padding: 2px 4px;
   border-radius: 3px;
+  display: flex;
+  align-items: center;
+  transition: background 120ms ease, color 120ms ease;
 }
 .msg-actions button:hover { background: var(--bg-hover); color: var(--accent); }
 
@@ -2088,7 +2092,18 @@ dialog.file-browser {
   max-height: none;
   height: auto;
 }
-dialog.file-browser::backdrop { background: rgba(0, 0, 0, 0.55); }
+/* The native backdrop spans the whole viewport; the dim is instead a separate
+   #fb-overlay element (created by the FileBrowser) that stops above the chat
+   input so attachments stay readable. */
+dialog.file-browser::backdrop { background: transparent; }
+.fb-overlay {
+  position: fixed;
+  top: 0;
+  left: 0;
+  right: 0;
+  background: rgba(0, 0, 0, 0.55);
+  z-index: 9000;
+}
 
 .fe-head {
   display: flex;

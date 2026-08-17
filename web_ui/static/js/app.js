@@ -3642,8 +3642,8 @@ function setupMessageSide() {
     if (time) side.appendChild(time);
 
     const wrap = el('span', 'msg-copy');
-    const btn = button('copy', '', () => copyMessage(node));
-    btn.innerHTML = '<svg viewBox="0 0 24 24" width="13" height="13" aria-hidden="true"><rect x="9" y="9" width="13" height="13" rx="2" fill="none" stroke="currentColor" stroke-width="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1" fill="none" stroke="currentColor" stroke-width="2"/></svg>';
+    const btn = button('', 'copy-btn', () => copyMessage(node));
+    btn.innerHTML = '<svg viewBox="0 0 24 24" width="20" height="20" aria-hidden="true"><rect x="9" y="9" width="13" height="13" rx="2" fill="none" stroke="currentColor" stroke-width="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1" fill="none" stroke="currentColor" stroke-width="2"/></svg>';
     btn.title = 'Copy to clipboard';
     wrap.appendChild(btn);
     side.appendChild(wrap);
@@ -3669,10 +3669,10 @@ function setupMessageSide() {
       actionsEl.style.top = '';
       const observer = new ResizeObserver(() => {
         const h = side.clientHeight;
-        if (h < 58) {
-          // Buttons are ~40px tall. Stack from bottom so they stay inside.
-          actionsEl.style.top = Math.max(0, h - 20) + 'px';
-          copyEl.style.top = Math.max(0, h - 42) + 'px';
+        if (h < 76) {
+          // Buttons are ~52px tall. Stack from bottom so they stay inside.
+          actionsEl.style.top = Math.max(0, h - 24) + 'px';
+          copyEl.style.top = Math.max(0, h - 58) + 'px';
         } else {
           actionsEl.style.top = '';
           copyEl.style.top = '';
@@ -3697,7 +3697,10 @@ function attachPlayButtons() {
     if (!side) return;
 
     const actions = el('span', 'msg-actions');
-    actions.appendChild(button('play', 'play-btn', () => Speech.toggle(node)));
+    const playBtn = button('', 'play-btn', () => Speech.toggle(node));
+    playBtn.innerHTML = '<svg viewBox="0 0 24 24" width="14" height="14" aria-hidden="true"><path d="M8 5v14l11-7z" fill="currentColor"/></svg>';
+    playBtn.title = 'Read aloud';
+    actions.appendChild(playBtn);
     const vol = el('span', 'vol-pop');
     const slider = document.createElement('input');
     slider.type = 'range';
@@ -4702,6 +4705,7 @@ const FileBrowser = (() => {
   let ctxMenu = null;
   let ctxPath = null;
   let attachMode = false;      // when true, selecting attaches instead of opening
+  let overlay = null;          // dims everything above the chat input
 
   function here() { return lastDirs[App.sessionId] || workingDir(); }
 
@@ -4737,6 +4741,15 @@ const FileBrowser = (() => {
         '<button type="button" class="fe-btn" data-fb="cancelmove">Cancel</button>' +
       '</div>';
     document.body.appendChild(dlg);
+
+    // A native ::backdrop covers the whole viewport, which would grey out the
+    // chat input too. Instead the dim is a separate element that stops above
+    // the chat input, so pending attachments stay readable while browsing.
+    overlay = document.createElement('div');
+    overlay.id = 'fb-overlay';
+    overlay.className = 'fb-overlay';
+    overlay.hidden = true;
+    document.body.appendChild(overlay);
 
     pathEl = dlg.querySelector('.fb-path');
     listEl = dlg.querySelector('.fb-list');
@@ -4774,7 +4787,7 @@ const FileBrowser = (() => {
     dlg.querySelector('[data-fb=cancelmove]').addEventListener('click', cancelMove);
 
     listEl.addEventListener('contextmenu', onCtx);
-    dlg.addEventListener('close', () => { selected.clear(); moving = null; moveCallback = null; hideCtx(); });
+    dlg.addEventListener('close', () => { selected.clear(); moving = null; moveCallback = null; hideCtx(); if (overlay) overlay.hidden = true; });
   }
 
   function dirname(path) {
@@ -4945,6 +4958,10 @@ const FileBrowser = (() => {
     if (!dlg || !dlg.open) return;
     const input = document.getElementById('chat-input-area');
     dlg.style.bottom = input ? `${input.offsetHeight + 24}px` : '160px';
+    if (overlay) {
+      overlay.hidden = false;
+      overlay.style.bottom = input ? `${input.offsetHeight}px` : '0px';
+    }
   }
 
   function updateUI() {

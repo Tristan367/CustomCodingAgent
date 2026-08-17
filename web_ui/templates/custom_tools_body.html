@@ -130,7 +130,10 @@
             {% endfor %}
             {% for b in built_ins %}
             <tr>
-                <td><code>{{ b.name }}</code></td>
+                <td>
+                    <code>{{ b.name }}</code>
+                    {% if b.overridden %}<span class="chip chip-warn">custom</span>{% endif %}
+                </td>
                 <td><span class="chip chip-muted">built-in</span></td>
                 <td>
                     <span class="chip {% if b.pause %}chip-warn{% else %}chip-ok{% endif %}">{{ 'asks' if b.pause else 'auto' }}</span>
@@ -140,6 +143,28 @@
                 <td class="row-actions">
                     <button type="button" class="btn-sm" data-schema="{{ b.schema | tojson | forceescape }}"
                             onclick="copySchema(this)">Copy JSON</button>
+                    <button type="button" class="btn-sm" onclick="toggleBuiltinEdit('{{ b.name }}')">Edit</button>
+                </td>
+            </tr>
+            <tr class="builtin-edit-row" id="builtin-edit-{{ b.name }}" hidden>
+                <td colspan="5">
+                    <form hx-post="/_save_builtin_description" hx-target="#tools-page" hx-swap="outerHTML"
+                          class="stack" style="margin:4px 0">
+                        <input type="hidden" name="name" value="{{ b.name }}">
+                        <label class="field-label">Description — what the AI sees for <code>{{ b.name }}</code>
+                            <textarea name="description" rows="5" maxlength="8000"
+                                      spellcheck="false">{{ b.description }}</textarea>
+                        </label>
+                        <div class="form-row">
+                            <button type="submit" class="btn-primary btn-sm">Save</button>
+                            {% if b.overridden %}
+                            <button type="button" class="btn-secondary btn-sm"
+                                    hx-post="/_revert_builtin_description" hx-vals='{"name": {{ b.name | tojson }}}'
+                                    hx-target="#tools-page" hx-swap="outerHTML">Revert to default</button>
+                            {% endif %}
+                            <button type="button" class="btn-sm" onclick="toggleBuiltinEdit('{{ b.name }}')">Cancel</button>
+                        </div>
+                    </form>
                 </td>
             </tr>
             {% endfor %}
@@ -229,6 +254,11 @@
 
     function copyAllSchemas(button) {
         copyText(button, document.querySelector('.schema-preview').value);
+    }
+
+    function toggleBuiltinEdit(name) {
+        const row = document.getElementById('builtin-edit-' + name);
+        if (row) row.hidden = !row.hidden;
     }
     </script>
 </div>

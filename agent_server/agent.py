@@ -32,7 +32,11 @@ from agent_server.conversation import (
 )
 from agent_server.providers import Provider, get_provider
 from agent_server.providers.base import message_chars, observe_usage
-from agent_server.system_prompt import disabled_tools, session_system_prompt
+from agent_server.system_prompt import (
+    disabled_tools,
+    session_system_prompt,
+    session_tool_descriptions,
+)
 from agent_server.tools.base import ToolContext, ToolResult, truncate
 from agent_server.tools.registry import execute_tool, get_tool, tool_schemas
 
@@ -531,6 +535,7 @@ async def _loop(
     tools = tool_schemas(
         include_vision=not provider.supports_vision(),
         exclude=await disabled_tools(session),
+        descriptions=await session_tool_descriptions(session),
     )
 
     # Finish any tool calls left outstanding by a previous pause before asking

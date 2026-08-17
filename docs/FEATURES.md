@@ -179,6 +179,9 @@ Two independent gates (`agent_server/permissions.py`):
 - **Custom tools** — user-defined shell scripts with a JSON Schema, called by the
   model; arguments arrive as `$TOOL_ARG_NAME`. Callable per prompt profile. Loaded
   from the DB at startup.
+- **Built-in tool descriptions** — the `/tools` page rewrites what the model is
+  told a built-in tool does (edit + revert to default). Frozen per session like
+  the system prompt, so an edit is adopted at the next compaction.
 - **Scripts** — shell the *user* runs from the home page (never sent to the model,
   no schema). Start/stop daemons are the motivating example (`ollama-start`).
 - **Secrets** — saved per-tool/script, exposed to their environment only.

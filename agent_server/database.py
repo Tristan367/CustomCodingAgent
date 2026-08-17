@@ -159,6 +159,11 @@ MIGRATIONS: list[tuple[str, str, str]] = [
     # the prefix is already a miss at that point and the swap is close to free.
     # Applying it mid-conversation would re-bill the entire context.
     ("sessions", "pending_system_prompt", "TEXT"),
+    # Frozen per-session built-in tool descriptions (JSON {name: description}).
+    # The tool schemas are sent on every request, so a description edited while
+    # a conversation is running must not change the cached prefix mid-flight.
+    # Cleared at compaction, where the prefix is being rewritten anyway.
+    ("sessions", "tool_descriptions", "TEXT"),
     # Which model `task` subagents run on. Per session, not global: the choice
     # depends on the work in front of you -- a cheap model for a wide search
     # sweep, the same model as the parent for anything that has to write code.
@@ -335,6 +340,7 @@ SESSION_FIELDS = {
     "prompt_profile", "compact_profile", "bash_auto_approve", "is_archived", "compact_threshold",
     "cache_fp", "cache_fp_tokens", "cache_checked_at", "cache_prompt_tokens",
     "system_prompt", "prompt_custom", "pending_system_prompt", "subagent_model",
+    "tool_descriptions",
 }
 
 

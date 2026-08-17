@@ -60,6 +60,42 @@ _custom_tool_names: set[str] = set()
 BUILT_IN_NAMES: frozenset[str] = frozenset()
 
 
+# Built-in tool descriptions overridden by the user, keyed by name. Loaded at
+# startup and refreshed on save; applied when schemas are built for the model.
+# A running session freezes its own snapshot (see system_prompt.py), so editing
+# here only affects sessions once they compact.
+_description_overrides: dict[str, str] = {}
+
+
+def set_description_overrides(overrides: dict[str, str]) -> None:
+    _description_overrides.clear()
+    _description_overrides.update(overrides)
+
+
+def get_description_overrides() -> dict[str, str]:
+    return dict(_description_overrides)
+
+
+def set_description_override(name: str, description: str | None) -> None:
+    if description:
+        _description_overrides[name] = description
+    else:
+        _description_overrides.pop(name, None)
+
+
+def effective_description(name: str) -> str:
+    """The description the model is told, override or built-in default."""
+    tool = TOOLS.get(name)
+    if tool is None:
+        return ""
+    return _description_overrides.get(name) or tool.description
+
+
+def snapshot_descriptions() -> dict[str, str]:
+    """Every built-in's effective description, for a per-session freeze."""
+    return {name: effective_description(name) for name in BUILT_IN_NAMES}
+
+
 def register(tool: Tool):
     TOOLS[tool.name] = tool
 
@@ -495,15 +531,32 @@ register(Tool(
 BUILT_IN_NAMES = frozenset(TOOLS)
 
 
-def tool_schemas(names: Iterable[str] | None = None, include_vision: bool = True, exclude: set[str] | None = None) -> list[dict]:
+def tool_schemas(
+    names: Iterable[str] | None = None,
+    include_vision: bool = True,
+    exclude: set[str] | None = None,
+    descriptions: dict[str, str] | None = None,
+) -> list[dict]:
+    """The schemas sent to the model.
+
+    `descriptions` is a session's frozen snapshot of effective descriptions.
+    When omitted, the current global overrides are used (subagents, page previews).
+    """
     selected = list(names) if names is not None else list(TOOLS)
-    return [
-        TOOLS[n].schema()
-        for n in selected
-        if n in TOOLS
-        and (include_vision or not TOOLS[n].vision_only)
-        and (exclude is None or n not in exclude)
-    ]
+    result = []
+    for n in selected:
+        if n not in TOOLS:
+            continue
+        if not (include_vision or not TOOLS[n].vision_only):
+            continue
+        if exclude is not None and n in exclude:
+            continue
+        schema = TOOLS[n].schema()
+        desc = descriptions.get(n) if descriptions is not None else _description_overrides.get(n)
+        if desc:
+            schema["function"]["description"] = desc
+        result.append(schema)
+    return result
 
 
 def get_tool(name: str) -> Tool | None:

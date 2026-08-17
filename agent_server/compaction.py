@@ -296,6 +296,11 @@ async def compact_session_events(
             session_id, system_prompt=pending, pending_system_prompt=None
         )
 
+    # Tool descriptions are frozen per session like the prompt; drop the
+    # snapshot so the next turn re-freezes from the current overrides. Same
+    # cheap moment as the prompt swap: the prefix is being rewritten anyway.
+    await db.update_session(session_id, tool_descriptions=None)
+
     yield {
         "type": "compact_done",
         "result": {

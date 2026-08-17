@@ -10,7 +10,14 @@ from fastapi.responses import HTMLResponse, RedirectResponse
 from agent_server import database as db
 from agent_server.routes.context import _page_or_body, _slug
 from agent_server.templating import templates
-from agent_server.tools.registry import BUILT_IN_NAMES, TOOLS, tool_schemas
+from agent_server.tools.registry import (
+    BUILT_IN_NAMES,
+    TOOLS,
+    effective_description,
+    get_description_overrides,
+    set_description_override,
+    tool_schemas,
+)
 
 router = APIRouter()
 
@@ -30,10 +37,13 @@ async def _tools_context(edit_tool: str = "", saved: bool = False, error: str = 
     # built-ins, but it only ever listed the custom ones -- so the page showed a
     # single row and gave no way to find out what the agent can actually do, or
     # what a working tool definition looks like.
+    overrides = get_description_overrides()
     built_ins = [
         {
             "name": tool.name,
-            "description": tool.description,
+            "description": effective_description(tool.name),
+            "default_description": tool.description,
+            "overridden": tool.name in overrides,
             "pause": tool.pause,
             "parallel_safe": tool.parallel_safe,
             "shadowed": tool.name in custom_names,
@@ -222,6 +232,43 @@ async def new_custom_tool(request: Request):
     await db.save_custom_tool(name, "", "{}", "", True, True)
     await load_custom_tools()
     return RedirectResponse(f"/tools?edit={name}", status_code=303)
+
+
+async def _persist_tool_descriptions() -> None:
+    await db.set_setting("tool_descriptions", json.dumps(get_description_overrides()))
+
+
+@router.post("/_save_builtin_description")
+async def save_builtin_description(request: Request):
+    form = await request.form()
+    name = str(form.get("name", "")).strip()
+    description = str(form.get("description", "")).strip()
+    tool = TOOLS.get(name)
+    if name not in BUILT_IN_NAMES or tool is None:
+        return RedirectResponse("/tools", status_code=303)
+    if len(description) > 8000:
+        return templates.TemplateResponse(
+            request=request,
+            name=_page_or_body(request, "custom_tools.html", "custom_tools_body.html"),
+            context=await _tools_context(error="Description too long (max 8000 chars)"),
+        )
+    # An empty box, or the exact built-in text, is a revert.
+    if description and description != tool.description:
+        set_description_override(name, description)
+    else:
+        set_description_override(name, None)
+    await _persist_tool_descriptions()
+    return RedirectResponse("/tools?saved=true", status_code=303)
+
+
+@router.post("/_revert_builtin_description")
+async def revert_builtin_description(request: Request):
+    form = await request.form()
+    name = str(form.get("name", "")).strip()
+    if name in BUILT_IN_NAMES:
+        set_description_override(name, None)
+        await _persist_tool_descriptions()
+    return RedirectResponse("/tools", status_code=303)
 
 
 def _safe_back(raw: str) -> str:

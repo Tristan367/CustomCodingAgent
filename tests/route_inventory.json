@@ -116,17 +116,31 @@
      "methods": [
        "POST"
      ],
-     "name": "restart"
-   },
+      "name": "restart"
+    },
+    {
+      "path": "/_revert_builtin_description",
+      "methods": [
+        "POST"
+      ],
+      "name": "revert_builtin_description"
+    },
+    {
+      "path": "/_run_script",
+      "methods": [
+        "POST"
+      ],
+      "name": "run_script"
+    },
    {
-     "path": "/_run_script",
+     "path": "/_save_builtin_description",
      "methods": [
        "POST"
      ],
-     "name": "run_script"
+     "name": "save_builtin_description"
    },
-  {
-    "path": "/_save_custom_endpoint",
+   {
+     "path": "/_save_custom_endpoint",
     "methods": [
       "POST"
     ],

@@ -459,6 +459,46 @@ async def build_system_prompt(
     return f"{body}\n\n{block}"
 
 
+async def load_tool_description_overrides() -> dict[str, str]:
+    """Apply the user's built-in tool description overrides from settings."""
+    from agent_server.tools.registry import set_description_overrides
+
+    raw = await db.get_setting("tool_descriptions", "")
+    overrides: dict[str, str] = {}
+    if raw:
+        try:
+            data = json.loads(raw)
+            if isinstance(data, dict):
+                overrides = {k: v for k, v in data.items() if isinstance(v, str)}
+        except json.JSONDecodeError:
+            pass
+    set_description_overrides(overrides)
+    return overrides
+
+
+async def session_tool_descriptions(session: dict) -> dict[str, str]:
+    """The built-in tool descriptions frozen for this session, like the prompt.
+
+    The tool schemas are sent on every request, so a description edited while a
+    conversation is running would otherwise change the cached prefix and re-bill
+    it. Frozen the first time they are needed; re-frozen at compaction, where
+    the prefix is being rewritten regardless.
+    """
+    stored = session.get("tool_descriptions")
+    if stored:
+        try:
+            data = json.loads(stored)
+            if isinstance(data, dict) and data:
+                return data
+        except (json.JSONDecodeError, TypeError):
+            pass
+    from agent_server.tools.registry import snapshot_descriptions
+
+    snapshot = snapshot_descriptions()
+    await db.update_session(session["id"], tool_descriptions=json.dumps(snapshot))
+    return snapshot
+
+
 # session_id -> rendered environment block. Frozen for the life of the process
 # so that files created mid-session cannot invalidate the prompt cache.
 _env_cache: dict[str, str] = {}

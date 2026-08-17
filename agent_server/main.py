@@ -28,7 +28,7 @@ from agent_server.routes import (
     tabs,
     tts,
 )
-from agent_server.system_prompt import migrate_prompts
+from agent_server.system_prompt import load_tool_description_overrides, migrate_prompts
 from agent_server.templating import STATIC_DIR
 
 log = logging.getLogger(__name__)
@@ -134,6 +134,7 @@ async def lifespan(app: FastAPI):
     log.info("myriadcode starting: data=%s db=%s", DATA_DIR, DB_PATH.name)
     await init_db()
     await migrate_prompts()
+    await load_tool_description_overrides()
     from agent_server.providers import credentials
     from agent_server.tools.custom import load_custom_tools
 

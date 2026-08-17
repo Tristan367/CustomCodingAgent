@@ -105,6 +105,33 @@ def _expandable_tools() -> list[str]:
     return preferred + rest
 
 
+async def _hide_thinking() -> bool:
+    return await db.get_setting("hide_thinking", "0") == "1"
+
+
+async def _hide_tool_calls() -> bool:
+    return await db.get_setting("hide_tool_calls", "0") == "1"
+
+
+def _apply_transcript_hiding(
+    messages: list[dict], hide_tool_calls: bool, hide_thinking: bool
+) -> None:
+    """Annotate messages the transcript should leave out when the user wants a
+    cleaner history. Only the *current* thinking block and tool call survive; a
+    block is current only while nothing has come after it, so the last thinking
+    before a reply and the last tool before a reply are hidden too."""
+    if not messages or (not hide_tool_calls and not hide_thinking):
+        return
+    last = len(messages) - 1
+    for i, m in enumerate(messages):
+        if hide_tool_calls and m.get("role") == "tool" and i != last:
+            m["_hidden"] = True
+        if hide_thinking and m.get("role") == "assistant" and m.get("reasoning_content"):
+            body = (m.get("content") or "").strip()
+            if i != last or body:
+                m["_hide_reasoning"] = True
+
+
 def _ensure_sound_dir() -> Path:
     _SOUND_DIR.mkdir(parents=True, exist_ok=True)
     return _SOUND_DIR
@@ -259,9 +286,12 @@ def _tool_inputs(messages: list[dict]) -> dict[str, str]:
 async def _session_context(session: dict) -> dict:
     usage = await db.get_session_usage(session["id"])
     messages = await db.get_messages(session["id"])
+    _apply_transcript_hiding(messages, await _hide_tool_calls(), await _hide_thinking())
     return {
         "session": session,
         "messages": messages,
+        "hide_thinking": await _hide_thinking(),
+        "hide_tool_calls": await _hide_tool_calls(),
         # tool_call_id -> pretty-printed arguments, so a reloaded page can show
         # what each tool was asked to do alongside its result.
         "tool_inputs": _tool_inputs(messages),
@@ -353,5 +383,7 @@ async def _home_context(
         "default_name": f"temp session {datetime.now().strftime('%-m-%-d-%Y')}",
         "expand_tools": await _expand_tools(),
         "expandable_tools": _expandable_tools(),
+        "hide_thinking": await _hide_thinking(),
+        "hide_tool_calls": await _hide_tool_calls(),
         "error": error,
     }

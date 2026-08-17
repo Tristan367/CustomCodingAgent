@@ -603,7 +603,7 @@ a.file-ref:hover { border-bottom-style: solid; color: var(--text); background: v
   overflow: hidden;
   white-space: pre-wrap;
   word-break: break-word;
-  color: var(--text-dim);
+  color: var(--text-faint);
   font-size: 12px;
   font-family: var(--sans);
   padding: 2px 0;
@@ -619,6 +619,7 @@ a.file-ref:hover { border-bottom-style: solid; color: var(--text); background: v
   background: var(--bg-inset);
   border-left: 2px solid var(--border-strong);
   border-radius: 0 4px 4px 0;
+  color: var(--text-dim);
   max-height: 340px;
   overflow-y: auto;
 }

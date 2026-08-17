@@ -109,6 +109,8 @@ const App = {
   abortController: null,
   els: {},
   expandTools: [],
+  hideThinking: false,
+  hideToolCalls: false,
 };
 
 /* ── Boot ────────────────────────────────────────────────────────────────── */
@@ -121,6 +123,8 @@ function initSession() {
   App.projectDir = view ? view.dataset.projectDir : null;
   try { App.expandTools = view && view.dataset.expandTools ? JSON.parse(view.dataset.expandTools) : []; }
   catch (_) { App.expandTools = []; }
+  App.hideThinking = !!(view && view.dataset.hideThinking);
+  App.hideToolCalls = !!(view && view.dataset.hideToolCalls);
   if (previous && previous !== App.sessionId) {
     // Switching tabs must not leave the old session's reader running: it would
     // keep writing into whichever transcript is on screen now, and it holds
@@ -476,7 +480,10 @@ function handleEvent(event, stream) {
       break;
 
     case 'reasoning':
-      if (!stream.reasoningEl) stream.reasoningEl = appendReasoning();
+      if (!stream.reasoningEl) {
+        if (App.hideThinking) hideAllThinking();
+        stream.reasoningEl = appendReasoning();
+      }
       stream.reasoningEl.textContent += event.text;
       autoscroll();
       break;
@@ -490,6 +497,10 @@ function handleEvent(event, stream) {
           collapseReasoning(stream.reasoningEl);
           stream.reasoningEl = null;
         }
+        // The agent is replying now: with the decluttering options on, the
+        // thinking and tool calls it just did are past and can be hidden.
+        if (App.hideThinking) hideAllThinking();
+        if (App.hideToolCalls) hideAllToolCalls();
         stream.assistantEl = appendMessage('assistant', '');
         stream.contentEl = stream.assistantEl.querySelector('.content-text');
       } else if (stream.reasoningEl) {
@@ -558,6 +569,8 @@ function handleEvent(event, stream) {
       if (stream.reasoningEl) { collapseReasoning(stream.reasoningEl); stream.reasoningEl = null; }
       endAssistantSegment(stream);
       clearToolProgress(stream);
+      if (App.hideThinking) hideAllThinking();
+      if (App.hideToolCalls) hideAllToolCalls();
       appendToolCall(event);
       break;
 
@@ -1103,6 +1116,15 @@ function collapseReasoning(textEl) {
   if (App.expandTools.includes('reasoning')) return;
   const details = textEl.closest('details');
   if (details) details.open = false;
+}
+
+/* With the transcript-decluttering options on, only the *current* thinking
+ * block and tool call stay visible; once the agent moves on they are hidden. */
+function hideAllThinking() {
+  App.els.messages?.querySelectorAll('.message.thinking').forEach((n) => { n.hidden = true; });
+}
+function hideAllToolCalls() {
+  App.els.messages?.querySelectorAll('.message.tool').forEach((n) => { n.hidden = true; });
 }
 
 function appendToolCall(event) {
@@ -3590,7 +3612,9 @@ const Speech = {
     const playing = active && this.playing();
     el.classList.toggle('speaking', !!active);
     if (btn) {
-      btn.textContent = playing ? 'pause' : (active ? 'resume' : 'play');
+      btn.innerHTML = playing
+        ? '<svg viewBox="0 0 24 24" width="21" height="21" aria-hidden="true"><path d="M6 5h4v14H6zM14 5h4v14h-4z" fill="currentColor"/></svg>'
+        : '<svg viewBox="0 0 24 24" width="21" height="21" aria-hidden="true"><path d="M8 5v14l11-7z" fill="currentColor"/></svg>';
       btn.title = playing ? 'Pause' : 'Read this reply aloud';
     }
   },

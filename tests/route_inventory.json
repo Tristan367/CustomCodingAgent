@@ -210,6 +210,13 @@
     "name": "save_expand_setting"
   },
   {
+    "path": "/_settings/hide",
+    "methods": [
+      "POST"
+    ],
+    "name": "save_hide_flags"
+  },
+  {
     "path": "/_settings/sound",
     "methods": [
       "POST"

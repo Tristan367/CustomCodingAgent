@@ -1,4 +1,4 @@
-<div id="session-view" data-session-id="{{ session.id }}" data-project-dir="{{ session.project_dir }}" data-expand-tools="{{ expand_tools | tojson | forceescape }}" data-stt-streaming="{{ '1' if stt_streaming else '' }}">
+<div id="session-view" data-session-id="{{ session.id }}" data-project-dir="{{ session.project_dir }}" data-expand-tools="{{ expand_tools | tojson | forceescape }}" data-hide-thinking="{{ '1' if hide_thinking else '' }}" data-hide-tool-calls="{{ '1' if hide_tool_calls else '' }}" data-stt-streaming="{{ '1' if stt_streaming else '' }}">
     {% include "components/session_meta.html" %}
 
     {# Anchors #jump-bottom to the scroll region so it sits above the composer

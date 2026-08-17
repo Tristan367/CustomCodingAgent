@@ -247,6 +247,21 @@ async function restartMyriadCode(button) {
             </label>
             {% endfor %}
         </div>
+        <div class="tool-grid" style="margin-top:12px">
+            <span class="hint" style="grid-column:1/-1;margin:0">Keep the transcript clean:</span>
+            <label class="checkbox-label">
+                <input type="checkbox" id="hide-thinking"
+                       {% if hide_thinking %}checked{% endif %}
+                       onchange="saveHideFlags()">
+                Hide past thinking blocks
+            </label>
+            <label class="checkbox-label">
+                <input type="checkbox" id="hide-tool-calls"
+                       {% if hide_tool_calls %}checked{% endif %}
+                       onchange="saveHideFlags()">
+                Hide past tool calls
+            </label>
+        </div>
     </section>
 
     <section class="panel">
@@ -395,6 +410,13 @@ function saveExpandTools() {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(names),
     });
+}
+
+function saveHideFlags() {
+    const form = new FormData();
+    form.append('hide_thinking', document.getElementById('hide-thinking').checked ? '1' : '0');
+    form.append('hide_tool_calls', document.getElementById('hide-tool-calls').checked ? '1' : '0');
+    fetch('/_settings/hide', { method: 'POST', body: form });
 }
 
 function setTheme(btn) {

@@ -96,6 +96,17 @@ async def save_expand_setting(request: Request):
     return {"ok": True}
 
 
+@router.post("/_settings/hide")
+async def save_hide_flags(request: Request):
+    """Whether past thinking blocks / tool calls are hidden from the transcript."""
+    form = await request.form()
+    for key in ("hide_thinking", "hide_tool_calls"):
+        if key in form:
+            val = str(form.get(key, "0"))
+            await db.set_setting(key, "1" if val in ("1", "true", "on") else "0")
+    return {"ok": True}
+
+
 @router.post("/_settings/theme")
 async def save_theme(request: Request):
     """The accent colour family: green (default), red, blue, gray, or custom."""

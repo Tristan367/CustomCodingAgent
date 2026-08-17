@@ -25,6 +25,7 @@
     {% endif %}
 
     {% for m in messages %}
+    {% if not m._hidden %}
     {% if m.role == 'tool' %}
     <div class="message tool {% if m.is_error %}tool-error{% endif %}" id="msg-{{ m.id }}"
          data-tool-call-id="{{ m.tool_call_id or '' }}">
@@ -90,7 +91,7 @@
     {# An assistant turn that only carried tool calls has nothing left to show
        once the raw arguments are hidden, and would render as an empty bubble. #}
     {% if body or attached or m.reasoning_content or m.role != 'assistant' %}
-    {% if m.role == 'assistant' and m.reasoning_content %}
+    {% if m.role == 'assistant' and m.reasoning_content and not m._hide_reasoning %}
     {# Thinking block as its own row, separate from the AI's response. Without a
        split the thinking text sits inside the assistant bubble and the model's
        own reply ends up below it with no breathing room. #}
@@ -142,6 +143,7 @@
         </div>
         <span class="msg-time">{{ m.created_at | clocktime }}</span>
     </div>
+    {% endif %}
     {% endif %}
     {% endif %}
     {% endif %}

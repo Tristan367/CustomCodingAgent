@@ -5,10 +5,11 @@
       <stop offset="1" stop-color="#6b7d3a"/>
     </linearGradient>
   </defs>
-  <!-- Two filled quads (the arms) sharing a diagonal tip edge, so they meet
-       flush with no stroked thickness crossing over at the tip. -->
-  <path d="M13 13 L45 27 L41 37 L20 26 Z" fill="url(#accent)"/>
-  <path d="M45 27 L41 37 L13 51 L20 38 Z" fill="url(#accent)"/>
+  <!-- Two filled quads (the arms) that taper toward a flat vertical tip and
+       meet there with no overlap; the diagonal cut lives on the arms' open
+       (left) ends. -->
+  <path d="M13 13 L45 26 L45 32 L24 20 Z" fill="url(#accent)"/>
+  <path d="M45 32 L45 38 L13 51 L24 44 Z" fill="url(#accent)"/>
   <!-- terminal cursor -->
   <rect x="48" y="24" width="6" height="16" fill="url(#accent)"/>
 </svg>

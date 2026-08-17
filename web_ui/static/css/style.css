@@ -733,8 +733,9 @@ a.file-ref:hover { border-bottom-style: solid; color: var(--text); background: v
   min-height: 76px;
   max-height: 340px;
   padding: 9px 12px;
-  background: var(--bg-inset);
-  border: 1px solid var(--border-strong);
+  /* Sit directly in the composer with no box: no border, no inset background. */
+  background: transparent;
+  border: none;
   border-radius: var(--radius);
   color: var(--text);
   font-family: inherit;
@@ -743,7 +744,7 @@ a.file-ref:hover { border-bottom-style: solid; color: var(--text); background: v
   resize: none;
   overflow-y: auto;
 }
-#chat-textarea:focus { outline: none; border-color: var(--accent-dim); }
+#chat-textarea:focus { outline: none; }
 #chat-textarea::placeholder { color: var(--text-faint); }
 
 .composer-actions {

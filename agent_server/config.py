@@ -279,8 +279,7 @@ CACHE_WARN_TOKENS = int(os.getenv("CACHE_WARN_TOKENS", "25000"))
 # Safety rails on the agent loop.
 MAX_TOOL_RESULT_CHARS = int(os.getenv("MAX_TOOL_RESULT_CHARS", "50000"))
 
-# ── Vision ──────────────────────────────────────────────────────────────────
-# Subagents
+# ── Subagents ────────────────────────────────────────────────────────────────
 SUBAGENT_MAX_ROUNDS = int(os.getenv("SUBAGENT_MAX_ROUNDS", "20"))
 SUBAGENT_TIMEOUT = int(os.getenv("SUBAGENT_TIMEOUT", "600"))
 SUBAGENT_EFFORT = os.getenv("SUBAGENT_EFFORT", "low")
@@ -292,9 +291,6 @@ WEBFETCH_MAX_BYTES = int(os.getenv("WEBFETCH_MAX_BYTES", "5000000"))
 # lives on localhost, so an unfiltered fetch can drive this app through its own
 # tool. Set to 0 only if you need the agent to reach an internal service.
 WEBFETCH_ALLOW_PRIVATE = os.getenv("WEBFETCH_ALLOW_PRIVATE", "0") == "1"
-
-# Downscale anything larger before sending; phone photos are needlessly huge.
-VISION_MAX_PIXELS = int(os.getenv("VISION_MAX_PIXELS", str(1600 * 1600)))
 
 
 

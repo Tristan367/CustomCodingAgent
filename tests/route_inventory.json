@@ -224,13 +224,6 @@
     "name": "save_sound_setting"
   },
   {
-    "path": "/_settings/sounds",
-    "methods": [
-      "GET"
-    ],
-    "name": "list_uploaded_sounds"
-  },
-  {
     "path": "/_settings/sounds/upload",
     "methods": [
       "POST"
@@ -621,13 +614,6 @@
       "POST"
     ],
     "name": "transcribe"
-  },
-  {
-    "path": "/api/stt/status",
-    "methods": [
-      "GET"
-    ],
-    "name": "stt_status"
   },
   {
     "path": "/api/stt/stream",

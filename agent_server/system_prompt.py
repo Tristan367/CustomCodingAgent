@@ -536,25 +536,38 @@ async def get_compact_prompt(session: dict | None = None) -> str:
     return await prompt_body(name, COMPACTION)
 
 
+async def propagate_prompt(name: str) -> int:
+    """Queue the edited prompt onto the sessions that share it.
+
+    Every session using this prompt and not carrying its own gets the new text
+    at its next compaction. Swapping it in now would invalidate the cached
+    prefix and re-bill the whole conversation; at compaction the prefix is being
+    rewritten regardless, so the switch is close to free.
+    """
+    moved = 0
+    for row in await db.list_sessions():
+        if row.get("prompt_custom"):
+            continue  # has its own prompt; not ours to overwrite
+        if (row.get("prompt_profile") or PROTECTED_PROMPT) != name:
+            continue
+        fresh = await build_system_prompt(name, row["project_dir"], row["id"])
+        if fresh == row.get("system_prompt"):
+            continue
+        if row.get("system_prompt"):
+            await db.update_session(row["id"], pending_system_prompt=fresh)
+        else:
+            # Never ran, so nothing is cached and there is nothing to lose.
+            await db.update_session(row["id"], system_prompt=fresh)
+        moved += 1
+    return moved
+
+
 def _background_propagate(name: str):
     """Set pending_system_prompt on sessions using *name*, deferred to next compaction."""
-    async def _inner():
-        for row in await db.list_sessions():
-            if row.get("prompt_custom"):
-                continue
-            if (row.get("prompt_profile") or PROTECTED_PROMPT) != name:
-                continue
-            fresh = await build_system_prompt(name, row["project_dir"], row["id"])
-            if fresh == row.get("system_prompt"):
-                continue
-            if row.get("system_prompt"):
-                await db.update_session(row["id"], pending_system_prompt=fresh)
-            else:
-                await db.update_session(row["id"], system_prompt=fresh)
     try:
         loop = asyncio.get_running_loop()
     except RuntimeError:
         return
-    task = loop.create_task(_inner())
+    task = loop.create_task(propagate_prompt(name))
     _bg_tasks.add(task)
     task.add_done_callback(_bg_tasks.discard)

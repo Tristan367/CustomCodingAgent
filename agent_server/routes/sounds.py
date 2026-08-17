@@ -11,15 +11,6 @@ from agent_server.routes.context import _ALLOWED_SOUND_EXTS, _ensure_sound_dir
 router = APIRouter()
 
 
-@router.get("/_settings/sounds")
-async def list_uploaded_sounds():
-    d = _ensure_sound_dir()
-    files = sorted(
-        [f.name for f in d.iterdir() if f.suffix.lower() in _ALLOWED_SOUND_EXTS]
-    )
-    return {"sounds": files}
-
-
 @router.post("/_settings/sounds/upload")
 async def upload_sound(request: Request):
     form = await request.form()

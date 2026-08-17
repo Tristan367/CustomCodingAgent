@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from typing import Any, Literal
+from typing import Literal
 
 from pydantic import BaseModel
 
@@ -47,21 +47,6 @@ class ResolveRequest(BaseModel):
     # directory persistently allow writes under `grant_path`
     scope: Literal["once", "session", "directory"] = "once"
     grant_path: str = ""
-
-
-class MessageResponse(BaseModel):
-    id: int
-    session_id: str
-    role: str
-    content: str
-    reasoning_content: str | None = None
-    tool_calls: list[dict[str, Any]] | None = None
-    tool_call_id: str | None = None
-    tool_name: str | None = None
-    is_error: int = 0
-    token_count: int | None = None
-    created_at: str
-    is_compacted: int = 0
 
 
 class CompactProfileRequest(BaseModel):

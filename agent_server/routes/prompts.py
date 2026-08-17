@@ -19,39 +19,13 @@ from agent_server.system_prompt import (
     READONLY_PROMPTS,
     SYSTEM,
     _default_subagent_off,
-    build_system_prompt,
     prompt_drift,
+    propagate_prompt,
 )
 from agent_server.templating import templates
 from agent_server.tools.registry import TOOLS
 
 router = APIRouter()
-
-
-async def _propagate(name: str) -> int:
-    """Queue the edited prompt onto the sessions that share it.
-
-    Every session using this prompt and not carrying its own gets the new text
-    at its next compaction. Swapping it in now would invalidate the cached
-    prefix and re-bill the whole conversation; at compaction the prefix is being
-    rewritten regardless, so the switch is close to free.
-    """
-    moved = 0
-    for row in await db.list_sessions():
-        if row.get("prompt_custom"):
-            continue  # has its own prompt; not ours to overwrite
-        if (row.get("prompt_profile") or PROTECTED_PROMPT) != name:
-            continue
-        fresh = await build_system_prompt(name, row["project_dir"], row["id"])
-        if fresh == row.get("system_prompt"):
-            continue
-        if row.get("system_prompt"):
-            await db.update_session(row["id"], pending_system_prompt=fresh)
-        else:
-            # Never ran, so nothing is cached and there is nothing to lose.
-            await db.update_session(row["id"], system_prompt=fresh)
-        moved += 1
-    return moved
 
 
 def _parse_tiers(p: dict) -> list[dict]:
@@ -260,7 +234,7 @@ async def save_prompts(request: Request):
             )
         if compact_body:
             await db.save_prompt(name, compact_body, COMPACTION)
-        moved = await _propagate(name)
+        moved = await propagate_prompt(name)
 
     return templates.TemplateResponse(
         request=request,

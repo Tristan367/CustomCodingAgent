@@ -470,13 +470,7 @@ async def set_compact_threshold(
     return JSONResponse({"ok": True, "threshold": value})
 
 
-# ── Retry ──────────────────────────────────────────────────────────
-
-@router.get("/stt/status")
-async def stt_status():
-    status = stt_service.availability()
-    status["streaming"] = whisper_streaming.whisper_streaming_available()
-    return status
+# ── Speech-to-text ───────────────────────────────────────────────────────────
 
 
 @router.post("/stt")

@@ -43,7 +43,7 @@ stop_server() {
   local pid
   pid="$(running_pid)"
   [ -n "$pid" ] || { echo "myriadcode: not running"; return 1; }
-  # SIGTERM, not -9: uvicorn's shutdown hook is what unloads the vision model.
+  # SIGTERM, not -9, so uvicorn's shutdown hook runs and the server stops cleanly.
   kill "$pid" 2>/dev/null || true
   for _ in $(seq 1 40); do
     sleep 0.25
@@ -79,16 +79,14 @@ case "${1:-}" in
   -h|--help)
     cat <<'EOF'
 myriadcode            start the server and open it in your browser
-myriadcode stop       stop it cleanly (this is what unloads the vision model)
+myriadcode stop       stop it cleanly
 myriadcode restart    stop it, then start in this terminal
 myriadcode status     is it running, and on what pid
 myriadcode open       just open the browser at a server already running
 myriadcode --no-open  start without opening a browser
 
 Ctrl-C stops a server started in this terminal. Use `myriadcode stop` for one
-started somewhere else. Both run the shutdown hook; kill -9 does not.
-
-The vision rig is started on demand; see VISION_* in .env.example.
+started somewhere else. Both let the server shut down cleanly; kill -9 does not.
 EOF
     exit 0
     ;;
@@ -107,6 +105,5 @@ fi
 [ "${1:-}" = "--no-open" ] || open_browser &
 
 echo "myriadcode: starting at $URL  (Ctrl-C to stop)"
-# exec, so Ctrl-C reaches uvicorn directly and its shutdown hook runs: that is
-# what unloads the vision model from the rig.
+# exec, so Ctrl-C reaches uvicorn directly and its shutdown hook runs.
 exec .venv/bin/python -m uvicorn agent_server.main:app --host "$HOST" --port "$PORT"

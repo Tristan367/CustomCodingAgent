@@ -1531,7 +1531,10 @@ body.selecting .msg-time { opacity: 0 !important; visibility: hidden !important;
 
 /* ── Attachments ─────────────────────────────────────────────────────────── */
 
-.attachments { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 7px; }
+.attachments { display: flex; align-items: center; gap: 6px; margin-bottom: 7px; }
+.attachment-chips { display: flex; flex-wrap: wrap; gap: 6px; flex: 1; min-width: 0; }
+/* Sits at the right edge, sized to line up with the composer's button column. */
+.attachment-clear { width: 34px; height: 34px; flex: 0 0 auto; color: var(--text-faint); }
 .attachment {
   display: inline-flex;
   align-items: center;
@@ -1544,7 +1547,24 @@ body.selecting .msg-time { opacity: 0 !important; visibility: hidden !important;
   max-width: 220px;
 }
 .attachment img { width: 30px; height: 30px; object-fit: cover; border-radius: 3px; flex: 0 0 auto; }
+.attachment-file-icon {
+  width: 30px;
+  height: 30px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex: 0 0 auto;
+  border-radius: 3px;
+  background: var(--bg-raised, var(--bg));
+  color: var(--text-dim);
+}
+.attachment-file-icon svg { width: 16px; height: 16px; }
+.msg-file-chip .attachment-file-icon { width: 16px; height: 16px; background: none; }
 .attachment-name { color: var(--text-dim); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.attachment-size { color: var(--text-faint); font-size: 10px; flex: 0 0 auto; }
+.attachment { cursor: grab; }
+.attachment.dragging { opacity: 0.4; }
+.attachment.drag-over { border-color: var(--accent); box-shadow: 0 0 0 1px var(--accent); }
 .attachment-remove {
   background: none;
   border: 0;
@@ -1562,6 +1582,31 @@ body.selecting .msg-time { opacity: 0 !important; visibility: hidden !important;
   max-height: 140px;
   border-radius: 4px;
   border: 1px solid var(--border);
+}
+.msg-file-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  max-width: 280px;
+  padding: 4px 8px;
+  background: var(--bg-inset);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  color: var(--text-dim);
+  font-size: 12px;
+}
+.msg-file-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.msg-file-size { color: var(--text-faint); font-size: 10.5px; flex: 0 0 auto; }
+
+/* Whole-window drop target for files dragged in from the OS. */
+body.dragging-files::after {
+  content: '';
+  position: fixed;
+  inset: 0;
+  border: 3px dashed var(--accent);
+  background: rgba(0, 0, 0, 0.18);
+  pointer-events: none;
+  z-index: 9999;
 }
 
 /* ── Transient status line ───────────────────────────────────────────────── */
@@ -2030,11 +2075,18 @@ dialog.file-browser[open] {
 }
 dialog.file-browser {
   position: fixed;
-  inset: 0;
+  top: 5vh;
+  /* Stop above the composer + attachment tray so the chat input is never
+     covered, no matter how tall the window. */
+  bottom: 160px;
+  left: 0;
+  right: 0;
   margin: auto;
   border-radius: 8px;
-  width: min(560px, 92vw);
-  height: min(70vh, 560px);
+  width: min(1120px, 94vw);
+  max-width: none;
+  max-height: none;
+  height: auto;
 }
 dialog.file-browser::backdrop { background: rgba(0, 0, 0, 0.55); }
 

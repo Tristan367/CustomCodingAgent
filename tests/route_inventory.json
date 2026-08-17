@@ -469,13 +469,6 @@
     "name": "chat"
   },
   {
-    "path": "/api/sessions/{session_id}/chat-with-image",
-    "methods": [
-      "POST"
-    ],
-    "name": "chat_with_image"
-  },
-  {
     "path": "/api/sessions/{session_id}/compact",
     "methods": [
       "POST"
@@ -509,6 +502,13 @@
       "POST"
     ],
     "name": "continue_run"
+  },
+  {
+    "path": "/api/sessions/{session_id}/drop-upload",
+    "methods": [
+      "POST"
+    ],
+    "name": "drop_upload"
   },
   {
     "path": "/api/sessions/{session_id}/last-message",

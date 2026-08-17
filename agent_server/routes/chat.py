@@ -18,7 +18,7 @@ from fastapi import (
 )
 from fastapi.responses import FileResponse, JSONResponse, StreamingResponse
 
-from agent_server import agent, images, permissions, whisper_streaming
+from agent_server import agent, permissions, whisper_streaming
 from agent_server import database as db
 from agent_server import stt as stt_service
 from agent_server.compaction import compact_session_events, should_offer_compaction
@@ -81,77 +81,112 @@ async def _require_session(session_id: str) -> dict:
 
 # ── Chat ────────────────────────────────────────────────────────────────────
 
+def _attachment_content(session: dict, text: str, attachments: list[str]) -> str:
+    """The user message, with each attached path recorded for the model.
+
+    Attachments are just filesystem paths: no bytes are uploaded, and the model
+    decides what to do with each one (read, glob, vision, ...). Relative paths
+    resolve against the session's project directory.
+    """
+    lines: list[str] = []
+    project = Path(session["project_dir"]).expanduser()
+    for raw in attachments[:50]:
+        raw = (raw or "").strip()
+        if not raw:
+            continue
+        p = Path(raw).expanduser()
+        if not p.is_absolute():
+            p = project / p
+        try:
+            p = p.resolve()
+        except OSError:
+            pass
+        lines.append(f"[Attached: {p}]")
+    if text:
+        lines.append(text)
+    return "\n".join(lines).strip()
+
+
 @router.post("/sessions/{session_id}/chat")
 async def chat(session_id: str, request: Request, body: ChatRequest):
-    await _require_session(session_id)
-    text = body.message.strip()
-    if not text:
-        raise HTTPException(400, "Message is required")
+    session = await _require_session(session_id)
+    content = _attachment_content(session, body.message.strip(), body.attachments)
+    if not content:
+        raise HTTPException(400, "Message or attachment is required")
     # A turn already in flight: queue instead of persisting. Writing the message
     # now would land it between an assistant tool_calls row and its results and
     # corrupt the wire order for the model.
-    if agent.is_running(session_id) and agent.queue_message(session_id, text) is not None:
+    if agent.is_running(session_id) and agent.queue_message(session_id, content) is not None:
         return _stream(session_id, request)
     # Persist before streaming. This is the step whose absence caused the model
     # to be prompted with no user turn at all.
-    await db.add_message(session_id, "user", text)
-    return _stream(session_id, request)
-
-
-@router.post("/sessions/{session_id}/chat-with-image")
-async def chat_with_image(
-    session_id: str,
-    request: Request,
-    message: str = Form(""),
-    image_files: list[UploadFile] = File(default=[]),
-):
-    """Send a message with one or more attached images.
-
-    The images are saved and referenced by path; the agent decides for itself
-    whether and how to look at them with the `vision` tool. Earlier versions ran
-    vision eagerly here and injected a description, which forced the user to
-    write the vision prompt and threw away the original image.
-    """
-    await _require_session(session_id)
-    text = message.strip()
-    attachments = [i for i in image_files if i and i.filename]
-
-    if not attachments:
-        if not text:
-            raise HTTPException(400, "Message or image is required")
-        if agent.is_running(session_id) and agent.queue_message(session_id, text) is not None:
-            return _stream(session_id, request)
-        await db.add_message(session_id, "user", text)
-        return _stream(session_id, request)
-
-    if agent.is_running(session_id):
-        # Images cannot be queued; they must be saved and added as a fresh turn.
-        raise HTTPException(409, "Finish the current run before attaching an image.")
-
-    saved: list[str] = []
-    for upload in attachments[:6]:
-        try:
-            saved.append(await _save_image(session_id, upload))
-        except HTTPException:
-            raise
-        except Exception as e:
-            raise HTTPException(400, f"Could not read {upload.filename}: {e}") from e
-
-    lines = [
-        f"[Image attached: {path} ({images.describe_image_file(path)})]"
-        for path in saved
-    ]
-    noun = "image" if len(saved) == 1 else "images"
-    lines.append(
-        f"\nUse the `vision` tool on {'this path' if len(saved) == 1 else 'these paths'} "
-        f"to see the {noun}."
-    )
-    content = "\n".join(lines)
-    if text:
-        content += f"\n\n{text}"
-
     await db.add_message(session_id, "user", content)
     return _stream(session_id, request)
+
+
+def _safe_upload_path(name: str) -> Path:
+    """Turn a browser-supplied (relative) name into a safe path under UPLOAD_DIR.
+
+    Drop uploads are the one case where the browser cannot give us the original
+    absolute path, so the bytes are copied into the app's upload dir and the
+    copy's path is attached. Never trust the name the browser sends.
+    """
+    parts = (name or "file").replace("\\", "/").split("/")
+    safe = []
+    for part in parts:
+        if part in ("", ".", ".."):
+            continue
+        cleaned = "".join(c if c.isalnum() or c in "._- " else "_" for c in part).strip()
+        if cleaned:
+            safe.append(cleaned[:120])
+    return Path(*safe) if safe else Path("file")
+
+
+@router.post("/sessions/{session_id}/drop-upload")
+async def drop_upload(
+    session_id: str,
+    root: str = Form(""),
+    files: list[UploadFile] = File(default=[]),
+):
+    """Save files dropped onto the composer and return absolute paths to attach.
+
+    The regular attach browser sends the model a path with no upload. A browser
+    drag-and-drop, however, does not expose the dropped file's real path (and
+    cannot), so this fallback copies the dropped bytes into the upload dir. The
+    model then sees the path of the local copy, exactly like any other upload.
+    """
+    await _require_session(session_id)
+    uploads = [f for f in files if f and f.filename]
+    if not uploads and not root.strip():
+        raise HTTPException(400, "No files dropped")
+
+    drop = UPLOAD_DIR / session_id / f"drop-{uuid.uuid4().hex[:8]}"
+    drop.mkdir(parents=True, exist_ok=True)
+
+    for upload in uploads[:500]:
+        rel = _safe_upload_path(upload.filename or "file")
+        dest = drop / rel
+        dest.parent.mkdir(parents=True, exist_ok=True)
+        size = 0
+        try:
+            with dest.open("wb") as out:
+                while chunk := await upload.read(1024 * 1024):
+                    size += len(chunk)
+                    if size > 200 * 1024 * 1024:
+                        raise HTTPException(400, f"{rel} is larger than 200 MB")
+                    out.write(chunk)
+        except HTTPException:
+            raise
+        except OSError as e:
+            raise HTTPException(400, f"Could not save {rel}: {e}") from e
+
+    # A dropped directory is sent as `root` plus one part per descendant. Attach
+    # the directory itself, not the hundreds of files inside it.
+    if root.strip():
+        root_path = drop / _safe_upload_path(root.strip())
+        root_path.mkdir(parents=True, exist_ok=True)
+        return {"paths": [str(root_path)]}
+    return {"paths": [str(drop / _safe_upload_path(f.filename or "file")) for f in uploads]}
 
 
 @router.post("/sessions/{session_id}/resolve")
@@ -516,65 +551,24 @@ async def stt_stream(websocket: WebSocket):
 
 @router.get("/files/image")
 async def serve_image(path: str):
-    """Serve an attached or captured image.
+    """Serve an image by absolute path, for thumbnails and captures.
 
-    Restricted to the directories this app writes into, so a crafted path cannot
-    turn the endpoint into an arbitrary file read.
+    This is a local, single-user app and the model already reads arbitrary files
+    with the `read`/`vision` tools, so serving an image file is no wider a
+    surface than the app itself. Non-image extensions are refused so this cannot
+    become a general file read.
     """
-    from agent_server.config import CAPTURE_DIR
-
     try:
         resolved = Path(path).expanduser().resolve()
     except OSError:
         raise HTTPException(400, "Bad path") from None
-
-    roots = [UPLOAD_DIR.resolve(), CAPTURE_DIR.resolve()]
-    if not any(_within(resolved, root) for root in roots):
-        raise HTTPException(403, "Outside the allowed image directories")
+    if resolved.suffix.lower() not in ALLOWED_IMAGE_TYPES:
+        raise HTTPException(403, "Not an image path")
     if not resolved.is_file():
         raise HTTPException(404, "Not found")
     return FileResponse(resolved)
 
 
-def _within(path: Path, root: Path) -> bool:
-    try:
-        path.relative_to(root)
-        return True
-    except ValueError:
-        return False
-
-
 # ── Images ──────────────────────────────────────────────────────────────────
 
 ALLOWED_IMAGE_TYPES = {".png", ".jpg", ".jpeg", ".gif", ".webp", ".bmp", ".tif", ".tiff", ".avif", ".heic"}
-
-
-async def _save_image(session_id: str, upload: UploadFile) -> str:
-    """Normalise an upload to PNG and store it under the session's directory.
-
-    Browsers happily hand over a WebP named `.jpg`, and the vision backend
-    rejects WebP outright, so the bytes are decoded and re-encoded rather than
-    trusting the extension.
-    """
-    suffix = Path(upload.filename or "").suffix.lower()
-    if suffix and suffix not in ALLOWED_IMAGE_TYPES:
-        raise HTTPException(400, f"Unsupported image type: {suffix}")
-
-    raw = await upload.read()
-    if not raw:
-        raise HTTPException(400, "Empty image upload")
-    if len(raw) > 40 * 1024 * 1024:
-        raise HTTPException(400, "Image is larger than 40 MB")
-
-    try:
-        data = await images.normalize_in_thread(raw)
-    except images.ImageError as e:
-        raise HTTPException(400, str(e)) from e
-
-    directory = UPLOAD_DIR / session_id
-    directory.mkdir(parents=True, exist_ok=True)
-    stem = Path(upload.filename or "image").stem[:40] or "image"
-    safe = "".join(c for c in stem if c.isalnum() or c in "-_") or "image"
-    path = directory / f"{safe}-{uuid.uuid4().hex[:6]}.png"
-    path.write_bytes(data)
-    return str(path)

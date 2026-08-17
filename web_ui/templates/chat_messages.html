@@ -114,10 +114,25 @@
             {% if attached %}
             <div class="msg-attachments">
                 {% for a in attached %}
+                {% if a.is_image %}
                 <a href="/api/files/image?path={{ a.path | urlencode }}" target="_blank"
-                   rel="noopener" title="{{ a.path }} ({{ a.meta }})">
-                    <img src="/api/files/image?path={{ a.path | urlencode }}" alt="{{ a.meta }}" loading="lazy">
+                   rel="noopener" title="{{ a.path }}">
+                    <img src="/api/files/image?path={{ a.path | urlencode }}" alt="{{ a.name }}" loading="lazy">
                 </a>
+                {% else %}
+                <span class="msg-file-chip" title="{{ a.path }}">
+                    <svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true">
+                    {% if a.is_dir %}
+                        <path fill="currentColor" d="M10 4H4a2 2 0 0 0-2 2v12a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2V8a2 2 0 0 0-2-2h-8z"/>
+                    {% else %}
+                        <path fill="currentColor" d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/>
+                        <path fill="none" stroke="currentColor" stroke-width="1.6" d="M14 2v6h6"/>
+                    {% endif %}
+                    </svg>
+                    <span class="msg-file-name">{{ a.name }}</span>
+                    {% if a.size %}<span class="msg-file-size">{{ a.size | filesize }}</span>{% endif %}
+                </span>
+                {% endif %}
                 {% endfor %}
             </div>
             {% endif %}

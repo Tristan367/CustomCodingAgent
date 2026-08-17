@@ -32,6 +32,9 @@ class SessionUpdate(BaseModel):
 
 class ChatRequest(BaseModel):
     message: str
+    # Absolute filesystem paths the user attached. Sent to the model as-is so it
+    # can read, glob, or run vision on them -- no bytes are uploaded.
+    attachments: list[str] = []
 
 
 class ResolveRequest(BaseModel):

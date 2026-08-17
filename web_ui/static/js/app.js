@@ -128,7 +128,7 @@ function initSession() {
     // The server run is untouched -- only this page stops listening.
     detachStream();
     Dictation.teardown();
-    pendingImages = [];
+    pendingAttachments = [];
     renderAttachments();
     // Snapshot the old session's editor (buffer, scroll, open state) into
     // memory and hide it, then reopen the new session's editor.
@@ -269,7 +269,7 @@ async function onSubmit(event) {
   }
 
   const message = App.els.textarea.value.trim();
-  const attachments = pendingImages.slice();
+  const attachments = pendingAttachments.slice();
   if (!message && !attachments.length) return;
 
   // Typing while it works: hand the message to the running turn instead of
@@ -277,7 +277,7 @@ async function onSubmit(event) {
   // so it keeps going and sees the message on its next request.
   if (App.streaming) {
     if (attachments.length) {
-      appendNotice('error', 'Finish the current run before attaching an image.');
+      appendNotice('error', 'Finish the current run before attaching a file.');
       return;
     }
     const resp = await fetch(`/api/sessions/${App.sessionId}/queue`, {
@@ -301,22 +301,20 @@ async function onSubmit(event) {
   App.els.textarea.value = '';
   Persist.clearDraft();
   autosize(App.els.textarea);
-  pendingImages = [];
+  pendingAttachments = [];
   renderAttachments();
 
-  let endpoint, body, headers = {};
-  if (attachments.length) {
-    endpoint = `/api/sessions/${App.sessionId}/chat-with-image`;
-    body = new FormData();
-    body.append('message', message);
-    for (const file of attachments) body.append('images', file, file.name);
-  } else {
-    endpoint = `/api/sessions/${App.sessionId}/chat`;
-    headers['Content-Type'] = 'application/json';
-    body = JSON.stringify({ message });
-  }
+  const endpoint = `/api/sessions/${App.sessionId}/chat`;
+  const body = JSON.stringify({
+    message,
+    attachments: attachments.map((a) => a.path),
+  });
 
-  await streamRequest(endpoint, { method: 'POST', headers, body });
+  await streamRequest(endpoint, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body,
+  });
 }
 
 /* Resume the loop after the user answers a paused tool call. */
@@ -759,41 +757,143 @@ async function sendBroadcast() {
 
 /* ── Drag and drop into the composer ──────────────────────────────────────── */
 
+let dropBound = false;
 function setupDragDrop() {
-  const textarea = App.els.textarea;
-  if (!textarea || textarea.dataset.dropBound) return;
-  textarea.dataset.dropBound = '1';
+  if (dropBound) return;
+  dropBound = true;
 
-  textarea.addEventListener('dragover', (e) => {
-    if (!e.dataTransfer?.types.includes('Files')) return;
+  // Files dragged from the OS (or another app) can be dropped anywhere on the
+  // page, not just the composer. The transfer carries `Files` (browsers) or
+  // `text/uri-list` (Linux file managers) real paths; anything else — tab
+  // reordering, the attachment reorder — is left to its own handlers.
+  const hasFiles = (dt) => {
+    if (!dt) return false;
+    const types = Array.from(dt.types || []);
+    return types.includes('Files') || types.includes('text/uri-list');
+  };
+  const activate = () => document.body.classList.add('dragging-files');
+  const deactivate = () => document.body.classList.remove('dragging-files');
+
+  document.addEventListener('dragenter', (e) => { if (hasFiles(e.dataTransfer)) activate(); });
+  document.addEventListener('dragover', (e) => {
+    if (!hasFiles(e.dataTransfer)) return;
     e.preventDefault();
-    textarea.classList.add('dragging');
+    activate();
   });
-  textarea.addEventListener('dragleave', () => textarea.classList.remove('dragging'));
-  textarea.addEventListener('drop', async (e) => {
+  document.addEventListener('dragleave', (e) => {
+    // Fires as the pointer crosses child elements; only treat leaving the
+    // window (relatedTarget null) as a real exit.
+    if (e.relatedTarget === null) deactivate();
+  });
+  document.addEventListener('drop', async (e) => {
+    if (!hasFiles(e.dataTransfer)) return;
     e.preventDefault();
-    textarea.classList.remove('dragging');
-    await handleDroppedFiles(e.dataTransfer?.files);
+    deactivate();
+    await handleDroppedFiles(e.dataTransfer);
   });
 }
 
-async function handleDroppedFiles(fileList) {
-  if (!fileList || !fileList.length) return;
-  const images = [];
-  for (const file of fileList) {
-    if (file.type.startsWith('image/')) {
-      images.push(file);
-    } else if (file.name.endsWith('.txt') || file.name.endsWith('.md')) {
-      const text = await file.text();
-      insertAtCursor(App.els.textarea, text);
-      Persist.saveDraft();
+/* Linux file managers put the real absolute paths into `text/uri-list` on a
+   drag, so a dropped file can be attached by path without uploading it. Other
+   platforms only expose File objects, so those are copied into the upload dir
+   and the copy's path is attached instead. */
+function droppedFilePaths(dt) {
+  if (!dt) return [];
+  const uriList = dt.getData('text/uri-list');
+  if (!uriList) return [];
+  const paths = [];
+  for (const line of uriList.split(/\r?\n/)) {
+    const item = line.trim();
+    if (!item || item.startsWith('#')) continue;
+    try {
+      const url = new URL(item);
+      if (url.protocol === 'file:') paths.push(decodeURIComponent(url.pathname));
+    } catch (_) { /* not a URL */ }
+  }
+  return paths.filter(Boolean);
+}
+
+function fileFromEntry(entry) {
+  return new Promise((resolve, reject) => entry.file(resolve, reject));
+}
+
+function readEntries(reader) {
+  return new Promise((resolve, reject) => reader.readEntries(resolve, reject));
+}
+
+async function allEntries(reader) {
+  const out = [];
+  while (true) {
+    const batch = await readEntries(reader);
+    if (!batch.length) break;
+    out.push(...batch);
+  }
+  return out;
+}
+
+async function collectDroppedEntries(entries) {
+  const items = [];
+  async function walk(entry, base) {
+    const rel = base ? `${base}/${entry.name}` : entry.name;
+    if (entry.isFile) {
+      items.push({ file: await fileFromEntry(entry), rel });
+    } else if (entry.isDirectory) {
+      const reader = entry.createReader();
+      for (const child of await allEntries(reader)) await walk(child, rel);
     }
   }
-  for (const file of images) {
-    if (pendingImages.length >= 6) break;
-    pendingImages.push(file);
+  for (const entry of entries) await walk(entry, '');
+  return items;
+}
+
+async function uploadDroppedItems(items, root) {
+  if (!items.length && !root) return;
+  const fd = new FormData();
+  if (root) fd.append('root', root);
+  for (const item of items) {
+    if (item.file.size > 200 * 1024 * 1024) {
+      appendNotice('error', `${item.file.name} is larger than 200 MB and was skipped.`);
+      continue;
+    }
+    fd.append('files', item.file, item.rel);
   }
-  if (images.length) renderAttachments();
+  const resp = await fetch(`/api/sessions/${App.sessionId}/drop-upload`, {
+    method: 'POST',
+    body: fd,
+  }).catch(() => null);
+  if (!resp || !resp.ok) {
+    const detail = resp ? await resp.json().then((d) => d.detail).catch(() => null) : null;
+    appendNotice('error', detail || 'Could not attach the dropped files.');
+    return;
+  }
+  const data = await resp.json();
+  for (const path of data.paths || []) await attachPath(path);
+}
+
+async function handleDroppedFiles(dt) {
+  if (!dt) return;
+  const paths = droppedFilePaths(dt);
+  if (paths.length) {
+    for (const path of paths) await attachPath(path);
+    return;
+  }
+
+  const entries = (Array.from(dt.items || []))
+    .map((item) => (item.webkitGetAsEntry ? item.webkitGetAsEntry() : null))
+    .filter(Boolean);
+  if (entries.length) {
+    try {
+      const items = await collectDroppedEntries(entries);
+      const singleDir = entries.length === 1 && entries[0].isDirectory;
+      await uploadDroppedItems(items, singleDir ? entries[0].name : '');
+      return;
+    } catch (_) { /* fall through to the File-list path below */ }
+  }
+
+  const files = Array.from(dt.files || []);
+  if (files.length) {
+    await uploadDroppedItems(files.map((file) => ({ file, rel: file.name || 'file' })), '');
+  }
 }
 
 /* ── Message rendering ───────────────────────────────────────────────────── */
@@ -934,14 +1034,27 @@ function appendUserMessage(text, attachments) {
   const node = appendMessage('user', text || '');
   if (!attachments || !attachments.length) return node;
   const tray = el('div', 'msg-attachments');
-  for (const file of attachments) {
-    const img = document.createElement('img');
-    img.alt = file.name;
-    img.title = file.name;
-    const reader = new FileReader();
-    reader.onload = (e) => { img.src = e.target.result; };
-    reader.readAsDataURL(file);
-    tray.appendChild(img);
+  for (const att of attachments) {
+    if (att.is_image) {
+      const link = document.createElement('a');
+      link.href = `/api/files/image?path=${encodeURIComponent(att.path)}`;
+      link.target = '_blank';
+      link.rel = 'noopener';
+      link.title = att.path;
+      const img = document.createElement('img');
+      img.src = link.href;
+      img.alt = att.name;
+      img.loading = 'lazy';
+      link.appendChild(img);
+      tray.appendChild(link);
+    } else {
+      const chip = el('span', 'msg-file-chip');
+      chip.title = att.path;
+      chip.appendChild(attachmentIcon(att.is_dir));
+      chip.appendChild(el('span', 'msg-file-name', att.name));
+      if (att.size != null) chip.appendChild(el('span', 'msg-file-size', formatFileSize(att.size)));
+      tray.appendChild(chip);
+    }
   }
   node.querySelector('.msg-content').appendChild(tray);
   return node;
@@ -1757,6 +1870,20 @@ function closeModal(id) {
   const el = document.getElementById(id);
   if (el) el.hidden = true;
 }
+
+/* Escape, when nothing else is open to be closed, turns off dictation. This
+ * runs before the modal-close handler below so it can still see a not-yet-hidden
+ * modal, and before the editor's own Escape handler so `editor-open` is intact. */
+document.addEventListener('keydown', (e) => {
+  if (e.key !== 'Escape') return;
+  if (App.streaming) return;                                 // stops the run instead
+  if (document.querySelector('dialog[open]')) return;        // native dialog closes
+  if (document.querySelector('.modal:not([hidden])')) return; // modal-close below
+  if (document.body.classList.contains('editor-open')) return; // editor closes
+  if (e.repeat || !Dictation.recording) return;
+  e.preventDefault();
+  Dictation.toggle();
+});
 
 document.addEventListener('keydown', (e) => {
   if (e.key === 'Escape') document.querySelectorAll('.modal').forEach((m) => { m.hidden = true; });
@@ -2908,7 +3035,7 @@ function updateComposerButtons() {
   const box = App.els.textarea;
   const canSend = !!(
     (box && box.value.trim())
-    || pendingImages.length
+    || pendingAttachments.length
     || (typeof Dictation !== 'undefined' && Dictation.recording)
   );
   const showStop = App.streaming && !canSend;
@@ -3053,47 +3180,148 @@ document.addEventListener('input', (e) => {
   }
 });
 
-/* ── Image attachment ────────────────────────────────────────────────────── */
+/* ── File attachments ────────────────────────────────────────────────────── */
 
-/* Images ride along with the message and are referenced by path. The agent
- * decides whether and how to look at them with the `vision` tool, rather than
- * the UI converting them to text up front and discarding the original. */
-let pendingImages = [];
+/* Attachments are absolute filesystem paths. The agent sees the path and
+ * decides what to do with it; the UI just shows a preview for images and a
+ * file/folder chip for everything else. */
+let pendingAttachments = [];
 
-function handleImageAttach(input) {
-  for (const file of input.files) {
-    if (pendingImages.length >= 6) break;
-    pendingImages.push(file);
+const ATTACH_IMAGE_EXTS = new Set(
+  ['.png', '.jpg', '.jpeg', '.gif', '.webp', '.bmp', '.tif', '.tiff', '.avif', '.heic']);
+
+function attachExt(path) {
+  const i = String(path).lastIndexOf('.');
+  return i > 0 ? String(path).slice(i).toLowerCase() : '';
+}
+
+function isImagePath(path) { return ATTACH_IMAGE_EXTS.has(attachExt(path)); }
+
+function attachBaseName(path) {
+  const parts = String(path).replace(/\/+$/, '').split('/');
+  return parts[parts.length - 1] || path;
+}
+
+function formatFileSize(n) {
+  if (n == null) return '';
+  if (n < 1024) return `${n} B`;
+  if (n < 1024 * 1024) return `${(n / 1024).toFixed(1)} KB`;
+  return `${(n / 1024 / 1024).toFixed(1)} MB`;
+}
+
+function attachmentIcon(isDir) {
+  const span = document.createElement('span');
+  span.className = 'attachment-file-icon';
+  span.setAttribute('aria-hidden', 'true');
+  span.innerHTML = isDir
+    ? '<svg viewBox="0 0 24 24" width="16" height="16"><path fill="currentColor" d="M10 4H4a2 2 0 0 0-2 2v12a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2V8a2 2 0 0 0-2-2h-8z"/></svg>'
+    : '<svg viewBox="0 0 24 24" width="16" height="16"><path fill="currentColor" d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><path fill="none" stroke="currentColor" stroke-width="1.6" d="M14 2v6h6"/></svg>';
+  return span;
+}
+
+async function statAttachedPath(path) {
+  const resp = await fetch(
+    `/api/files/stat?session_id=${encodeURIComponent(App.sessionId)}&path=${encodeURIComponent(path)}`,
+  ).catch(() => null);
+  if (!resp || !resp.ok) return null;
+  return resp.json();
+}
+
+async function attachPath(path) {
+  path = (path || '').trim();
+  if (!path) return;
+  if (pendingAttachments.some((a) => a.path === path)) return;
+  if (pendingAttachments.length >= 50) {
+    appendNotice('error', 'Too many attachments (limit 50).');
+    return;
   }
-  input.value = '';
+
+  const info = await statAttachedPath(path);
+  if (!info || !info.exists) {
+    appendNotice('error', `Not found: ${path}`);
+    return;
+  }
+
+  pendingAttachments.push({
+    path,
+    name: attachBaseName(path),
+    is_dir: !!info.is_dir,
+    is_image: !info.is_dir && isImagePath(path),
+    size: info.size,
+  });
   renderAttachments();
 }
 
+function openAttachBrowser() {
+  FileBrowser.open(null, { attach: true });
+}
+
 function removeAttachment(index) {
-  pendingImages.splice(index, 1);
+  pendingAttachments.splice(index, 1);
+  renderAttachments();
+}
+
+let dragAttachmentIndex = null;
+
+function clearAttachments() {
+  pendingAttachments = [];
+  dragAttachmentIndex = null;
   renderAttachments();
 }
 
 function renderAttachments() {
   updateComposerButtons();
   const tray = document.getElementById('attachments');
-  if (!tray) return;
-  tray.innerHTML = '';
-  tray.hidden = pendingImages.length === 0;
+  const chipsBox = document.getElementById('attachment-chips');
+  if (!tray || !chipsBox) return;
+  chipsBox.innerHTML = '';
+  tray.hidden = pendingAttachments.length === 0;
 
-  pendingImages.forEach((file, i) => {
+  pendingAttachments.forEach((att, i) => {
     const chip = el('span', 'attachment');
-    const img = document.createElement('img');
-    img.alt = file.name;
-    const reader = new FileReader();
-    reader.onload = (e) => { img.src = e.target.result; };
-    reader.readAsDataURL(file);
+    chip.draggable = true;
+    chip.dataset.index = i;
 
+    if (att.is_image) {
+      const img = document.createElement('img');
+      img.src = `/api/files/image?path=${encodeURIComponent(att.path)}`;
+      img.alt = att.name;
+      chip.appendChild(img);
+    } else {
+      chip.appendChild(attachmentIcon(att.is_dir));
+    }
     const name = el('span', 'attachment-name');
-    name.textContent = file.name;
-    chip.append(img, name, button('\u2715', 'attachment-remove', () => removeAttachment(i)));
-    tray.appendChild(chip);
+    name.textContent = att.name;
+    name.title = att.path;
+    chip.append(name);
+    if (att.size != null) chip.appendChild(el('span', 'attachment-size', formatFileSize(att.size)));
+    chip.appendChild(button('\u2715', 'attachment-remove', () => removeAttachment(i)));
+
+    chip.addEventListener('dragstart', () => {
+      dragAttachmentIndex = i;
+      chip.classList.add('dragging');
+    });
+    chip.addEventListener('dragend', () => {
+      chip.classList.remove('dragging');
+      dragAttachmentIndex = null;
+    });
+    chip.addEventListener('dragover', (e) => { e.preventDefault(); chip.classList.add('drag-over'); });
+    chip.addEventListener('dragleave', () => chip.classList.remove('drag-over'));
+    chip.addEventListener('drop', (e) => {
+      e.preventDefault();
+      chip.classList.remove('drag-over');
+      if (dragAttachmentIndex == null || dragAttachmentIndex === i) return;
+      const [moved] = pendingAttachments.splice(dragAttachmentIndex, 1);
+      pendingAttachments.splice(i, 0, moved);
+      dragAttachmentIndex = null;
+      renderAttachments();
+    });
+
+    chipsBox.appendChild(chip);
   });
+
+  // The tray above the composer grew; lift the open file manager out of its way.
+  FileBrowser.reposition();
 }
 
 /* ── Per-session writable directories ────────────────────────────────────── */
@@ -4473,6 +4701,7 @@ const FileBrowser = (() => {
   let moveCallback = null;     // editor callback invoked with the moved paths
   let ctxMenu = null;
   let ctxPath = null;
+  let attachMode = false;      // when true, selecting attaches instead of opening
 
   function here() { return lastDirs[App.sessionId] || workingDir(); }
 
@@ -4495,6 +4724,7 @@ const FileBrowser = (() => {
       '<div class="fb-list"></div>' +
       '<div class="fb-actions" hidden>' +
         '<span class="fb-sel"></span>' +
+        '<button type="button" class="fe-btn fe-save" data-fb="attach" hidden>Attach</button>' +
         '<button type="button" class="fe-btn" data-fb="open">Open</button>' +
         '<button type="button" class="fe-btn" data-fb="rename">Rename</button>' +
         '<button type="button" class="fe-btn" data-fb="copy">Duplicate</button>' +
@@ -4535,6 +4765,7 @@ const FileBrowser = (() => {
     dlg.querySelector('[data-fb=close]').addEventListener('click', () => dlg.close());
 
     dlg.querySelector('[data-fb=open]').addEventListener('click', openSelected);
+    dlg.querySelector('[data-fb=attach]').addEventListener('click', attachSelected);
     dlg.querySelector('[data-fb=rename]').addEventListener('click', () => doRename([...selected][0]));
     dlg.querySelector('[data-fb=copy]').addEventListener('click', () => doCopy([...selected]));
     dlg.querySelector('[data-fb=delete]').addEventListener('click', () => doDelete([...selected]));
@@ -4554,11 +4785,7 @@ const FileBrowser = (() => {
   function join(base, name) {
     return String(base).replace(/\/+$/, '') + '/' + name;
   }
-  function fmtSize(n) {
-    if (n < 1024) return `${n} B`;
-    if (n < 1024 * 1024) return `${(n / 1024).toFixed(1)} KB`;
-    return `${(n / 1024 / 1024).toFixed(1)} MB`;
-  }
+  function fmtSize(n) { return formatFileSize(n); }
   function workingDir() { return App.projectDir || '/'; }
   function fullPath(name) { return join(basePath, name); }
 
@@ -4602,9 +4829,14 @@ const FileBrowser = (() => {
   async function open(path, opts = {}) {
     if (!App.sessionId) return;
     ensure();
+    // Only an explicit `attach` opts switches modes; navigation keeps whichever
+    // mode the dialog opened in.
+    if ('attach' in opts) attachMode = !!opts.attach;
+    syncMode();
     const recordIt = opts.record !== false;
     if (!path) path = here();
     if (!dlg.open) dlg.showModal();
+    reposition();
     pathEl.value = path;
     listEl.textContent = '';
     const spinner = el('div', 'fb-note', 'Loading\u2026');
@@ -4684,7 +4916,35 @@ const FileBrowser = (() => {
     if (moving) return;
     const child = fullPath(entry.name);
     if (entry.is_dir) open(child);
+    else if (attachMode) attachPath(child);
     else { dlg.close(); FileEditor.open(child, {}); }
+  }
+
+  /* Attach mode: the footer's single action attaches the selection, or the
+   * current directory when nothing is selected. */
+  async function attachSelected() {
+    const targets = selected.size ? [...selected] : [basePath];
+    selected.clear();
+    lastIndex = null;
+    for (const path of targets) await attachPath(path);
+    updateUI();
+  }
+
+  function syncMode() {
+    dlg.querySelector('[data-fb=attach]').hidden = !attachMode;
+    dlg.querySelector('[data-fb=newfile]').hidden = attachMode;
+    for (const fb of ['open', 'rename', 'copy', 'delete', 'move']) {
+      dlg.querySelector(`[data-fb=${fb}]`).hidden = attachMode;
+    }
+  }
+
+  /* Keep the dialog's bottom edge above the chat input. The composer grows with
+   * typed text, and the attachment tray grows as files are attached while the
+   * dialog is open, so this is re-run on each attachment rather than once. */
+  function reposition() {
+    if (!dlg || !dlg.open) return;
+    const input = document.getElementById('chat-input-area');
+    dlg.style.bottom = input ? `${input.offsetHeight + 24}px` : '160px';
   }
 
   function updateUI() {
@@ -4692,6 +4952,12 @@ const FileBrowser = (() => {
       row.classList.toggle('selected', selected.has(row.dataset.path));
     });
     const n = selected.size;
+    if (attachMode) {
+      actionsEl.hidden = false;
+      selEl.textContent = n === 0 ? 'Attach this folder' : n === 1 ? '1 selected' : `${n} selected`;
+      moveEl.hidden = true;
+      return;
+    }
     actionsEl.hidden = n === 0 || moving != null;
     selEl.textContent = n === 1 ? '1 selected' : `${n} selected`;
     actionsEl.querySelector('[data-fb=open]').disabled = n !== 1;
@@ -4868,12 +5134,12 @@ const FileBrowser = (() => {
     if (!e.target.closest('.ctx-menu')) hideCtx();
   });
 
-  return { open, openMove };
+  return { open, openMove, reposition };
 })();
 
 /* Session bar button: open the shared file manager at its last directory. */
 function openFileManager() {
-  FileBrowser.open();
+  FileBrowser.open(null, { attach: false });
 }
 
 /* Session bar button: reopen the editor at this session's last file. */

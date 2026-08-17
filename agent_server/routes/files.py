@@ -84,11 +84,18 @@ async def stat_path(session_id: str, path: str):
     can open the right surface (editor for files, file manager for folders)."""
     session = await _session(session_id)
     p = _resolve(session, path)
+    size = None
+    if p.is_file():
+        try:
+            size = p.stat().st_size
+        except OSError:
+            size = None
     return {
         "path": str(p),
         "exists": p.exists(),
         "is_dir": p.is_dir(),
         "is_file": p.is_file(),
+        "size": size,
     }
 
 

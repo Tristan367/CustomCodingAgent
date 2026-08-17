@@ -73,22 +73,49 @@ def tildepath(value: str) -> str:
 
 
 templates.env.filters["humantime"] = humantime
-_ATTACHMENT_RE = re.compile(r"^\[Image attached: (?P<path>.+?) \((?P<meta>[^)]*)\)\]$", re.M)
-_ATTACHMENT_HINT = re.compile(r"^Use the `vision` tool on th(?:is path|ese paths) to see the images?\.$", re.M)
+_ATTACHMENT_RE = re.compile(r"^\[Attached: (?P<path>.+)\]$", re.M)
+# Older sessions recorded image attachments as `[Image attached: path (meta)]`
+# followed by a vision hint; keep those rendering as chips too.
+_LEGACY_IMAGE_RE = re.compile(r"^\[Image attached: (?P<path>.+?) \((?P<meta>[^)]*)\)\]$", re.M)
+_LEGACY_IMAGE_HINT = re.compile(
+    r"^Use the `vision` tool on th(?:is path|ese paths) to see the images?\.$", re.M
+)
+_IMAGE_SUFFIXES = {".png", ".jpg", ".jpeg", ".gif", ".webp", ".bmp", ".tif", ".tiff", ".avif", ".heic"}
+
+
+def _attachment_dict(path: str) -> dict:
+    path = path.strip()
+    p = Path(path)
+    size = None
+    if p.is_file():
+        try:
+            size = p.stat().st_size
+        except OSError:
+            size = None
+    return {
+        "path": path,
+        "name": p.name,
+        "is_image": p.suffix.lower() in _IMAGE_SUFFIXES,
+        "is_dir": p.is_dir(),
+        "size": size,
+    }
 
 
 def extract_attachments(content: str) -> list[dict]:
-    """Attachment paths recorded in a user message, for rendering as thumbnails."""
-    return [
-        {"path": m.group("path"), "meta": m.group("meta")}
-        for m in _ATTACHMENT_RE.finditer(content or "")
-    ]
+    """Attachment paths recorded in a user message, for the transcript."""
+    result = []
+    for line in (content or "").splitlines():
+        m = _ATTACHMENT_RE.match(line.strip()) or _LEGACY_IMAGE_RE.match(line.strip())
+        if m:
+            result.append(_attachment_dict(m.group("path")))
+    return result
 
 
 def strip_attachments(content: str) -> str:
-    """The message without the plumbing the model needs but the user does not."""
+    """The message without the path lines the model sees but the user does not."""
     text = _ATTACHMENT_RE.sub("", content or "")
-    text = _ATTACHMENT_HINT.sub("", text)
+    text = _LEGACY_IMAGE_RE.sub("", text)
+    text = _LEGACY_IMAGE_HINT.sub("", text)
     return text.strip()
 
 
@@ -150,6 +177,22 @@ def duration_label(ms: int | None) -> str:
     return f"{ms / 1000:.1f}s"
 
 
+def filesize(n: int | None) -> str:
+    """Human file size for attachment chips, empty for directories."""
+    if n is None:
+        return ""
+    try:
+        n = int(n)
+    except (TypeError, ValueError):
+        return ""
+    if n < 1024:
+        return f"{n} B"
+    if n < 1024 * 1024:
+        return f"{n / 1024:.1f} KB"
+    return f"{n / 1024 / 1024:.1f} MB"
+
+
+templates.env.filters["filesize"] = filesize
 templates.env.filters["clocktime"] = clocktime
 templates.env.filters["tildepath"] = tildepath
 templates.env.filters["attachments"] = extract_attachments

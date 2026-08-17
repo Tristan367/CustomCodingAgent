@@ -294,8 +294,8 @@ def _check_anchor(
 
     if snapshot is None:
         return (
-            f"no read of {path} in this session to anchor to. Read it, then use "
-            "the tag it prints."
+            f"you have not read {path} in this session yet. Read it once first (it "
+            "prints a [path#tag] header); then pass that tag with startLine."
         )
     if tag != current:
         # Distinguish a tag that was never real from one the file has outgrown.
@@ -303,9 +303,9 @@ def _check_anchor(
         # second means someone edited underneath us. Same symptom, different fix.
         if tag == snapshot.tag:
             return (
-                f"{path} has changed since you read it (tag was {tag}, now "
-                f"{current}). Read it again -- the line numbers you have may no "
-                "longer point at the same code."
+                f"the user (or another process) modified {path} since you read it. "
+                f"Re-read it and apply your edit to the fresh content -- the line "
+                "numbers you have may no longer point at the same code."
             )
         return (
             f"tag {tag} is not a tag this session was given for {path}. The "
@@ -346,7 +346,10 @@ async def edit_file(
         return ToolResult.error(f"not a file: {path}", title)
     if not has_read(ctx.session_id, path):
         return ToolResult.error(
-            f"you must read {path} before editing it", title
+            f"you have not read {path} in this session. Read it once first (it prints "
+            "a [path#tag] header you will use for the edit); after that you can edit "
+            "again without re-reading.",
+            title,
         )
 
     try:
@@ -411,8 +414,9 @@ async def edit_file(
     count = content.count(oldString)
     if count == 0:
         return ToolResult.error(
-            f"oldString not found in {path}. The file may have changed since you read it; "
-            "read it again and match the exact text including indentation.",
+            f"oldString not found in {path}. If the user (or another process) "
+            "modified the file since you read it, re-read it and match the current "
+            "text exactly, including indentation.",
             title,
         )
     if count > 1 and not replaceAll:
@@ -448,8 +452,10 @@ async def write_file(ctx: ToolContext, *, filePath: str, content: str, **_) -> T
         return ToolResult.error(f"{path} is a directory", title)
     if existed and not has_read(ctx.session_id, path):
         return ToolResult.error(
-            f"{path} already exists and you have not read it. Read it first so you do "
-            "not discard existing content, or use `edit` for a targeted change.",
+            f"{path} already exists and you have not read it in this session. Read "
+            "it once first so you do not discard content you have not seen. (One "
+            "earlier read satisfies this; you do not need to re-read before every "
+            "write.)",
             title,
         )
 
@@ -461,6 +467,15 @@ async def write_file(ctx: ToolContext, *, filePath: str, content: str, **_) -> T
             previous = ""
             has_bom = False
             line_ending = "\n"
+        # If the file was modified on disk since our last read, refuse rather than
+        # silently overwrite the user's edits.
+        snapshot = _snapshots.get((ctx.session_id, str(path)))
+        if snapshot is not None and file_tag(previous) != snapshot.tag:
+            return ToolResult.error(
+                f"the user (or another process) modified {path} since you read it. "
+                "Re-read it before overwriting, so you do not discard their edits.",
+                title,
+            )
         path.parent.mkdir(parents=True, exist_ok=True)
         try:
             _write_file_text(path, content, has_bom, line_ending)
@@ -474,6 +489,11 @@ async def write_file(ctx: ToolContext, *, filePath: str, content: str, **_) -> T
             return ToolResult.error(f"writing file: {e}", title)
 
     mark_read(ctx.session_id, path)
+    # Anchor future edits/writes to what was just written, so a follow-up is not
+    # rejected as "changed since read". The whole file was written, so every line
+    # counts as seen.
+    total = len(content.splitlines())
+    _record_snapshot(ctx.session_id, path, content, set(range(1, total + 1)))
     verb = "Overwrote" if existed else "Created"
     lines = len(content.splitlines())
     diff = unified_diff(previous, content, _display(path, ctx))

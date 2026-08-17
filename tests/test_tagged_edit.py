@@ -110,8 +110,8 @@ async def test_a_tag_from_before_someone_else_edited_is_refused(workspace):
         ctx, filePath=str(path), tag=stale, startLine=2, newText="    return 99"
     )
     assert result.is_error
-    assert "has changed since you read it" in result.output
-    assert "read it again" in result.output.lower()
+    assert "since you read it" in result.output
+    assert "re-read" in result.output.lower()
 
 
 async def test_editing_without_reading_at_all_is_refused(workspace):
@@ -120,7 +120,7 @@ async def test_editing_without_reading_at_all_is_refused(workspace):
         ctx, filePath=str(path), tag="abcd", startLine=1, newText="x"
     )
     assert result.is_error
-    assert "must read" in result.output
+    assert "have not read" in result.output
 
 
 # ── seen lines ───────────────────────────────────────────────────────────────

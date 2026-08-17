@@ -92,7 +92,10 @@ register(Tool(
         "the line numbers to `edit` to change lines without retyping them. The tag "
         "fingerprints the whole file, so it proves nothing moved underneath you.\n"
         "Only lines shown here may be edited; use offset/limit to reach the rest. "
-        "Prefer absolute paths. You must read a file before you edit it."
+        "Prefer absolute paths.\n"
+        "Reading registers the file for this session: after one read you may edit or "
+        "write it repeatedly with no further reads. Re-read only when `edit` tells you "
+        "the file changed on disk since you read it."
     ),
     parameters={
         "type": "object",
@@ -115,10 +118,11 @@ register(Tool(
         "replacement in newText.\n"
         "`read` prints a header like `[src/app.py#a3f9]` above the lines, and lines "
         "as `42: return x`. So startLine 42, tag a3f9.\n"
-        "The tag fingerprints the whole file, so it changes whenever anything in the "
-        "file changes. That is the point: if your tag is stale the file moved under "
-        "you and your line numbers may name different code. NEVER invent, guess or "
-        "adjust a tag -- copy the one you were given.\n"
+        "The tag fingerprints the whole file, so it changes whenever the file changes "
+        "on disk. If `edit` rejects your tag as stale, the user (or another process) "
+        "modified the file since you read it: re-read it and apply your edit to the "
+        "fresh content. NEVER invent, guess or adjust a tag -- copy the one you were "
+        "given.\n"
         "You can only edit lines `read` actually displayed. Re-read with an offset to "
         "reach lines you have not seen.\n"
         "Each successful edit returns the file's new tag, so consecutive edits need "
@@ -146,7 +150,10 @@ register(Tool(
     name="write",
     description=(
         "Create a new file, or overwrite an existing one in full. For changes to an "
-        "existing file prefer `edit`. If the file exists you must read it first."
+        "existing file prefer `edit`.\n"
+        "If the file exists you must have read it once earlier in this session (not "
+        "necessarily immediately before). If the user modified it on disk after you "
+        "read it, the tool refuses and asks you to re-read before overwriting."
     ),
     parameters={
         "type": "object",

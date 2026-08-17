@@ -135,7 +135,8 @@ Two independent gates (`agent_server/permissions.py`):
 - **`capture`** — desktop screenshots for anything that isn't a web page.
 - Neither `browser` nor `capture` describes images itself — there is **no built-in
   `vision` tool** by design. They dispatch to whatever custom tool is named
-  `vision` (see `examples/vision-tool.sh`, Ollama).
+  `vision`, so image understanding is something you bring, not something that
+  ships.
 
 ## Editor and file manager
 

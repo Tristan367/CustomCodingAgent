@@ -180,7 +180,7 @@ hr { border: 0; border-top: 1px solid var(--border); margin: 6px 0; }
   border-right: 1px solid var(--border);
   white-space: nowrap;
 }
-.logo-mark { flex: none; margin-right: 6px; }
+.logo-mark { flex: none; }
 .logo:hover { background: var(--bg-hover); text-decoration: none; }
 
 .topbar-link {

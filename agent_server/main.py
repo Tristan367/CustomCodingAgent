@@ -33,6 +33,39 @@ from agent_server.templating import STATIC_DIR
 
 log = logging.getLogger(__name__)
 
+_restart_requested = False
+
+
+def request_restart() -> None:
+    """Ask the lifespan shutdown to re-exec the process instead of exiting."""
+    global _restart_requested
+    _restart_requested = True
+
+
+def _exec_self() -> None:
+    """Replace this process with a fresh copy of itself.
+
+    Called only after a clean shutdown (database closed, subprocesses reaped),
+    so re-running the original command line picks up whatever code changed on
+    disk while the terminal keeps the same child process.
+    """
+    import os
+    import sys
+
+    # sys.orig_argv is the raw interpreter command line (so `-m uvicorn` is
+    # preserved), which is exactly what must be run again.
+    argv = list(getattr(sys, "orig_argv", []) or [])
+    if not argv:
+        argv = [sys.executable, "-m", "uvicorn", "agent_server.main:app"]
+    argv[0] = sys.executable  # resolve a possibly-relative launcher path
+    if os.name == "nt":
+        # os.execv is unavailable on Windows: spawn a detached copy and end.
+        import subprocess
+
+        subprocess.Popen(argv, close_fds=True)
+        os._exit(0)
+    os.execv(sys.executable, argv)
+
 
 async def _reap_browsers():
     """Close browser contexts nobody has used lately.
@@ -144,6 +177,11 @@ async def lifespan(app: FastAPI):
     await whisper_streaming.shutdown()
     await browser.close_browser()
     await close_db()
+
+    # A restart is a shutdown followed by re-exec: everything above has already
+    # run, so the process image can be swapped with nothing left half-open.
+    if _restart_requested:
+        _exec_self()
 
 
 app = FastAPI(title="CodeAgent", lifespan=lifespan)

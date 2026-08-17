@@ -105,19 +105,26 @@
     "name": "new_secret"
   },
   {
-    "path": "/_quick_chat",
-    "methods": [
-      "POST"
-    ],
-    "name": "quick_chat"
-  },
-  {
-    "path": "/_run_script",
-    "methods": [
-      "POST"
-    ],
-    "name": "run_script"
-  },
+     "path": "/_quick_chat",
+     "methods": [
+       "POST"
+     ],
+     "name": "quick_chat"
+   },
+   {
+     "path": "/_restart",
+     "methods": [
+       "POST"
+     ],
+     "name": "restart"
+   },
+   {
+     "path": "/_run_script",
+     "methods": [
+       "POST"
+     ],
+     "name": "run_script"
+   },
   {
     "path": "/_save_custom_endpoint",
     "methods": [

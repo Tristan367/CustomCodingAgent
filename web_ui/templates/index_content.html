@@ -68,6 +68,31 @@ async function stopCodeAgent(button) {
         '<p style="padding:2rem;font-family:system-ui">CodeAgent has stopped. ' +
         'Run <code>codeagent</code> to start it again.</p>';
 }
+
+async function restartCodeAgent(button) {
+    const ok = await ui.confirm(
+        'The server will restart to pick up code changes. Any running agent turn is lost.',
+        { title: 'Restart CodeAgent', confirmLabel: 'Restart' });
+    if (!ok) return;
+    button.disabled = true;
+    button.textContent = 'Restarting\u2026';
+    // The connection drops and comes back; poll until the server answers.
+    try { await fetch('/_restart', { method: 'POST' }); } catch (e) { /* expected */ }
+    let attempts = 0;
+    const poll = setInterval(async () => {
+        attempts += 1;
+        try {
+            const r = await fetch('/api/status', { cache: 'no-store' });
+            if (r.ok) { clearInterval(poll); location.reload(); return; }
+        } catch (e) { /* still down */ }
+        if (attempts >= 120) {
+            clearInterval(poll);
+            document.body.innerHTML =
+                '<p style="padding:2rem;font-family:system-ui">The server is taking a while ' +
+                'to come back. Run <code>codeagent</code> if it does not return.</p>';
+        }
+    }, 500);
+}
         async function newEndpoint() {
             const name = await ui.prompt('A short name you will recognise in the model list.', {
                 title: 'Add custom endpoint',
@@ -329,6 +354,9 @@ async function stopCodeAgent(button) {
     </section>
 
     <div class="page-footer">
+        <button type="button" class="btn-secondary btn-sm" onclick="restartCodeAgent(this)">
+            Restart CodeAgent
+        </button>
         <button type="button" class="btn-danger btn-sm" onclick="stopCodeAgent(this)">
             Stop CodeAgent
         </button>

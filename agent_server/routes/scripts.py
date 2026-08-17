@@ -82,6 +82,28 @@ async def shutdown():
     return HTMLResponse('<div class="script-note">Stopped. This page is now dead.</div>')
 
 
+@router.post("/_restart")
+async def restart():
+    """Restart the server from the UI (for developing the server itself).
+
+    Same graceful shutdown as `/_shutdown`, but the lifespan re-execs the process
+    at the end so code changes on disk take effect without leaving the terminal.
+    """
+    from agent_server import main
+
+    log.info("restart requested from the UI")
+    main.request_restart()
+
+    async def _later():
+        await asyncio.sleep(0.3)
+        os.kill(os.getpid(), signal.SIGTERM)
+
+    asyncio.get_running_loop().create_task(_later())
+    return HTMLResponse(
+        '<div class="script-note">Restarting\u2026 the page will come back in a moment.</div>'
+    )
+
+
 @router.post("/_run_script")
 async def run_script(request: Request):
     form = await request.form()

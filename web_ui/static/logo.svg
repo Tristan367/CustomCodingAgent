@@ -5,9 +5,11 @@
       <stop offset="1" stop-color="#6b7d3a"/>
     </linearGradient>
   </defs>
-  <!-- dark bevel so the chevron reads as forged, not a flat play button -->
-  <path d="M15 15 L41 32 L15 49" stroke="#2f3a36" stroke-width="14" stroke-linejoin="miter"/>
-  <path d="M15 15 L41 32 L15 49" stroke="url(#accent)" stroke-width="8" stroke-linejoin="miter"/>
+  <!-- dark bevel so the chevron reads as forged, not a flat play button.
+       bevel (not miter) so the two arms meet with a flat, vertical tip rather
+       than a long pointy miter spike. -->
+  <path d="M15 15 L41 32 L15 49" stroke="#2f3a36" stroke-width="14" stroke-linejoin="bevel"/>
+  <path d="M15 15 L41 32 L15 49" stroke="url(#accent)" stroke-width="8" stroke-linejoin="bevel"/>
   <!-- terminal cursor -->
   <rect x="46" y="24" width="6" height="16" fill="url(#accent)"/>
 </svg>

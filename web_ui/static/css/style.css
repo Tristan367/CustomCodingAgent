@@ -1389,7 +1389,7 @@ input[type="checkbox"] { accent-color: var(--accent); }
 
 /* ── Message actions ─────────────────────────────────────────────────────── */
 
-.msg-side { position: relative; display: flex; flex-direction: column; align-items: flex-end; gap: 4px; }
+.msg-side { position: sticky; top: 0; display: flex; flex-direction: column; align-items: flex-end; gap: 4px; }
 /* The hover-revealed controls must never interrupt a text-selection drag: the
    buttons are form controls, and dragging across one collapses the highlight. */
 .msg-side, .msg-side button, .msg-time, .vol-pop { user-select: none; -webkit-user-select: none; }
@@ -2006,7 +2006,7 @@ kbd {
   gap: var(--s1) var(--s3);
   margin-top: var(--s2);
 }
-.tool-grid .checkbox-label { display: flex; align-items: baseline; gap: var(--s2); }
+.tool-grid .checkbox-label { display: flex; align-items: center; gap: var(--s2); }
 .tool-grid code { color: var(--accent); }
 .tool-grid .hint { margin: 0; }
 

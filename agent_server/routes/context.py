@@ -106,7 +106,7 @@ def _expandable_tools() -> list[str]:
 
 
 async def _hide_thinking() -> bool:
-    return await db.get_setting("hide_thinking", "0") == "1"
+    return await db.get_setting("hide_thinking", "1") == "1"
 
 
 async def _hide_tool_calls() -> bool:

@@ -5,10 +5,9 @@
       <stop offset="1" stop-color="#6b7d3a"/>
     </linearGradient>
   </defs>
-  <!-- A ">" chevron drawn as two quads (the arms). The tip (54,32) is a sharp
-       point where only the two outer edges meet. The two inner corners are
-       pulled back to the mouth vertex (24,32), so they converge there instead,
-       leaving a V-shaped mouth on the left and just two points at the tip. -->
-  <path d="M8 8 L54 32 L24 32 L8 22 Z" fill="url(#accent)"/>
-  <path d="M24 32 L54 32 L8 56 L8 42 Z" fill="url(#accent)"/>
+  <!-- A ">" chevron drawn as a single continuous outline (the two arms). The
+       tip (54,32) is a sharp point where only the two outer edges meet; the
+       two inner corners are pulled back to the mouth vertex (24,32), leaving a
+       V-shaped mouth on the left. One path so there is no seam down the middle. -->
+  <path d="M8 8 L54 32 L8 56 L8 42 L24 32 L8 22 Z" fill="url(#accent)"/>
 </svg>

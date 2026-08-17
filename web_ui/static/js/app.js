@@ -3613,8 +3613,8 @@ const Speech = {
     el.classList.toggle('speaking', !!active);
     if (btn) {
       btn.innerHTML = playing
-        ? '<svg viewBox="0 0 24 24" width="21" height="21" aria-hidden="true"><path d="M6 5h4v14H6zM14 5h4v14h-4z" fill="currentColor"/></svg>'
-        : '<svg viewBox="0 0 24 24" width="21" height="21" aria-hidden="true"><path d="M8 5v14l11-7z" fill="currentColor"/></svg>';
+        ? '<svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true"><path d="M6 5h4v14H6zM14 5h4v14h-4z" fill="currentColor"/></svg>'
+        : '<svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true"><path d="M8 5v14l11-7z" fill="currentColor"/></svg>';
       btn.title = playing ? 'Pause' : 'Read this reply aloud';
     }
   },
@@ -3667,7 +3667,7 @@ function setupMessageSide() {
 
     const wrap = el('span', 'msg-copy');
     const btn = button('', 'copy-btn', () => copyMessage(node));
-    btn.innerHTML = '<svg viewBox="0 0 24 24" width="20" height="20" aria-hidden="true"><rect x="9" y="9" width="13" height="13" rx="2" fill="none" stroke="currentColor" stroke-width="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1" fill="none" stroke="currentColor" stroke-width="2"/></svg>';
+    btn.innerHTML = '<svg viewBox="0 0 24 24" width="15" height="15" aria-hidden="true"><rect x="9" y="9" width="13" height="13" rx="2" fill="none" stroke="currentColor" stroke-width="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1" fill="none" stroke="currentColor" stroke-width="2"/></svg>';
     btn.title = 'Copy to clipboard';
     wrap.appendChild(btn);
     side.appendChild(wrap);
@@ -3722,7 +3722,7 @@ function attachPlayButtons() {
 
     const actions = el('span', 'msg-actions');
     const playBtn = button('', 'play-btn', () => Speech.toggle(node));
-    playBtn.innerHTML = '<svg viewBox="0 0 24 24" width="21" height="21" aria-hidden="true"><path d="M8 5v14l11-7z" fill="currentColor"/></svg>';
+    playBtn.innerHTML = '<svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true"><path d="M8 5v14l11-7z" fill="currentColor"/></svg>';
     playBtn.title = 'Read aloud';
     actions.appendChild(playBtn);
     const vol = el('span', 'vol-pop');

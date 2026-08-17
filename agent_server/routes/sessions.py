@@ -1,5 +1,7 @@
 """Session CRUD."""
 
+from pathlib import Path
+
 from fastapi import APIRouter, HTTPException
 
 from agent_server import agent
@@ -24,15 +26,18 @@ async def _require(session_id: str) -> dict:
     return session
 
 
-async def _validate(body: SessionCreate | SessionUpdate):
+async def _validate(body: SessionCreate | SessionUpdate, current_provider: str = ""):
     if body.provider and body.provider not in list_providers():
         raise HTTPException(400, f"Unknown provider: {body.provider}")
     # A custom endpoint serves whatever its operator configured, so its model
     # ids cannot be checked against the built-in table. Everything else must be
     # a model this app knows how to price and size a context window for -- the
     # hand-configured table or the ids discovered from the DeepSeek endpoint.
+    # `current_provider` covers PATCH, where the form sends only a model and the
+    # session's existing provider is what determines whether that model is known.
+    provider = body.provider or current_provider
     known_model = is_known_model(body.model)
-    custom_provider = (body.provider or "").startswith("custom:")
+    custom_provider = (provider or "").startswith("custom:")
     if body.model and not known_model and not custom_provider:
         raise HTTPException(400, f"Unknown model: {body.model}")
     # A model implies its provider. Letting the two be set independently is how
@@ -52,9 +57,15 @@ async def _validate(body: SessionCreate | SessionUpdate):
 @router.post("")
 async def create_session(body: SessionCreate):
     await _validate(body)
+    project_dir = (body.project_dir or "").strip()
+    if not project_dir:
+        raise HTTPException(400, "A project directory is required")
+    directory = Path(project_dir).expanduser()
+    if not directory.is_dir():
+        raise HTTPException(400, f"Not a directory: {project_dir}")
     return await db.create_session(
         name=body.name.strip() or "Untitled",
-        project_dir=body.project_dir,
+        project_dir=str(directory.resolve()),
         provider=body.provider or provider_for_model(body.model),
         model=body.model,
         prompt_profile=body.prompt_profile,
@@ -75,8 +86,8 @@ async def get_session(session_id: str):
 
 @router.patch("/{session_id}")
 async def update_session(session_id: str, body: SessionUpdate):
-    await _require(session_id)
-    await _validate(body)
+    session = await _require(session_id)
+    await _validate(body, current_provider=session.get("provider") or "")
     updates = {k: v for k, v in body.model_dump(exclude_unset=True).items() if v is not None}
     # Switching model switches provider with it. The settings form only sends a
     # model, so without this a session moved to Claude kept asking DeepSeek for

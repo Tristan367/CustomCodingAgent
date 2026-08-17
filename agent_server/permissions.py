@@ -35,7 +35,18 @@ async def list_allowed(session_id: str) -> list[str]:
 
 
 async def allow_directory(session_id: str, path: str) -> list[str]:
-    await db.add_write_dir(session_id, str(Path(path).expanduser().resolve()))
+    resolved = Path(path).expanduser().resolve()
+    # Defense in depth: the UI grants directories, but a crafted resolve body
+    # must not widen the allowlist to a denied or non-directory path. Refuse
+    # quietly here; the /write-dirs endpoint does its own 400 validation.
+    if is_denied(resolved):
+        return await list_allowed(session_id)
+    try:
+        if not resolved.is_dir():
+            return await list_allowed(session_id)
+    except OSError:
+        return await list_allowed(session_id)
+    await db.add_write_dir(session_id, str(resolved))
     return await list_allowed(session_id)
 
 

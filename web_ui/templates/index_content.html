@@ -78,7 +78,13 @@ async function stopCodeAgent(button) {
             const form = document.createElement('form');
             form.method = 'POST';
             form.action = '/_new_custom_endpoint';
-            form.innerHTML = '<input name="name" value="' + name.replace(/"/g,'&quot;') + '">';
+            // Build the field with a value property so the name can never inject
+            // markup; string-interpolating it into innerHTML was an XSS vector.
+            const input = document.createElement('input');
+            input.type = 'hidden';
+            input.name = 'name';
+            input.value = name;
+            form.appendChild(input);
             document.body.appendChild(form);
             form.submit();
         }
@@ -438,8 +444,12 @@ async function saveSttModel(path) {
 /* Judging a voice from its name is hopeless, so play a line with the current
    settings. One preview at a time: starting another stops the last. */
 let ttsPreview = null;
+let ttsPreviewUrl = null;
+let ttsPreviewCtx = null;
 async function previewTts(btn) {
     if (ttsPreview) { ttsPreview.pause(); ttsPreview = null; }
+    if (ttsPreviewCtx) { try { ttsPreviewCtx.close(); } catch (_) {} ttsPreviewCtx = null; }
+    if (ttsPreviewUrl) { URL.revokeObjectURL(ttsPreviewUrl); ttsPreviewUrl = null; }
     const label = btn.textContent;
     btn.textContent = 'Loading';
     btn.disabled = true;
@@ -455,21 +465,26 @@ async function previewTts(btn) {
         });
         if (!resp.ok) throw new Error(await resp.text());
         const url = URL.createObjectURL(await resp.blob());
+        ttsPreviewUrl = url;
         ttsPreview = new Audio(url);
         ttsPreview.volume = parseFloat(document.getElementById('tts-volume').value);
         // Preview through the same low-pass the player uses, or the slider
         // would be the one control you cannot actually hear.
         try {
             const ctx = new (window.AudioContext || window.webkitAudioContext)();
+            ttsPreviewCtx = ctx;
             const filter = ctx.createBiquadFilter();
             filter.type = 'lowpass';
             filter.frequency.value = parseFloat(document.getElementById('tts-tone').value);
             ctx.createMediaElementSource(ttsPreview).connect(filter).connect(ctx.destination);
-            ttsPreview.addEventListener('ended', () => ctx.close());
+            ttsPreview.addEventListener('ended', () => { ctx.close(); ttsPreviewCtx = null; });
         } catch (_) { /* plays unfiltered */ }
-        ttsPreview.addEventListener('ended', () => URL.revokeObjectURL(url));
+        ttsPreview.addEventListener('ended', () => { URL.revokeObjectURL(url); ttsPreviewUrl = null; });
         ttsPreview.play();
     } catch (e) {
+        if (ttsPreviewCtx) { try { ttsPreviewCtx.close(); } catch (_) {} ttsPreviewCtx = null; }
+        if (ttsPreviewUrl) { URL.revokeObjectURL(ttsPreviewUrl); ttsPreviewUrl = null; }
+        ttsPreview = null;
         btn.textContent = 'Failed';
         setTimeout(() => { btn.textContent = label; }, 1500);
         return;

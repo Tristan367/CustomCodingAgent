@@ -180,6 +180,7 @@ hr { border: 0; border-top: 1px solid var(--border); margin: 6px 0; }
   border-right: 1px solid var(--border);
   white-space: nowrap;
 }
+.logo-mark { flex: none; margin-right: 6px; }
 .logo:hover { background: var(--bg-hover); text-decoration: none; }
 
 .topbar-link {
@@ -666,6 +667,8 @@ a.file-ref:hover { border-bottom-style: solid; color: var(--text); background: v
 .notice-error .msg-role { color: var(--danger); }
 .notice-aborted .content-text { background: var(--bg-raised); border-left: 2px solid var(--warn); color: var(--warn); }
 .notice-aborted .msg-role { color: var(--warn); }
+.notice-pending .content-text { background: var(--bg-raised); border-left: 2px solid var(--accent); color: var(--accent); }
+.notice-pending .msg-role { color: var(--accent); }
 
 /* ── Permission cards ────────────────────────────────────────────────────── */
 

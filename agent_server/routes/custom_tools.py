@@ -237,12 +237,22 @@ async def save_secret(request: Request):
     back = _safe_back(str(form.get("back", "")))
     name = str(form.get("name", "")).strip()
     value = str(form.get("value", "")).strip()
+    orig_name = str(form.get("orig_name", "")).strip()
     if not name:
         return RedirectResponse(back, status_code=303)
     if value and "\u2022" in value:
         return RedirectResponse(back, status_code=303)
     if value:
         await db.save_secret(name, value)
+        if orig_name and orig_name != name:
+            await db.delete_secret(orig_name)
+    elif orig_name and orig_name != name:
+        # A rename with no new value (the field is masked): carry the old value
+        # across so renaming does not silently discard the secret.
+        old = (await db.load_secrets_dict()).get(orig_name)
+        if old:
+            await db.save_secret(name, old)
+            await db.delete_secret(orig_name)
     return RedirectResponse(back, status_code=303)
 
 

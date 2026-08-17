@@ -187,7 +187,11 @@ async def _refresh_one(name: str, starter: str, kind: str = SYSTEM):
     untouched = _digest(body) == marker or (not marker and _is_shipped(body))
     if untouched and body.strip() != starter.strip():
         await db.save_prompt(name, starter.strip(), kind)
-        _background_propagate(name)
+        # Only system prompts queue a re-render on running sessions. Propagating
+        # a compaction-prompt default would set pending_system_prompt (a system
+        # prompt) on every "default" session, which is not what changed.
+        if kind == SYSTEM:
+            _background_propagate(name)
     if untouched:
         await db.set_setting(marker_key, _digest(starter))
 
@@ -316,9 +320,14 @@ def _tier_tools(row: dict, tier: int) -> str | None:
 
 
 def _default_subagent_off() -> set[str]:
-    """task and any custom tool scripts are off by default."""
+    """`task`/`explore` and any custom tool scripts are off by default.
+
+    Both `task` and `explore` share the subagent loop; leaving `explore` enabled
+    while `task` was off would let a subagent recurse unboundedly by calling
+    `explore` instead.
+    """
     from agent_server.tools.registry import _custom_tool_names
-    off = {"task"}
+    off = {"task", "explore"}
     off.update(_custom_tool_names)
     return off
 

@@ -123,7 +123,7 @@ async def run_script(request: Request):
         # EOF rather than for the shell to exit, so `ollama serve &` blocks for
         # the full timeout and then gets killed along with the server it just
         # started. Starting a daemon is the main thing these scripts are for.
-        stdout, stderr, detached = await asyncio.wait_for(
+        stdout, stderr, detached, truncated = await asyncio.wait_for(
             _collect(proc), timeout=RUN_TIMEOUT_SEC
         )
     except TimeoutError:
@@ -138,10 +138,10 @@ async def run_script(request: Request):
             f'<div class="script-exit fail">{html.escape(str(e))}</div>'
         )
 
-    return HTMLResponse(_render_run(proc.returncode, stdout, stderr, detached))
+    return HTMLResponse(_render_run(proc.returncode, stdout, stderr, detached, truncated))
 
 
-def _render_run(code: int, stdout: bytes, stderr: bytes, detached: bool) -> str:
+def _render_run(code: int, stdout: bytes, stderr: bytes, detached: bool, truncated: bool = False) -> str:
     out = stdout.decode("utf-8", errors="replace")
     err = stderr.decode("utf-8", errors="replace")
 
@@ -153,6 +153,10 @@ def _render_run(code: int, stdout: bytes, stderr: bytes, detached: bool) -> str:
         parts.append(
             '<div class="script-note">The shell exited and left something running. '
             "It was not killed, and anything it prints from here on is not captured.</div>"
+        )
+    if truncated:
+        parts.append(
+            '<div class="script-note">Output exceeded the capture limit and was truncated.</div>'
         )
 
     for title, text in (("stdout", out), ("stderr", err)):

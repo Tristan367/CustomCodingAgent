@@ -110,14 +110,16 @@ async def test_sudo_password_injected_into_bash_args(clean_db):
         # Allow first run to fully retire
         await asyncio.sleep(0.1)
 
-        # Second run: tool should execute with sudo_password injected
+        # Second run: tool should execute with sudo_password injected, but the
+        # secret must not leak into the stream or the run buffer.
         h2 = agent.start_run(sid)
         events2 = await _drain(h2, sid)
         tool_starts = [e for e in events2 if e["type"] == "tool_start"]
         assert len(tool_starts) >= 1, f"no tool_start in {[e['type'] for e in events2]}"
         args = tool_starts[0].get("args", {})
-        assert "sudo_password" in args, f"sudo_password missing from args: {args}"
-        assert args["sudo_password"] == "sekret"
+        assert "sudo_password" not in args, f"sudo_password leaked into stream: {args}"
+        # The stored password was still consumed and handed to the tool.
+        assert not (agent._sudo_passwords.get(sid) or {}), "password not consumed"
     finally:
         await _forget(sid)
 

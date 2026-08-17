@@ -271,9 +271,9 @@ def _publish(run: _Run, event: dict):
         queue.put_nowait(event)
 
 
-async def _drive(session_id: str, handle: _Run):
+async def _drive(session_id: str, handle: _Run, abort: asyncio.Event):
     try:
-        async for event in run(session_id):
+        async for event in run(session_id, abort):
             _publish(handle, event)
     except asyncio.CancelledError:
         _publish(handle, {"type": "error", "message": "Run cancelled."})
@@ -301,12 +301,15 @@ async def _retire(session_id: str, handle: _Run):
 
 def forget_session(session_id: str):
     """Drop everything held in memory for a session that no longer exists."""
-    from agent_server import browser
+    from agent_server import browser, dir_watcher
     from agent_server.system_prompt import clear_env_cache
     from agent_server.tools.file_ops import clear_read_cache
+    from agent_server.tools.task import forget_session as forget_subagent_sem
 
     clear_env_cache(session_id)
     clear_read_cache(session_id)
+    dir_watcher.unwatch(session_id)
+    forget_subagent_sem(session_id)
     # Its Chromium context holds ~100MB and a copy of whatever the session was
     # logged into. Closing is async and this is not; the session is going away
     # regardless, so it is scheduled when there is a loop to schedule it on.
@@ -383,9 +386,15 @@ def start_run(session_id: str) -> _Run:
     existing = _runs.get(session_id)
     if existing is not None and session_id in _aborts:
         return existing
+    # Set the abort marker synchronously, before the task can even run. Doing it
+    # inside `run` (after several awaits) left a window where two callers both
+    # saw "idle", both persisted a message, and the loser popped the winner's
+    # abort marker -- stranding one turn and letting another start on top of it.
+    abort = asyncio.Event()
+    _aborts[session_id] = abort
     handle = _Run()
     _runs[session_id] = handle
-    handle.task = asyncio.create_task(_drive(session_id, handle))
+    handle.task = asyncio.create_task(_drive(session_id, handle, abort))
     return handle
 
 
@@ -429,44 +438,49 @@ async def subscribe(session_id: str, replay: bool = True) -> AsyncIterator[dict]
         run.subscribers.discard(queue)
 
 
-async def run(session_id: str) -> AsyncIterator[dict]:
+async def run(session_id: str, abort: asyncio.Event | None = None) -> AsyncIterator[dict]:
     """Drive the session forward and yield UI events.
 
-    Assumes any new user input has already been persisted.
+    Assumes any new user input has already been persisted. `abort` is the run's
+    cancellation marker; `start_run` creates it synchronously so the "is this
+    session busy" check cannot race. A direct caller (tests) passes nothing and
+    this function owns the marker itself.
     """
-    session = await db.get_session(session_id)
-    if session is None:
-        yield {"type": "error", "message": "Session not found"}
-        return
+    if abort is None:
+        if session_id in _aborts:
+            yield {"type": "error", "message": "This session already has a run in progress."}
+            return
+        abort = asyncio.Event()
+        _aborts[session_id] = abort
 
-    provider = get_provider(session["provider"])
-    if not provider.has_credentials():
-        yield {
-            "type": "error",
-            "message": f"No API key configured for {session['provider']}. Add one on the home page.",
-        }
-        return
-
-    if session_id in _aborts:
-        yield {"type": "error", "message": "This session already has a run in progress."}
-        return
-
-    abort = asyncio.Event()
-    _aborts[session_id] = abort
-    ctx = ToolContext(
-        session_id=session_id,
-        project_dir=session["project_dir"],
-        provider=session["provider"],
-        model=session["model"],
-        subagent_model=session.get("subagent_model") or "",
-        prompt_profile=session.get("prompt_profile") or "default",
-        abort=abort,
-    )
-    _set_status(session_id, "running")
     outcome = "done"
     tools_count = 0
-    log.info("turn start session=%s model=%s", session_id, session["model"])
     try:
+        session = await db.get_session(session_id)
+        if session is None:
+            yield {"type": "error", "message": "Session not found"}
+            return
+
+        provider = get_provider(session["provider"])
+        if not provider.has_credentials():
+            yield {
+                "type": "error",
+                "message": f"No API key configured for {session['provider']}. Add one on the home page.",
+            }
+            return
+
+        ctx = ToolContext(
+            session_id=session_id,
+            project_dir=session["project_dir"],
+            provider=session["provider"],
+            model=session["model"],
+            subagent_model=session.get("subagent_model") or "",
+            prompt_profile=session.get("prompt_profile") or "default",
+            abort=abort,
+        )
+        _set_status(session_id, "running")
+        log.info("turn start session=%s model=%s", session_id, session["model"])
+
         # Tell the client the database id of the turn it just started, so the
         # message bubble it optimistically rendered can gain its edit/retry
         # actions without a full re-render.
@@ -843,11 +857,15 @@ async def _drain_pending(session: dict, ctx: ToolContext) -> AsyncIterator[dict]
             return
 
         _approved_calls.get(session_id, set()).discard(call["id"])
-        # Inject sudo password if one was stored for this call.
+        # Inject the sudo password if one was stored for this call. It is kept
+        # out of the tool_start event so a secret never reaches the browser or
+        # the run buffer, but still reaches the tool itself.
         pwd = (_sudo_passwords.get(session_id) or {}).pop(call["id"], None)
+        public_args = args
         if pwd and name == "bash" and "sudo" in (args.get("command") or ""):
             args["sudo_password"] = pwd
-        yield {"type": "tool_start", "tool_call_id": call["id"], "name": name, "args": args}
+            public_args = {k: v for k, v in args.items() if k != "sudo_password"}
+        yield {"type": "tool_start", "tool_call_id": call["id"], "name": name, "args": public_args}
 
         if _doom_key(call) in doomed:
             result = ToolResult.error(

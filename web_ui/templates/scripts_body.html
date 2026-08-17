@@ -128,6 +128,7 @@
     <div class="inline-form" style="margin-bottom:6px">
         <form method="POST" action="/_save_secret" class="inline-form" style="flex:1; margin:0">
             <input type="hidden" name="back" value="{{ back }}">
+            <input type="hidden" name="orig_name" value="{{ s.name }}">
             <input type="text" name="name" value="{{ s.name }}" placeholder="VAR_NAME"
                    style="flex:1" autocomplete="off" spellcheck="false"
                    onchange="this.form.querySelector('button[type=submit]').disabled=false">

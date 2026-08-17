@@ -74,7 +74,7 @@ def _parse_tiers(p: dict) -> list[dict]:
         result.append({
             "body": str(entry.get("body", "")).strip(),
             "off": off,
-            "parallel_cap": int(entry.get("parallel_cap", 3) or 3),
+            "parallel_cap": max(0, int(entry.get("parallel_cap", 3) or 3)),
             "model": str(entry.get("model", "")).strip(),
         })
     return result
@@ -85,7 +85,7 @@ def _cap_val(raw, default=0):
     if raw is None:
         return default
     try:
-        return int(raw)
+        return max(0, int(raw))
     except (TypeError, ValueError):
         return default
 
@@ -199,7 +199,7 @@ async def save_prompts(request: Request):
 
     master_spawn_raw = str(form.get("master_spawn", "0"))
     try:
-        master_spawn = int(master_spawn_raw)
+        master_spawn = max(0, int(master_spawn_raw))
     except (TypeError, ValueError):
         master_spawn = 0
 
@@ -211,7 +211,7 @@ async def save_prompts(request: Request):
     sa_off = ",".join(sorted(n for n in TOOLS if n not in sa_enabled)) if sa_visible else ""
     sa_cap_raw = str(form.get("sa_cap", "3"))
     try:
-        sa_cap = int(sa_cap_raw)
+        sa_cap = max(0, int(sa_cap_raw))
     except (TypeError, ValueError):
         sa_cap = 3
 
@@ -221,7 +221,7 @@ async def save_prompts(request: Request):
     # Global session-wide cap.
     max_conc_raw = str(form.get("max_concurrent", "100"))
     try:
-        max_conc = int(max_conc_raw)
+        max_conc = max(0, int(max_conc_raw))
     except (TypeError, ValueError):
         max_conc = 100
 
@@ -280,7 +280,7 @@ def _collect_tiers(form) -> str:
             break
         cap_raw = str(form.get(f"sa_cap_{tier}", "3"))
         try:
-            cap = int(cap_raw)
+            cap = max(0, int(cap_raw))
         except (TypeError, ValueError):
             cap = 3
         model = str(form.get(f"sa_model_{tier}", "")).strip()

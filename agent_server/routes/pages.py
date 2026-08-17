@@ -24,9 +24,14 @@ router = APIRouter()
 
 @router.get("/")
 async def index(request: Request, clone: str = ""):
+    err = request.query_params.get("error", "")
+    error_text = ""
+    if err == "toolong":
+        error_text = "That script is too long to save."
     return templates.TemplateResponse(
         request=request, name="index.html",
         context=await _home_context(
+            error=error_text,
             clone_id=clone,
             edit_script=request.query_params.get("script", ""),
             saved=request.query_params.get("saved") == "true",

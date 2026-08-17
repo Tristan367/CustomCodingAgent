@@ -8,9 +8,7 @@
        app palette (equal specificity, later stylesheet wins). #}
     <link rel="stylesheet" href="/static/vendor/highlight/github-dark.min.css">
     <link rel="stylesheet" href="/static/css/style.css">
-    {# A drawn triangle rather than the U+25B6 glyph. The glyph carried its own
-       side bearing, which the tab strip rendered as a gap before the title. #}
-    <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'><polygon points='3,2 14,8 3,14' fill='%238ea24f'/></svg>">
+    <link rel="icon" type="image/svg+xml" href="/static/logo.svg">
     <script src="/static/js/htmx.min.js"></script>
     <script src="/static/vendor/highlight/highlight.min.js"></script>
     <script src="/static/js/markdown.js"></script>
@@ -21,7 +19,14 @@
       data-theme="{{ current_theme() }}"
       {% if current_theme() == 'custom' %}style="{{ custom_theme_style() }}"{% endif %}>
     <header id="top-bar">
-        <a href="/" class="logo" title="Home">CodeAgent</a>
+        <a href="/" class="logo" title="Home">
+            <svg class="logo-mark" viewBox="0 0 64 64" width="18" height="18" aria-hidden="true">
+                <path d="M15 15 L41 32 L15 49" stroke="var(--accent-dim)" stroke-width="14" stroke-linejoin="miter"/>
+                <path d="M15 15 L41 32 L15 49" stroke="var(--accent)" stroke-width="8" stroke-linejoin="miter"/>
+                <rect x="46" y="24" width="6" height="16" fill="var(--accent)"/>
+            </svg>
+            <span>CodeAgent</span>
+        </a>
         <nav id="tab-bar"><div class="tab-scroll" id="tab-scroll"></div></nav>
         <a href="/prompts" class="topbar-link" title="Prompts">Prompts</a>
         <a href="/tools" class="topbar-link" title="Custom tools">Tools</a>

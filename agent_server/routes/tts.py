@@ -43,8 +43,11 @@ async def tts_plan(body: PlanBody):
 
 @router.post("/speak")
 async def tts_speak(body: SpeakBody):
+    # The settings UI clamps speed to 0.5–2.0; mirror that here so a crafted
+    # request cannot push an absurd rate into the synthesis backend.
+    speed = min(2.0, max(0.5, body.speed))
     try:
-        audio = await tts_service.synth(body.text, body.voice, body.speed)
+        audio = await tts_service.synth(body.text, body.voice, speed)
     except tts_service.TTSError as e:
         raise HTTPException(400, str(e)) from e
     # no-store: these are regenerated freely and there is no point filling the

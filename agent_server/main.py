@@ -130,6 +130,9 @@ async def lifespan(app: FastAPI):
     log.info("codeagent shutting down")
     reaper.cancel()
     whisper_warmup.cancel()
+    # Await the cancellation so the warm-up task is actually done before the
+    # whisper-server (and DB) are shut down, rather than racing them.
+    await asyncio.gather(reaper, whisper_warmup, return_exceptions=True)
     from agent_server import whisper_streaming
     from agent_server.tools import browser
 

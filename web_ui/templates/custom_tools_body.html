@@ -159,6 +159,7 @@
     <p class="hint">Each secret is injected as an env var into custom tool scripts and the home-page scripts. Reference as <code>$NAME</code>. Values never displayed after saving.</p>
     {% for s in secrets %}
     <form hx-post="/_save_secret" hx-target="#tools-page" hx-swap="outerHTML" class="inline-form" style="margin-bottom:6px">
+        <input type="hidden" name="orig_name" value="{{ s.name }}">
         <input type="text" name="name" value="{{ s.name }}" placeholder="VAR_NAME" style="flex:1" autocomplete="off" spellcheck="false"
                onchange="this.form.querySelector('button[type=submit]').disabled=false">
         {% if s.value %}

@@ -179,7 +179,7 @@ async def run_bash(
             proc.stdin.close()
         elif has_sudo and not sudo_password and proc.stdin is not None:
             proc.stdin.close()
-        stdout, stderr, detached = await asyncio.wait_for(
+        stdout, stderr, detached, truncated = await asyncio.wait_for(
             _collect(proc), timeout=timeout_sec
         )
     except TimeoutError:
@@ -189,6 +189,7 @@ async def run_bash(
         _kill(proc)
         raise
     except Exception as e:
+        _kill(proc)
         return ToolResult.error(f"failed to execute: {e}", title)
 
     out = stdout.decode("utf-8", errors="replace").strip()
@@ -196,6 +197,9 @@ async def run_bash(
     code = proc.returncode
 
     parts = []
+    # First, so truncate() (which keeps the head) cannot cut this note off.
+    if truncated:
+        parts.append("[output truncated: exceeded the capture limit]")
     if out:
         parts.append(out)
     if err:
@@ -224,8 +228,13 @@ async def run_bash(
 # already at EOF by then, so this costs nothing in the common case.
 BACKGROUND_DRAIN_SEC = 0.25
 
+# Upper bound on how much stdout+stderr is buffered in memory. A command that
+# floods its pipes must not grow the sink without limit; beyond this the bytes
+# are still read (so the process is not blocked on a full pipe) but discarded.
+MAX_CAPTURE_BYTES = 5_000_000
 
-async def _collect(proc) -> tuple[bytes, bytes, bool]:
+
+async def _collect(proc) -> tuple[bytes, bytes, bool, bool]:
     """Read stdout/stderr, but stop waiting once the shell itself has exited.
 
     `communicate()` waits for the pipes to reach EOF, not for the process to
@@ -234,20 +243,34 @@ async def _collect(proc) -> tuple[bytes, bytes, bool]:
     communicate() blocks for the full timeout and the process group then gets
     killed -- taking the server with it. Waiting on the shell instead means a
     backgrounded command returns immediately, as the user expects.
+
+    Returns ``(stdout, stderr, detached, truncated)``.
     """
     out: list[bytes] = []
     err: list[bytes] = []
+    state = {"out": 0, "err": 0, "truncated": False}
 
-    async def drain(stream, sink):
+    async def drain(stream, sink, key):
         while True:
             chunk = await stream.read(65536)
             if not chunk:
                 return
-            sink.append(chunk)
+            used = state[key]
+            remaining = MAX_CAPTURE_BYTES - used
+            if remaining <= 0:
+                state["truncated"] = True
+                continue
+            if len(chunk) > remaining:
+                sink.append(chunk[:remaining])
+                state[key] = MAX_CAPTURE_BYTES
+                state["truncated"] = True
+            else:
+                sink.append(chunk)
+                state[key] = used + len(chunk)
 
     readers = [
-        asyncio.create_task(drain(proc.stdout, out)),
-        asyncio.create_task(drain(proc.stderr, err)),
+        asyncio.create_task(drain(proc.stdout, out, "out")),
+        asyncio.create_task(drain(proc.stderr, err, "err")),
     ]
     try:
         # NB: neither communicate() nor wait() can be used here. Both only
@@ -265,7 +288,7 @@ async def _collect(proc) -> tuple[bytes, bytes, bool]:
             task.cancel()
         await asyncio.gather(*readers, return_exceptions=True)
 
-    return b"".join(out), b"".join(err), detached
+    return b"".join(out), b"".join(err), detached, state["truncated"]
 
 
 def _kill(proc):

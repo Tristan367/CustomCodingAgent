@@ -19,6 +19,7 @@ router = APIRouter()
 @router.post("/_settings")
 async def save_settings(request: Request):
     form = await request.form()
+    changed_keys: dict[str, str] = {}
     for ps in get_provider_settings_fields():
         changed = False
         for f in ps["fields"]:
@@ -33,10 +34,18 @@ async def save_settings(request: Request):
             if f.get("kind") == "password" and "\u2022" in value:
                 continue
             await db.set_setting(f["key"], value)
+            changed_keys[f["key"]] = value
             changed = True
         if changed:
             p = get_provider(ps["key"])
             p.invalidate_key_cache()
+    if changed_keys:
+        # Re-seed the credentials cache with the values just saved, so the next
+        # api_key() lookup does not fall through to a blocking sqlite read on the
+        # event loop (the cache was just invalidated above).
+        from agent_server.providers import credentials
+
+        credentials.prime(changed_keys)
     return templates.TemplateResponse(
         request=request, name="index_content.html", context=await _home_context()
     )
@@ -75,11 +84,14 @@ async def save_tts_settings(
 @router.post("/_settings/expand")
 async def save_expand_setting(request: Request):
     """Which tool results the transcript opens without a click."""
+    from agent_server.routes.context import _expandable_tools
+
     try:
         body = await request.json()
     except Exception:
         return {"ok": False}
-    names = [str(v) for v in body] if isinstance(body, list) else []
+    allowed = set(_expandable_tools())
+    names = [str(v) for v in body if str(v) in allowed] if isinstance(body, list) else []
     await db.set_setting("expand_tools", json.dumps(names))
     return {"ok": True}
 

@@ -47,6 +47,11 @@ and relevant code snippets. Do not ask questions or describe your plan."""
 _session_sem: dict[str, tuple[int, asyncio.Semaphore]] = {}
 
 
+def forget_session(session_id: str) -> None:
+    """Drop the per-session semaphore when a session is deleted."""
+    _session_sem.pop(session_id, None)
+
+
 async def run_task(ctx: ToolContext, *, description: str, prompt: str, count: int = 1, **_) -> ToolResult:
     title = description[:70]
     if count < 1:
@@ -236,21 +241,37 @@ async def _run(ctx: ToolContext, description: str, prompt: str, title: str, tool
 
         if finish != "tool_calls" or not calls:
             if content.strip():
-                return ToolResult(output=content.strip(), title=title, usage=usage_total or None)
+                text = content.strip()
+                if finish == "length":
+                    text += "\n\n[subagent output truncated: reached the output limit]"
+                return ToolResult(output=text, title=title, usage=usage_total or None)
             return ToolResult.error("subagent returned no answer", title, usage_total)
 
         for call in calls:
             tool_name = tool_call_name(call)
             tool_args = parse_arguments(call)
+            owner = True
             if tool_cache is not None:
                 cache_key = (tool_name, json.dumps(tool_args, sort_keys=True))
-                if cache_key in tool_cache:
-                    result = tool_cache[cache_key]
+                task = tool_cache.get(cache_key)
+                if task is None:
+                    task = asyncio.create_task(
+                        execute_tool(tool_name, tool_args, child_ctx, allowed=tool_names)
+                    )
+                    tool_cache[cache_key] = task
                 else:
-                    result = await execute_tool(tool_name, tool_args, child_ctx, allowed=tool_names)
-                    tool_cache[cache_key] = result
+                    owner = False
+                # shield: one sibling's timeout must not cancel the shared call
+                # out from under the others awaiting it.
+                result = await asyncio.shield(task)
             else:
                 result = await execute_tool(tool_name, tool_args, child_ctx, allowed=tool_names)
+            # Only the subagent that actually ran the call records its usage, so
+            # a deduped call is counted once rather than once per requester.
+            if owner and getattr(result, "usage", None):
+                for k, v in result.usage.items():
+                    if isinstance(v, (int, float)):
+                        usage_total[k] = usage_total.get(k, 0) + v
             messages.append({
                 "role": "tool",
                 "tool_call_id": call["id"],

@@ -114,6 +114,7 @@ const App = {
 /* ── Boot ────────────────────────────────────────────────────────────────── */
 
 function initSession() {
+  disposeDetachedSides();
   const view = document.getElementById('session-view');
   const previous = App.sessionId;
   App.sessionId = view ? view.dataset.sessionId : null;
@@ -126,6 +127,7 @@ function initSession() {
     // App.streaming true so the new tab refuses to attach to its own run.
     // The server run is untouched -- only this page stops listening.
     detachStream();
+    Dictation.teardown();
     pendingImages = [];
     renderAttachments();
     // Snapshot the old session's editor (buffer, scroll, open state) into
@@ -535,6 +537,14 @@ function handleEvent(event, stream) {
       // the transcript must show the same thing.
       refreshTranscript();
       refreshMeta();
+      // The transcript was just replaced; the stream's DOM refs still point into
+      // the detached tree. Reset them so the next content/reasoning event makes
+      // a fresh bubble in the new transcript instead of writing into a node that
+      // is no longer in the document.
+      stream.assistantEl = null;
+      stream.contentEl = null;
+      stream.reasoningEl = null;
+      stream.text = '';
       break;
     }
 
@@ -3380,6 +3390,22 @@ window.addEventListener('blur', () => {
   document.body.classList.remove('selecting');
 });
 
+// Message elements that carry a side-column ResizeObserver, so a replaced
+// transcript can disconnect them. Without this a fresh observer per message
+// retained every detached subtree (ResizeObserver keeps a strong reference to
+// its targets) across refreshes and session switches.
+const sideObserved = new Set();
+
+function disposeDetachedSides() {
+  for (const node of [...sideObserved]) {
+    if (!node.isConnected) {
+      if (node._resizeObserver) node._resizeObserver.disconnect();
+      node._resizeObserver = null;
+      sideObserved.delete(node);
+    }
+  }
+}
+
 function setupMessageSide() {
   document.querySelectorAll('.message:not([data-side-done])').forEach((node) => {
     node.dataset.sideDone = '1';
@@ -3426,6 +3452,7 @@ function setupMessageSide() {
       });
       observer.observe(side);
       node._resizeObserver = observer;
+      sideObserved.add(node);
     }
 
     node.appendChild(nodeSide);

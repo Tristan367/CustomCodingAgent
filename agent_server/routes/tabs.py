@@ -43,5 +43,14 @@ async def tab_close(session_id: str):
 @router.post("/_tab_order")
 async def tab_order(payload: dict):
     ids = [str(i) for i in payload.get("ids", [])]
-    await _save_tabs(ids)
+    # Deduplicate and drop ids whose sessions no longer exist, so a crafted or
+    # stale order cannot pin a ghost tab to the bar.
+    valid = {s["id"] for s in await db.list_sessions()}
+    seen: set[str] = set()
+    ordered = []
+    for sid in ids:
+        if sid in valid and sid not in seen:
+            seen.add(sid)
+            ordered.append(sid)
+    await _save_tabs(ordered)
     return {"ok": True}

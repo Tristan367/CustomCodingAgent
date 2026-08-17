@@ -129,7 +129,19 @@ async def _ensure_browser():
         if _browser is not None and _browser.is_connected():
             return _browser
         if _browser is not None:
+            # The browser crashed. Close whatever the dead object still holds and
+            # restart the driver too, so a fresh launch is not poisoned by it.
+            try:
+                await _browser.close()
+            except Exception:
+                pass
             _browser = None
+            if _playwright is not None:
+                try:
+                    await _playwright.stop()
+                except Exception:
+                    pass
+                _playwright = None
         if _playwright is None:
             from playwright.async_api import async_playwright
 

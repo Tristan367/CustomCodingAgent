@@ -537,6 +537,14 @@ async def _subagent_guard(name: str, args: dict, ctx: ToolContext) -> ToolResult
                 "subagents may only run read-only commands; ask the parent agent to run this",
                 name,
             )
+    if name == "browser":
+        # Driving a page can click, fill, submit and eval, which is as
+        # side-effecting as a write. A subagent cannot ask before acting, so the
+        # whole tool is off for it; the parent agent drives the browser.
+        return ToolResult.error(
+            "subagents may not drive the browser; ask the parent agent to run this",
+            name,
+        )
     return None
 
 

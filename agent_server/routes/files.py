@@ -258,7 +258,12 @@ async def read_file(session_id: str, path: str):
     if not p.is_file():
         raise HTTPException(404, f"Not a file: {p}")
     try:
-        raw = p.read_bytes()
+        size = p.stat().st_size
+        # Read only the editor's limit (plus a little for a trailing multi-byte
+        # character) so a multi-gigabyte file is not buffered whole and then
+        # thrown away. `size` still reports the true file length.
+        with open(p, "rb") as f:
+            raw = f.read(MAX_READ_BYTES + 4)
     except OSError as e:
         raise HTTPException(403, f"Cannot read {p}: {e}") from None
     if b"\x00" in raw[:_BINARY_SNIFF]:
@@ -273,8 +278,8 @@ async def read_file(session_id: str, path: str):
         return {
             "path": str(p),
             "content": raw.decode("utf-8", errors="replace")[:MAX_READ_BYTES],
-            "truncated": len(raw) > MAX_READ_BYTES,
-            "size": len(raw),
+            "truncated": size > MAX_READ_BYTES,
+            "size": size,
             "has_bom": False,
             "line_ending": "\n",
             "lang": lang_for_path(p),
@@ -282,12 +287,11 @@ async def read_file(session_id: str, path: str):
     line_ending = _detect_line_ending(text)
     if line_ending == "\r\n":
         text = text.replace("\r\n", "\n")
-    truncated = len(raw) > MAX_READ_BYTES
     return {
         "path": str(p),
         "content": text[:MAX_READ_BYTES],
-        "truncated": truncated,
-        "size": len(raw),
+        "truncated": size > MAX_READ_BYTES,
+        "size": size,
         "has_bom": has_bom,
         "line_ending": line_ending,
         "lang": lang_for_path(p),
@@ -299,6 +303,8 @@ async def save_file(body: SaveRequest):
     """Write text back to a file, gated by the same permissions as the tools."""
     session = await _session(body.session_id)
     p = _resolve(session, body.path)
+    if len(body.content) > MAX_READ_BYTES * 4:
+        raise HTTPException(400, "File content too large to save.")
     if permissions.is_denied(p):
         raise HTTPException(403, f"{p} is a protected path.")
     if not await permissions.write_allowed(body.session_id, p, session["project_dir"]):

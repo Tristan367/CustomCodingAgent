@@ -1,7 +1,9 @@
 """Fetch a URL and convert it to readable text."""
 
+import asyncio
 import html
 import re
+import socket
 from urllib.parse import urlparse
 
 import httpx
@@ -19,7 +21,7 @@ MAX_BYTES = WEBFETCH_MAX_BYTES
 MAX_REDIRECTS = 10
 
 
-def _is_private(host: str) -> bool:
+async def _is_private(host: str) -> bool:
     """True for anything on this machine or the local network.
 
     The agent's own API is on localhost, so without this the model can reach
@@ -27,12 +29,11 @@ def _is_private(host: str) -> bool:
     metadata endpoints live on link-local addresses for the same reason.
     """
     import ipaddress
-    import socket
 
     if not host:
         return True
     try:
-        infos = socket.getaddrinfo(host, None)
+        infos = await asyncio.get_running_loop().getaddrinfo(host, None)
     except socket.gaierror:
         return False  # unresolvable; the request will fail on its own
     for info in infos:
@@ -51,7 +52,7 @@ async def webfetch(ctx: ToolContext, *, url: str, **_) -> ToolResult:
     if not url.startswith(("http://", "https://")):
         return ToolResult.error(f"invalid URL (must be http/https): {url}", title)
 
-    if not WEBFETCH_ALLOW_PRIVATE and _is_private(urlparse(url).hostname or ""):
+    if not WEBFETCH_ALLOW_PRIVATE and await _is_private(urlparse(url).hostname or ""):
         return ToolResult.error(
             "refusing to fetch a local or private-network address. "
             "Set WEBFETCH_ALLOW_PRIVATE=1 if that is genuinely wanted.",
@@ -67,51 +68,69 @@ async def webfetch(ctx: ToolContext, *, url: str, **_) -> ToolResult:
                 "Accept": "text/html,application/xhtml+xml,text/plain,*/*",
             },
         ) as client:
-            resp = await client.get(url)
             # Follow redirects by hand so the private-network guard is re-checked
             # on every hop, not just the first URL. httpx's follow_redirects
             # would happily carry the request to localhost or cloud metadata.
             current = url
-            for _ in range(MAX_REDIRECTS):
-                if resp.status_code not in (301, 302, 303, 307, 308):
+            body = b""
+            status_code = 0
+            content_type = ""
+            encoding = "utf-8"
+            for _ in range(MAX_REDIRECTS + 1):
+                async with client.stream("GET", current) as resp:
+                    if resp.status_code in (301, 302, 303, 307, 308):
+                        location = resp.headers.get("location")
+                        if not location:
+                            return ToolResult.error(
+                                f"redirect from {current} with no Location header", title
+                            )
+                        next_url = str(httpx.URL(current).join(location))
+                        if not WEBFETCH_ALLOW_PRIVATE and await _is_private(
+                            urlparse(next_url).hostname or ""
+                        ):
+                            return ToolResult.error(
+                                "refusing to follow a redirect to a local or private-network "
+                                "address. Set WEBFETCH_ALLOW_PRIVATE=1 if that is genuinely wanted.",
+                                title,
+                            )
+                        current = next_url
+                        continue
+                    # Stream the body with a cap so a huge response is rejected
+                    # while it arrives, not after it has been fully buffered.
+                    chunks = []
+                    total = 0
+                    async for chunk in resp.aiter_bytes():
+                        chunks.append(chunk)
+                        total += len(chunk)
+                        if total > MAX_BYTES:
+                            return ToolResult.error(
+                                f"response too large (>{MAX_BYTES:,} bytes)", title
+                            )
+                    body = b"".join(chunks)
+                    status_code = resp.status_code
+                    content_type = resp.headers.get("content-type", "").lower()
+                    encoding = resp.encoding or "utf-8"
                     break
-                location = resp.headers.get("location")
-                if not location:
-                    return ToolResult.error(
-                        f"redirect from {current} with no Location header", title
-                    )
-                next_url = str(httpx.URL(current).join(location))
-                if not WEBFETCH_ALLOW_PRIVATE and _is_private(urlparse(next_url).hostname or ""):
-                    return ToolResult.error(
-                        "refusing to follow a redirect to a local or private-network "
-                        "address. Set WEBFETCH_ALLOW_PRIVATE=1 if that is genuinely wanted.",
-                        title,
-                    )
-                current = next_url
-                resp = await client.get(next_url)
-            if resp.status_code in (301, 302, 303, 307, 308):
+            else:
                 return ToolResult.error(f"too many redirects for {url}", title)
     except httpx.TimeoutException:
         return ToolResult.error(f"request timed out after {TIMEOUT}s: {url}", title)
     except Exception as e:
         return ToolResult.error(f"fetching {url}: {e}", title)
 
-    if resp.status_code >= 400:
-        return ToolResult.error(f"HTTP {resp.status_code} from {current}", title)
+    if status_code >= 400:
+        return ToolResult.error(f"HTTP {status_code} from {current}", title)
 
-    content_type = resp.headers.get("content-type", "").lower()
-    if len(resp.content) > MAX_BYTES:
-        return ToolResult.error(f"response too large ({len(resp.content):,} bytes)", title)
     if not any(t in content_type for t in ("text/", "json", "xml", "javascript")):
         return ToolResult.error(f"unsupported content-type '{content_type}' for {current}", title)
 
-    text = resp.text
+    text = body.decode(encoding, errors="replace")
     if "html" in content_type:
         text = _html_to_text(text)
 
     text = text.strip()
     if not text:
-        return ToolResult(output=f"(empty response from {current}, HTTP {resp.status_code})", title=title)
+        return ToolResult(output=f"(empty response from {current}, HTTP {status_code})", title=title)
 
     return ToolResult(
         output=truncate(text, MAX_TOOL_RESULT_CHARS, "page", spill=True),

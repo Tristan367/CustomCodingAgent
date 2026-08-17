@@ -12,3 +12,7 @@ __pycache__/
 # Personal scratch notes, not part of the project.
 NOTES.md
 bughunt.txt
+
+# Local-only tooling tied to a personal machine (keep the files, don't ship them).
+examples/vision-tool.sh
+bin/vision-host-stop

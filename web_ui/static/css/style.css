@@ -594,6 +594,35 @@ a.file-ref:hover { border-bottom-style: solid; color: var(--text); background: v
   overflow-y: auto;
 }
 
+/* The thinking summary is the thinking itself: clamped to one line while
+   collapsed so the first line is always visible, expanded into the full block. */
+.reasoning-summary {
+  display: -webkit-box;
+  -webkit-line-clamp: 1;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+  white-space: pre-wrap;
+  word-break: break-word;
+  color: var(--text-dim);
+  font-size: 12px;
+  font-family: var(--sans);
+  padding: 2px 0;
+  cursor: pointer;
+  list-style: none;
+}
+.reasoning-summary::-webkit-details-marker { display: none; }
+.reasoning-summary:hover { color: var(--text); }
+.reasoning-details[open] .reasoning-summary {
+  display: block;
+  margin: 5px 0 0;
+  padding: 8px 11px;
+  background: var(--bg-inset);
+  border-left: 2px solid var(--border-strong);
+  border-radius: 0 4px 4px 0;
+  max-height: 340px;
+  overflow-y: auto;
+}
+
 /* ── Tool calls ──────────────────────────────────────────────────────────── */
 
 .tool-details { margin: 0 0 4px; }
@@ -1366,11 +1395,11 @@ input[type="checkbox"] { accent-color: var(--accent); }
 body.selecting .msg-actions,
 body.selecting .msg-copy,
 body.selecting .msg-time { opacity: 0 !important; visibility: hidden !important; }
-.msg-actions { position: absolute; top: 50px; left: 0; right: 0; display: flex; justify-content: center; gap: 4px; opacity: 0; visibility: hidden; transition: opacity 120ms ease, visibility 0s 120ms; z-index: 3; }
+.msg-actions { position: absolute; top: 54px; left: 0; right: 0; display: flex; justify-content: center; gap: 4px; opacity: 0; visibility: hidden; transition: opacity 120ms ease, visibility 0s 120ms; z-index: 3; }
 .message:hover .msg-actions { opacity: 1; visibility: visible; transition: opacity 120ms ease, visibility 0s 0s; }
 .msg-copy {
   position: absolute;
-  top: 18px;
+  top: 26px;
   left: 0;
   right: 0;
   display: flex;
@@ -1385,9 +1414,13 @@ body.selecting .msg-time { opacity: 0 !important; visibility: hidden !important;
   border: 0;
   color: var(--text-faint);
   cursor: pointer;
-  padding: 4px;
+  width: 28px;
+  height: 28px;
+  min-height: 0;
+  padding: 0;
   display: flex;
   align-items: center;
+  justify-content: center;
   border-radius: 4px;
   transition: background 120ms ease, color 120ms ease;
 }
@@ -1860,6 +1893,15 @@ input:disabled, textarea:disabled { opacity: 0.6; background: var(--bg-inset); }
 /* ── Speech ──────────────────────────────────────────────────────────────── */
 
 .play-btn { padding: 0 2px; }
+.msg-actions .play-btn {
+  width: 28px;
+  height: 28px;
+  min-height: 0;
+  padding: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
 
 /* The reply being read keeps its control visible; the rest follow the
    timestamps and appear on hover. */

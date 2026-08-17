@@ -1081,21 +1081,21 @@ function appendMailMessage(fromName, text) {
    does not change how a reasoning block looks. */
 function appendReasoning() {
   const node = el('div', 'message thinking');
-  // The "Reasoning" summary already names the row; the role gutter stays empty
-  // so it does not read "reasoning" twice (matches chat_messages.html).
   const role = el('div', 'msg-role');
   role.title = 'reasoning';
   node.appendChild(role);
   const body = el('div', 'msg-content');
   const details = el('details', 'tool-details reasoning-details');
   details.open = true;
-  const text = el('pre', 'reasoning-text');
-  details.append(el('summary', 'tool-summary', 'Reasoning'), text);
+  // The summary *is* the thinking: collapsed it clamps to one line via CSS,
+  // expanded it shows the whole block.
+  const summary = el('summary', 'reasoning-summary');
+  details.appendChild(summary);
   body.appendChild(details);
   node.appendChild(body);
   node.appendChild(el('span', 'msg-time', clockTime()));
   App.els.messages.appendChild(node);
-  return text;
+  return summary;
 }
 
 function collapseReasoning(textEl) {
@@ -3669,10 +3669,10 @@ function setupMessageSide() {
       actionsEl.style.top = '';
       const observer = new ResizeObserver(() => {
         const h = side.clientHeight;
-        if (h < 76) {
-          // Buttons are ~52px tall. Stack from bottom so they stay inside.
-          actionsEl.style.top = Math.max(0, h - 24) + 'px';
-          copyEl.style.top = Math.max(0, h - 58) + 'px';
+        if (h < 84) {
+          // Buttons are ~56px tall. Stack from bottom so they stay inside.
+          actionsEl.style.top = Math.max(0, h - 28) + 'px';
+          copyEl.style.top = Math.max(0, h - 56) + 'px';
         } else {
           actionsEl.style.top = '';
           copyEl.style.top = '';
@@ -3698,7 +3698,7 @@ function attachPlayButtons() {
 
     const actions = el('span', 'msg-actions');
     const playBtn = button('', 'play-btn', () => Speech.toggle(node));
-    playBtn.innerHTML = '<svg viewBox="0 0 24 24" width="14" height="14" aria-hidden="true"><path d="M8 5v14l11-7z" fill="currentColor"/></svg>';
+    playBtn.innerHTML = '<svg viewBox="0 0 24 24" width="21" height="21" aria-hidden="true"><path d="M8 5v14l11-7z" fill="currentColor"/></svg>';
     playBtn.title = 'Read aloud';
     actions.appendChild(playBtn);
     const vol = el('span', 'vol-pop');

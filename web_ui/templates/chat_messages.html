@@ -98,8 +98,7 @@
         <div class="msg-role" title="reasoning"></div>
         <div class="msg-content">
             <details class="tool-details reasoning-details"{% if 'reasoning' in expand_tools %} open{% endif %}>
-                <summary class="tool-summary">Reasoning</summary>
-                <pre class="reasoning-text">{{ m.reasoning_content }}</pre>
+                <summary class="reasoning-summary">{{ m.reasoning_content }}</summary>
             </details>
         </div>
         <span class="msg-time">{{ m.created_at | clocktime }}</span>

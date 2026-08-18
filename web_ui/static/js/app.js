@@ -3403,8 +3403,9 @@ const Speech = {
   el: null,            // the .message element being read
   sentences: [],
   cursor: 0,           // next sentence awaiting synthesis
-  queue: [],           // { url } clips ready but not yet played
+  queue: [],           // { url, start, end } clips ready but not yet played
   current: null,       // the clip in the element right now
+  speakingIndex: -1,   // sentence currently underlined
   token: 0,            // bumped on every stop, to strand in-flight fetches
   producing: false,
   audioEl: null, ctx: null, filter: null, gainNode: null,
@@ -3439,6 +3440,7 @@ const Speech = {
     const a = new Audio();
     a.addEventListener('ended', () => this.advance());
     a.addEventListener('error', () => this.advance());
+    a.addEventListener('timeupdate', () => this.onProgress());
     this.audioEl = a;
     try {
       const Ctx = window.AudioContext || window.webkitAudioContext;
@@ -3533,10 +3535,11 @@ const Speech = {
         // moment the reserve is drawn down.
         if (this.queue.length >= 2) break;
         const chunk = this.nextChunk();
+        const start = this.cursor;
         this.cursor += chunk.length;
         const url = await this.render(chunk.join(' '), token);
         if (token !== this.token) { if (url) URL.revokeObjectURL(url); return; }
-        if (url) this.queue.push({ url });
+        if (url) this.queue.push({ url, start, end: start + chunk.length });
         if (!this.current) this.playNext();
       }
     } finally {
@@ -3577,6 +3580,7 @@ const Speech = {
     const a = this.engine();
     a.src = clip.url;
     this.resume();
+    this.highlight(clip.start);
     this.paint();
     // Keep the pipeline turning once playback has drawn down the reserve.
     if (!this.producing) this.produce();
@@ -3591,6 +3595,7 @@ const Speech = {
     this.sentences = [];
     this.cursor = 0;
     this.producing = false;
+    this.clearHighlight();
     const was = this.el;
     this.el = null;
     if (was) this.paint(was);
@@ -3608,6 +3613,100 @@ const Speech = {
     const form = new FormData();
     Object.entries(fields).forEach(([k, v]) => form.append(k, String(v)));
     fetch('/_settings/tts', { method: 'POST', body: form }).catch(() => {});
+  },
+
+  /* ── Sentence underline ────────────────────────────────────────────────
+   * The sentence currently being read gets a subtle underline so the eye can
+   * follow the voice. A clip may cover several sentences, so the exact sentence
+   * is estimated from how far through the clip the audio has got, weighting by
+   * each sentence's length. */
+
+  clearHighlight() {
+    if (!this.el) return;
+    this.el.querySelectorAll('.tts-cursor').forEach((span) => {
+      const parent = span.parentNode;
+      span.replaceWith(...span.childNodes);
+    });
+    this.speakingIndex = -1;
+  },
+
+  highlight(index) {
+    const el = this.el;
+    const sentences = this.sentences;
+    if (!el || !Array.isArray(sentences) || !sentences.length) return;
+    if (index === this.speakingIndex) return;
+    this.speakingIndex = index;
+    el.querySelectorAll('.tts-cursor').forEach((span) => {
+      const parent = span.parentNode;
+      span.replaceWith(...span.childNodes);
+    });
+
+    // The sentence list was split from the spoken prose, but the DOM shows the
+    // rendered markdown. Map by proportion of the total length: exact offsets
+    // would need markdown-offset tracking, and sentences are close enough in
+    // shape that the proportional position lands on the right one.
+    const total = sentences.reduce((s, t) => s + (t || '').length, 0);
+    if (!total) return;
+    let before = 0;
+    for (let i = 0; i < index; i++) before += (sentences[i] || '').length;
+
+    const content = el.querySelector('.content-text') || el;
+    // Only the text that is actually spoken: fenced code and tables are skipped
+    // by synthesis, so measuring the same text here stops the underline from
+    // drifting into regions the voice never reads.
+    const nodes = [];
+    const walker = document.createTreeWalker(content, NodeFilter.SHOW_TEXT);
+    while (walker.nextNode()) {
+      const n = walker.currentNode;
+      if (!n.nodeValue.trim()) continue;
+      if (n.parentElement && n.parentElement.closest('pre, table')) continue;
+      nodes.push(n);
+    }
+    const len = nodes.reduce((s, n) => s + n.nodeValue.length, 0);
+    if (!len) return;
+    const start = Math.max(0, Math.round(len * (before / total)));
+    const end = Math.min(len, Math.round(len * ((before + (sentences[index] || '').length) / total)));
+    if (end <= start) return;
+
+    let offset = 0;
+    const parts = [];
+    for (const n of nodes) {
+      const nLen = n.nodeValue.length;
+      const nStart = offset;
+      const nEnd = offset + nLen;
+      offset = nEnd;
+      if (nEnd <= start || nStart >= end) continue;
+      parts.push({ node: n, s: Math.max(0, start - nStart), e: Math.min(nLen, end - nStart) });
+    }
+    for (const p of parts) {
+      const span = document.createElement('span');
+      span.className = 'tts-cursor';
+      const range = document.createRange();
+      range.setStart(p.node, p.s);
+      range.setEnd(p.node, p.e);
+      try { range.surroundContents(span); } catch (err) { /* ignore */ }
+    }
+  },
+
+  onProgress() {
+    const clip = this.current;
+    const a = this.audioEl;
+    if (!clip || !a || !a.duration) return;
+    const span = clip.end - clip.start;
+    if (span <= 1) return;  // a single-sentence clip was underlined when it began
+    const seg = this.sentences.slice(clip.start, clip.end);
+    const total = seg.reduce((s, t) => s + (t || '').length, 0);
+    if (!total) return;
+    const frac = Math.min(1, a.currentTime / a.duration);
+    let target = frac * total;
+    let acc = 0;
+    for (let i = 0; i < seg.length; i++) {
+      acc += (seg[i] || '').length;
+      if (target < acc || i === seg.length - 1) {
+        this.highlight(clip.start + i);
+        break;
+      }
+    }
   },
 
   /* The control reflects three states, and the reply being read is marked so it

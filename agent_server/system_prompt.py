@@ -163,6 +163,12 @@ def _digest(body: str) -> str:
     return hashlib.sha256(body.strip().encode()).hexdigest()
 
 
+# Built-in prompts are hundreds of characters; a body this short is corruption,
+# not a prompt ("x" from a stray edit was the case that shipped). Anything at or
+# above it is preserved as the user's own wording.
+MIN_PROMPT_CHARS = 8
+
+
 async def _refresh_one(name: str, starter: str, kind: str = SYSTEM):
     """Move a built-in prompt forward unless the user has edited it.
 
@@ -184,7 +190,14 @@ async def _refresh_one(name: str, starter: str, kind: str = SYSTEM):
     body = row["body"]
     marker = await db.get_setting(marker_key, "")
     # _is_shipped is the bridge for databases created before markers existed.
-    untouched = _digest(body) == marker or (not marker and _is_shipped(body))
+    # A body shorter than this cannot be a real prompt -- "x" from a stray edit
+    # is the case that shipped -- so it is treated as corrupt and refreshed
+    # rather than preserved as the user's own writing.
+    untouched = (
+        len(body.strip()) < MIN_PROMPT_CHARS
+        or _digest(body) == marker
+        or (not marker and _is_shipped(body))
+    )
     if untouched and body.strip() != starter.strip():
         await db.save_prompt(name, starter.strip(), kind)
         # Only system prompts queue a re-render on running sessions. Propagating
@@ -519,11 +532,9 @@ def environment_block(project_dir: str, session_id: str = "") -> str:
     if cached is not None:
         return cached
 
-    import datetime
     lines = [
         f"Working directory: {project_dir}",
         f"Platform: {platform.system()} {platform.release()} ({platform.machine()})",
-        f"Year: {datetime.datetime.now(datetime.UTC).astimezone().year}",
     ]
     block = "\n".join(lines)
     _env_cache[key] = block

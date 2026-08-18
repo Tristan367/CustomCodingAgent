@@ -136,6 +136,16 @@ async def test_refresh_leaves_a_prompt_the_user_wrote_alone(fresh):
     assert await prompt_body("default") == "My own wording, do not touch."
 
 
+async def test_a_corrupt_builtin_body_is_refreshed(fresh):
+    """A stray edit once left `default` as a bare "x"; the marker treats an
+    unrecognised body as the user's and preserved it. Too-short-to-be-real is
+    corruption, so it is refreshed instead of stuck forever."""
+    await migrate_prompts()
+    await db.save_prompt("default", "x")
+    await migrate_prompts()
+    assert await prompt_body("default") == DEFAULT_PROMPT.strip()
+
+
 async def test_refresh_does_not_touch_prompts_the_user_created(fresh):
     await migrate_prompts()
     await db.save_prompt("deepseek-minimal", "Mine.")

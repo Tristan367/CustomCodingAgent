@@ -191,6 +191,10 @@ _SPOKEN = [
     (re.compile(r"[^\S\n]*--[^\S\n]*"), ", "),
     (re.compile(r"[^\S\n]*\u2192[^\S\n]*"), " becomes "),
     (re.compile(r"[^\S\n]*&[^\S\n]*"), " and "),
+    # A colon or semicolon is a sentence pause, not a run-on: read it as a full
+    # stop. A colon between digits is a time (3:30), keep that one intact.
+    (re.compile(r"(?<!\d):(?!\d)"), ". "),
+    (re.compile(r";"), ". "),
     # File paths read as their segments: /tmp/file.py -> "tmp file dot py".
     (re.compile(r"/"), " "),
     # Collapse ellipses and any repeated full stops into one pause.

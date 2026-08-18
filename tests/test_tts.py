@@ -118,6 +118,16 @@ def test_dots_slashes_and_repeated_stops(raw, spoken):
     assert tts.normalise(raw) == spoken
 
 
+@pytest.mark.parametrize("raw,spoken", [
+    ("Note: this matters", "Note. this matters"),
+    ("Three things: A, B, and C", "Three things. A, B, and C"),
+    ("Do it now; wait later", "Do it now. wait later"),
+    ("Meet at 3:30 today", "Meet at 3:30 today"),   # a time keeps its colon
+])
+def test_colons_and_semicolons_read_as_full_stops(raw, spoken):
+    assert tts.normalise(raw) == spoken
+
+
 def test_normalising_keeps_the_blank_lines_between_list_items():
     r"""Collapsing runs of whitespace welded every item into one block, because
     \s also matches the newlines that separate them."""

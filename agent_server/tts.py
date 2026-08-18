@@ -254,7 +254,12 @@ def sentences(text: str) -> list[str]:
 def plan(text: str) -> list[str]:
     if len(text) > MAX_TEXT_CHARS:
         text = text[:MAX_TEXT_CHARS]
-    return sentences(normalise(to_prose(text)))
+    # Split the raw prose into sentences first, then rewrite each one for the
+    # voice. Normalising before splitting let symbols like ":" and ";" become
+    # full stops and split a sentence in half, so the client's own split of the
+    # rendered text (which sees the raw punctuation) disagreed with this list and
+    # the underline drifted sentence by sentence.
+    return [normalise(s) for s in sentences(to_prose(text))]
 
 
 # ── Synthesis ───────────────────────────────────────────────────────────────

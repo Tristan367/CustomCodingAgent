@@ -165,3 +165,56 @@ async def test_a_bad_request_is_not_retried(session, monkeypatch):
     assert provider.calls == 1, "a non-retryable error should not be retried"
     assert not any(e["type"] == "retry" for e in events)
     assert any(e["type"] == "error" for e in events)
+
+
+class AnswerProvider:
+    """Replies once and stops, recording when it is asked."""
+
+    def __init__(self, order):
+        self.order = order
+
+    def has_credentials(self):
+        return True
+
+    def supports_vision(self):
+        return True
+
+    def count_tokens(self, messages):
+        return 1
+
+    async def chat_completion(self, messages, tools, model, thinking_effort=None):
+        self.order.append("model")
+        yield {"type": "content", "text": "ok"}
+        yield {"type": "finish", "reason": "stop"}
+
+
+async def test_a_message_compacts_first_when_the_session_is_over_threshold(session, monkeypatch):
+    """A turn that is over the threshold must summarise before it sends again.
+
+    Compaction runs at a clean turn boundary -- before the next request -- so
+    when the user sends a message on an over-threshold session, the summary
+    happens first, then the message goes out. This is how a session that ended
+    over the limit (say, on a transient error) recovers on its next message
+    instead of sending a request that already exceeds the compaction threshold.
+    """
+    from agent_server import compaction as compaction_mod
+
+    await db.update_session(session["id"], compact_threshold=100)
+    await db.add_message(session["id"], "assistant", "did some work", token_count=500)
+    await db.add_message(session["id"], "user", "continue")
+
+    order = []
+
+    async def fake_compact(sid, manual_summary="", extra_instructions="", prompt_override=""):
+        order.append("compact")
+        return {"ok": True, "compacted": 1, "kept": 1, "summary": "summarised"}
+
+    monkeypatch.setattr(compaction_mod, "compact_session", fake_compact)
+    provider = AnswerProvider(order)
+    monkeypatch.setattr(agent, "get_provider", lambda _p: provider)
+
+    events = [e async for e in agent.run(session["id"])]
+
+    assert order == ["compact", "model"], f"compaction did not precede the model call: {order}"
+    assert any(e["type"] == "compacted" for e in events)
+    assert events[-1]["type"] == "done"

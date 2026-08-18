@@ -238,6 +238,10 @@ async function refreshTranscript() {
       App.els.messages.replaceWith(fresh);
       App.els.messages = fresh;
       renderStoredMessages();
+      // The fresh partial may carry a pending-restore placeholder (a run paused
+      // on a permission); turn it back into the approval card, not a bare
+      // "waiting on you" line.
+      restorePending();
       scrollToBottom(true);
     }
   } catch (_) { /* leave what is on screen */ }

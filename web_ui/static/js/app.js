@@ -3399,9 +3399,79 @@ async function revokeWriteDir(path) {
  * There is exactly one playback in the app. Starting a new one discards the old
  * one entirely, including its pause position: nothing about speech is stored
  * per message. */
+
+/* Split prose into speakable sentences the same way the server's `plan()` does,
+ * so the underline can be laid down over exact sentence boundaries in the
+ * rendered text instead of estimating them by proportion. */
+function splitProseSentences(text) {
+  const ABBREV = /\b(e\.g|i\.e|etc|vs|Mr|Mrs|Ms|Dr|Prof|St|approx|Fig|No|cf|al)\./gi;
+  const INITIAL = /\b([A-Z])\./g;
+  const DECIMAL = /(\d)\.(?=\d)/g;
+  const SENTENCE_END = /([.!?]+["')\]]*)\s+(?=[A-Z"'([])/g;
+  const out = [];
+  for (const para of text.split(/\n\s*\n/)) {
+    const p = para.trim();
+    if (!p) continue;
+    const safe = p
+      .replace(DECIMAL, (m) => m.replace(/\./g, '\x01'))
+      .replace(INITIAL, (m) => m.replace(/\./g, '\x01'))
+      .replace(ABBREV, (m) => m.replace(/\./g, '\x01'));
+    const marked = safe.replace(SENTENCE_END, '$1\x00');
+    for (const s of marked.split('\x00')) {
+      const clean = s.replace(/\x01/g, '.').trim();
+      if (clean) out.push(clean);
+    }
+  }
+  return out;
+}
+
+/* The text the voice actually reads, in order, with a blank line inserted at
+ * every block boundary (a heading, a list item, a paragraph). Fenced code and
+ * tables are dropped because synthesis skips them, and the blank lines mirror
+ * the server's prose conversion so this split matches the audio's split.
+ *
+ * Rebuilt on every highlight, because wrapping a range in a span splits its
+ * text node. The text itself is stable under that splitting -- an inter-word
+ * space that becomes its own node is kept, while the formatting whitespace that
+ * sits *between* blocks is dropped in favour of the blank line. */
+function speakableText(el) {
+  const content = el.querySelector('.content-text') || el;
+  const BLOCK = new Set(['P', 'LI', 'H1', 'H2', 'H3', 'H4', 'H5', 'H6', 'BLOCKQUOTE']);
+  const nodes = [];
+  const walker = document.createTreeWalker(content, NodeFilter.SHOW_TEXT);
+  while (walker.nextNode()) {
+    const n = walker.currentNode;
+    if (n.parentElement && n.parentElement.closest('pre, table')) continue;
+    nodes.push(n);
+  }
+  let text = '';
+  const spans = [];
+  let lastBlock = null;
+  for (const n of nodes) {
+    let block = n.parentElement;
+    while (block && block !== content && !BLOCK.has(block.tagName)) block = block.parentElement;
+    if (block === content) block = null;
+    if (!n.nodeValue.trim()) {
+      // Whitespace only: keep it if it is an inter-word space inside the same
+      // block, drop it if it is the formatting whitespace between two blocks.
+      if (block && block === lastBlock) {
+        spans.push({ node: n, start: text.length, end: text.length + n.nodeValue.length });
+        text += n.nodeValue;
+      }
+      continue;
+    }
+    if (lastBlock && block !== lastBlock) text += '\n\n';
+    spans.push({ node: n, start: text.length, end: text.length + n.nodeValue.length });
+    text += n.nodeValue;
+    lastBlock = block;
+  }
+  return { text, spans };
+}
+
 const Speech = {
   el: null,            // the .message element being read
   sentences: [],
+  domSpans: null,      // exact sentence ranges in the rendered DOM text
   cursor: 0,           // next sentence awaiting synthesis
   queue: [],           // { url, start, end } clips ready but not yet played
   current: null,       // the clip in the element right now
@@ -3480,6 +3550,22 @@ const Speech = {
     this.audioEl.play().catch(() => {});
   },
 
+  /* Exact sentence ranges in the rendered DOM, so the underline follows real
+   * sentence boundaries rather than a proportional estimate. Only the text the
+   * voice actually reads is measured (fenced code and tables are skipped). */
+  buildDomSpans(el) {
+    const text = speakableText(el).text;
+    const sentences = [];
+    let cursor = 0;
+    for (const s of splitProseSentences(text)) {
+      const i = text.indexOf(s, cursor);
+      if (i < 0) return null;  // split did not round-trip; fall back to proportional
+      sentences.push({ start: i, end: i + s.length });
+      cursor = i + s.length;
+    }
+    return { sentences };
+  },
+
   async start(el) {
     this.stop();
     const raw = el.querySelector('.content-text')?.dataset.raw || '';
@@ -3501,6 +3587,7 @@ const Speech = {
     if (token !== this.token) return;          // superseded while planning
     if (!sentences.length) { this.stop(); return; }
     this.sentences = sentences;
+    this.domSpans = this.buildDomSpans(el);
     this.produce();
   },
 
@@ -3593,6 +3680,7 @@ const Speech = {
     this.queue.forEach((c) => URL.revokeObjectURL(c.url));
     this.queue = [];
     this.sentences = [];
+    this.domSpans = null;
     this.cursor = 0;
     this.producing = false;
     this.clearHighlight();
@@ -3641,42 +3729,57 @@ const Speech = {
       span.replaceWith(...span.childNodes);
     });
 
-    // The sentence list was split from the spoken prose, but the DOM shows the
-    // rendered markdown. Map by proportion of the total length: exact offsets
-    // would need markdown-offset tracking, and sentences are close enough in
-    // shape that the proportional position lands on the right one.
-    const total = sentences.reduce((s, t) => s + (t || '').length, 0);
-    if (!total) return;
-    let before = 0;
-    for (let i = 0; i < index; i++) before += (sentences[i] || '').length;
-
-    const content = el.querySelector('.content-text') || el;
-    // Only the text that is actually spoken: fenced code and tables are skipped
-    // by synthesis, so measuring the same text here stops the underline from
-    // drifting into regions the voice never reads.
-    const nodes = [];
-    const walker = document.createTreeWalker(content, NodeFilter.SHOW_TEXT);
-    while (walker.nextNode()) {
-      const n = walker.currentNode;
-      if (!n.nodeValue.trim()) continue;
-      if (n.parentElement && n.parentElement.closest('pre, table')) continue;
-      nodes.push(n);
+    let parts = [];
+    const spans = this.domSpans;
+    if (spans && spans.sentences.length === sentences.length && spans.sentences[index]) {
+      // Exact boundaries from the rendered text's own sentence split. This is
+      // what keeps the underline from drifting a few characters into the next
+      // line when a sentence ends a block.
+      const r = spans.sentences[index];
+      for (const sp of speakableText(el).spans) {
+        if (sp.end <= r.start || sp.start >= r.end) continue;
+        parts.push({ node: sp.node, s: Math.max(0, r.start - sp.start), e: Math.min(sp.node.nodeValue.length, r.end - sp.start) });
+      }
+    } else {
+      // Fallback: the prose and rendered text differ in length (a code block or
+      // unusual symbols), so estimate by proportion of the total length.
+      const total = sentences.reduce((s, t) => s + (t || '').length, 0);
+      if (!total) return;
+      let before = 0;
+      for (let i = 0; i < index; i++) before += (sentences[i] || '').length;
+      const content = el.querySelector('.content-text') || el;
+      const len = (content.textContent || '').length;
+      if (!len) return;
+      const start = Math.max(0, Math.round(len * (before / total)));
+      const end = Math.min(len, Math.round(len * ((before + (sentences[index] || '').length) / total)));
+      if (end <= start) return;
+      const walker = document.createTreeWalker(content, NodeFilter.SHOW_TEXT);
+      let offset = 0;
+      while (walker.nextNode()) {
+        const n = walker.currentNode;
+        const nLen = n.nodeValue.length;
+        const nStart = offset;
+        const nEnd = offset + nLen;
+        offset = nEnd;
+        if (nEnd <= start || nStart >= end) continue;
+        parts.push({ node: n, s: Math.max(0, start - nStart), e: Math.min(nLen, end - nStart) });
+      }
     }
-    const len = nodes.reduce((s, n) => s + n.nodeValue.length, 0);
-    if (!len) return;
-    const start = Math.max(0, Math.round(len * (before / total)));
-    const end = Math.min(len, Math.round(len * ((before + (sentences[index] || '').length) / total)));
-    if (end <= start) return;
-
-    let offset = 0;
-    const parts = [];
-    for (const n of nodes) {
-      const nLen = n.nodeValue.length;
-      const nStart = offset;
-      const nEnd = offset + nLen;
-      offset = nEnd;
-      if (nEnd <= start || nStart >= end) continue;
-      parts.push({ node: n, s: Math.max(0, start - nStart), e: Math.min(nLen, end - nStart) });
+    // Never underline whitespace: a sentence that ends a block would otherwise
+    // drag its underline across the blank line into the next block.
+    while (parts.length) {
+      const p = parts[0];
+      const m = p.node.nodeValue.slice(p.s, p.e).match(/^\s+/);
+      if (!m) break;
+      p.s += m[0].length;
+      if (p.s >= p.e) parts.shift(); else break;
+    }
+    while (parts.length) {
+      const p = parts[parts.length - 1];
+      const m = p.node.nodeValue.slice(p.s, p.e).match(/\s+$/);
+      if (!m) break;
+      p.e -= m[0].length;
+      if (p.s >= p.e) parts.pop(); else break;
     }
     for (const p of parts) {
       const span = document.createElement('span');

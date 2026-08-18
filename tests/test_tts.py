@@ -44,6 +44,12 @@ def test_emphasis_and_headings_are_stripped():
     assert "Title" in prose and "bold" in prose
 
 
+def test_underscores_in_identifiers_survive():
+    """`_` in paths and dunder names is literal, not an emphasis marker."""
+    prose = tts.to_prose("Run `web_ui/static/js/app.js` and `__init__.py`.")
+    assert prose == "Run web_ui/static/js/app.js and __init__.py."
+
+
 # ── Sentence splitting ──────────────────────────────────────────────────────
 
 def test_a_soft_wrapped_sentence_is_not_split_in_half():

@@ -88,7 +88,11 @@ _HEADING = re.compile(r"^[ \t]*#{1,6}[ \t]*", re.M)
 _QUOTE = re.compile(r"^[ \t]*>[ \t]?", re.M)
 _BULLET = re.compile(r"^[ \t]*(?:[-*+]|\d+[.)])[ \t]+")
 _IS_HEADING = re.compile(r"^[ \t]*#{1,6}[ \t]+")
-_EMPHASIS = re.compile(r"(\*\*|__|\*|_|~~)(?=\S)(.+?)(?<=\S)\1", re.S)
+# Underscores are deliberately NOT emphasis markers here: `route_inventory`,
+# `web_ui`, `__init__` and friends are everywhere in code, and a naive `_..._`
+# match swallowed a whole span between two identifiers, corrupting the prose.
+# Models write bold as `**bold**`, so nothing important is lost.
+_EMPHASIS = re.compile(r"(\*\*|\*|~~)(?=\S)(.+?)(?<=\S)\1", re.S)
 _INLINE_CODE = re.compile(r"`([^`]+)`")
 _BARE_URL = re.compile(r"<?https?://\S+>?")
 _BLANKS = re.compile(r"\n{3,}")

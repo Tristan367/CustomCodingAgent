@@ -13,7 +13,6 @@ import agent_server.system_prompt  # deferred: subagent_parallel_cap in run_task
 from agent_server.config import (
     MAX_TOOL_RESULT_CHARS,
     SUBAGENT_EFFORT,
-    SUBAGENT_TIMEOUT,
 )
 from agent_server.conversation import normalize_tool_calls, parse_arguments, tool_call_name
 from agent_server.tools.base import ToolContext, ToolResult, truncate
@@ -30,8 +29,6 @@ def _subagent_tools():
 # message other sessions; this is enforced here rather than in the profile's
 # disabled list so a profile cannot accidentally re-enable it.
 TOP_LEVEL_ONLY = frozenset({"send_message"})
-
-TIMEOUT = SUBAGENT_TIMEOUT
 
 # Final fallback — should only be used if default_subagent.md is missing AND
 # the DB has no subagent_body for any profile. Better than an empty prompt.
@@ -101,13 +98,11 @@ async def run_task(ctx: ToolContext, *, description: str, prompt: str, count: in
 
     try:
         if count == 1:
-            return await asyncio.wait_for(_guarded(description, prompt, title), timeout=TIMEOUT)
+            return await _guarded(description, prompt, title)
         tool_cache: dict = {}
-        tasks = [asyncio.wait_for(_guarded(description, prompt, title, tool_cache), timeout=TIMEOUT) for _ in range(count)]
+        tasks = [_guarded(description, prompt, title, tool_cache) for _ in range(count)]
         results = await asyncio.gather(*tasks, return_exceptions=True)
         return _combine(results, title)
-    except TimeoutError:
-        return ToolResult.error(f"subagent timed out after {TIMEOUT}s", title)
     except asyncio.CancelledError:
         raise
     except Exception as e:
@@ -124,7 +119,7 @@ async def _batched(ctx, description, prompt, title, count, cap, _guarded):
         n = min(remaining, cap)
         batch_num += 1
         tool_cache: dict = {}
-        tasks = [asyncio.wait_for(_guarded(description, prompt, title, tool_cache), timeout=TIMEOUT) for _ in range(n)]
+        tasks = [_guarded(description, prompt, title, tool_cache) for _ in range(n)]
         results = await asyncio.gather(*tasks, return_exceptions=True)
         _append_results(parts, total_usage, results, (batch_num - 1) * cap)
         remaining -= n
@@ -196,8 +191,8 @@ async def _run(ctx: ToolContext, description: str, prompt: str, title: str, tool
 
     usage_total: dict = {}
 
-    # No round cap: the subagent runs until it answers, is cancelled, or the
-    # enclosing `asyncio.wait_for(..., timeout=TIMEOUT)` fires.
+    # No round cap and no timeout: the subagent runs until it answers or is
+    # cancelled (the user stopping the run sets ctx.abort).
     while True:
         if ctx.abort.is_set():
             return ToolResult.error("cancelled", title, usage_total)

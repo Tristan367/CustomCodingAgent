@@ -242,9 +242,9 @@ CACHE_WARN_TOKENS = int(os.getenv("CACHE_WARN_TOKENS", "25000"))
 MAX_TOOL_RESULT_CHARS = int(os.getenv("MAX_TOOL_RESULT_CHARS", "50000"))
 
 # ── Subagents ────────────────────────────────────────────────────────────────
-# A subagent runs until it answers, is cancelled, or hits the timeout. There is
-# no round cap: a hard round limit cuts off a slow-but-productive agent mid-task.
-SUBAGENT_TIMEOUT = int(os.getenv("SUBAGENT_TIMEOUT", "600"))
+# A subagent runs until it answers or is cancelled by the user stopping the run.
+# There is no round cap or timeout: cutting a slow-but-productive agent off
+# mid-task throws away the work it has already done.
 SUBAGENT_EFFORT = os.getenv("SUBAGENT_EFFORT", "low")
 
 # webfetch

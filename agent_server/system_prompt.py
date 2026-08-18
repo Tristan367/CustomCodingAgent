@@ -532,9 +532,13 @@ def environment_block(project_dir: str, session_id: str = "") -> str:
     if cached is not None:
         return cached
 
+    # Just the operating system family. A kernel or distro version (7.1.3-arch1-1)
+    # changes far more often than anything the agent needs to know, and every
+    # change re-billed the cached prompt prefix.
+    system = {"Darwin": "macOS"}.get(platform.system(), platform.system())
     lines = [
         f"Working directory: {project_dir}",
-        f"Platform: {platform.system()} {platform.release()} ({platform.machine()})",
+        f"Platform: {system}",
     ]
     block = "\n".join(lines)
     _env_cache[key] = block

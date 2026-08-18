@@ -1213,9 +1213,8 @@ input[type="checkbox"] { accent-color: var(--accent); }
 
 .browser-entries { max-height: 600px; overflow-y: auto; padding: 4px; }
 /* On a tall (portrait) screen the browse list was a tiny scroll box. Let it use
-   the height that is there, and the New-session panel more width so a long
-   project path fits the input without scrolling. */
-#new-session { max-width: var(--content-max); }
+   the height that is there; the panel stays the same width as every other one
+   on the home page. */
 #new-session .browser-entries { max-height: min(1200px, 72vh); }
 .browser-entry {
   display: flex;

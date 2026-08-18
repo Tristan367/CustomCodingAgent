@@ -22,8 +22,13 @@ async def _watch(session_id: str, project_dir: str):
     except OSError:
         return
 
+    # Non-recursive on purpose: the only thing we care about is the directory
+    # itself being renamed, not every file inside it. Watching recursively walks
+    # the whole tree (a project with .git/.venv, or the default `~`, can be
+    # hundreds of thousands of files) just to detect one top-level move, and
+    # that walk was the expensive work that made creating a session feel slow.
     try:
-        async for changes in awatch(str(path)):
+        async for changes in awatch(str(path), recursive=False):
             for change_type, _changed_path in changes:
                 if change_type not in (Change.deleted, Change.modified):
                     continue

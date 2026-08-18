@@ -2190,6 +2190,25 @@ function withMicDevice(audio) {
   return deviceId ? { ...audio, deviceId: { exact: deviceId } } : audio;
 }
 
+/* The browser only reveals microphone names (and, on some engines, the devices
+ * themselves) after it has granted permission. Ask for it so the chooser can
+ * list every microphone with its real name; a denied prompt just falls back to
+ * the bare "default" device. */
+async function ensureMicPermission() {
+  if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) return false;
+  try {
+    const devs = await navigator.mediaDevices.enumerateDevices();
+    if (devs.some((d) => d.kind === 'audioinput' && d.label)) return true;
+  } catch (_) { /* fall through to a direct request */ }
+  try {
+    const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+    stream.getTracks().forEach((t) => t.stop());
+    return true;
+  } catch (_) {
+    return false;
+  }
+}
+
 const Dictation = {
   recording: false,
   starting: false,      // set synchronously, before any await
@@ -2711,15 +2730,23 @@ const MicTest = {
     if (this.els.record) this.els.record.addEventListener('click', () => this.toggleRecord());
     if (this.els.play) this.els.play.addEventListener('click', () => this.play());
     this.refreshDevices();
-    if (this.els.device) this.els.device.addEventListener('change', () => this.selectDevice());
+    if (this.els.device) {
+      this.els.device.addEventListener('change', () => this.selectDevice());
+      // Device names are only revealed once the browser has microphone
+      // permission. Ask for it the moment the user reaches for the picker, so
+      // every microphone appears with its real name.
+      this.els.device.addEventListener('focus', () => this.refreshDevices(true));
+    }
   },
 
-  async refreshDevices() {
+  async refreshDevices(ask = false) {
     if (!this.els.device) return;
+    if (ask) await ensureMicPermission();
     let devices = [];
     try {
       devices = (await navigator.mediaDevices.enumerateDevices())
-        .filter((d) => d.kind === 'audioinput');
+        .filter((d) => d.kind === 'audioinput'
+          && d.deviceId && d.deviceId !== 'default' && d.deviceId !== 'communications');
     } catch (_) { /* no list is fine; the default device still works */ }
     const current = micDeviceId();
     this.els.device.textContent = '';
@@ -2776,6 +2803,8 @@ const MicTest = {
     }
     this.active = true;
     this.stream = stream;
+    // Permission is now granted, so re-read the device list with real names.
+    this.refreshDevices();
     this.ctx = new (window.AudioContext || window.webkitAudioContext)();
     this.src = this.ctx.createMediaStreamSource(stream);
     this.gain = this.ctx.createGain();

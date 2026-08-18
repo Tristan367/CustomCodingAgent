@@ -1674,6 +1674,14 @@ async function acceptCacheWarning() {
                       { method: 'POST' });
 }
 
+/* "Stop here" cancels the send: the turn ended before the model answered, so
+   the message is still take-back-able. Put it back in the composer instead of
+   leaving a sent-looking bubble behind. */
+async function stopHere() {
+  closeModal('cache-modal');
+  await revertLastMessage();
+}
+
 function openCompactModal() {
   const ring = document.querySelector('.context-ring');
   const stats = document.getElementById('compact-stats');

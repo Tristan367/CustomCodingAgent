@@ -17,11 +17,9 @@
 
         <span class="spacer"></span>
 
-        <span class="cost-chip" title="Estimated spend in this session">${{ '%.4f' % usage.cost }}</span>
-
         {# Context ring: filled arc = share of the compaction threshold in use. #}
         <button type="button" class="context-ring {{ ring }}" onclick="openCompactModal()"
-                title="{{ '{:,}'.format(usage.context) }} / {{ '{:,}'.format(usage.threshold) }} tokens ({{ pct }}%) &#10;Model window: {{ '{:,}'.format(usage.max_context) }} &#10;Cache hit rate: {{ usage.cache_hit_rate }}% &#10;Session cost: ${{ '%.4f' % usage.cost }} over {{ usage.requests }} requests &#10;&#10;Click to compact or change the threshold">
+                title="{{ '{:,}'.format(usage.context) }} / {{ '{:,}'.format(usage.threshold) }} tokens ({{ pct }}%) &#10;Model window: {{ '{:,}'.format(usage.max_context) }} &#10;Cache hit rate: {{ usage.cache_hit_rate }}% &#10;&#10;Click to compact or change the threshold">
             <svg viewBox="0 0 36 36" width="22" height="22" aria-hidden="true">
                 <circle class="ring-track" cx="18" cy="18" r="15.5" fill="none" stroke-width="4"/>
                 <circle class="ring-fill" cx="18" cy="18" r="15.5" fill="none" stroke-width="4"

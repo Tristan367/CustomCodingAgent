@@ -164,23 +164,14 @@ def test_an_unknown_custom_endpoint_does_not_fall_back_to_deepseek():
         get_provider("custom:gone")
 
 
-def test_pricing_is_marked_unknown_rather_than_zero():
-    """A custom endpoint can serve anything. Reporting $0.0000 as though it
-    were measured is worse than saying the price is not known."""
-    from agent_server.config import model_info
-
-    assert model_info("deepseek-v4-pro")["priced"] is True
-    assert model_info("qwen3-coder:30b")["priced"] is False
-
-
 def test_the_custom_sentinel_is_gone():
-    """`custom` was a fake row in MODELS with a fake context window and zero
-    prices, so it validated as a real model id and could be sent to an API."""
+    """`custom` was a fake row in MODELS with a fake context window, so it
+    validated as a real model id and could be sent to an API."""
     assert "custom" not in MODELS_BY_ID
 
 
 def test_dynamic_models_are_registered_and_deduplicated(clean_dynamic_models):
-    """Discovery merges new ids, skips the hand-priced ones and repeats."""
+    """Discovery merges new ids, skips the hand-listed ones and repeats."""
     register_dynamic_deepseek_models(
         ["deepseek-v4-pro", "deepseek-v4-pro-0813", "deepseek-v4-pro-0813", ""]
     )

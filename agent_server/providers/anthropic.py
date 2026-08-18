@@ -13,8 +13,8 @@ a hard failure here, so the conversion below is the whole point of the module:
    so subagents saw ``tool_use``, concluded the model had not asked for a tool,
    and returned "subagent returned no answer" every time.
 3. ``input_tokens`` excludes cached reads, where OpenAI's ``prompt_tokens``
-   includes them. The shared cost function subtracts one from the other, so
-   left alone it clamped to zero and billed every cache read as free.
+   includes them. The shared totals subtract one from the other, so left
+   alone every cache read would be counted as a miss.
 4. Neither an empty assistant turn nor two turns of the same role is accepted.
 """
 

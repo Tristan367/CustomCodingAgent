@@ -124,9 +124,9 @@
         <h3>This turn will not use the cache</h3>
         <p class="hint" id="cache-detail"></p>
         <p class="hint">
-            A cached prefix is re-read at a fraction of the price, and the cache matches
-            on an exact prefix, so anything changed ahead of the last message is charged
-            again. The figure is an upper bound: the provider sometimes keeps part of it.
+            A cached prefix is re-read far more cheaply, and the cache matches on an
+            exact prefix, so anything changed ahead of the last message is read again in
+            full. The figure is an upper bound: the provider sometimes keeps part of it.
         </p>
         <div class="modal-actions">
             <button type="button" class="btn-primary" onclick="acceptCacheWarning()">Send it anyway</button>
@@ -169,7 +169,6 @@
         <div class="threshold-scale">
             <span>4k</span><span>32k</span><span>256k</span><span>1M</span>
         </div>
-        <p class="hint" id="threshold-cost"></p>
         <div class="modal-actions">
             <button type="button" class="btn-primary" onclick="saveThreshold()">Save threshold</button>
             <button type="button" class="btn-secondary" onclick="closeModal('threshold-modal')">Cancel</button>

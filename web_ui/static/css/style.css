@@ -1363,17 +1363,6 @@ input[type="checkbox"] { accent-color: var(--accent); }
 }
 .context-ring:hover .ring-label { color: var(--text); }
 
-.cost-chip {
-  font-family: var(--mono);
-  font-size: 11px;
-  color: var(--text-dim);
-  padding: 1px 7px;
-  border: 1px solid var(--border);
-  border-radius: 10px;
-  background: var(--bg-inset);
-  white-space: nowrap;
-}
-
 /* ── Tab status dots ─────────────────────────────────────────────────────── */
 
 .tab-dot {

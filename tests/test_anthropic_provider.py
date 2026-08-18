@@ -241,10 +241,3 @@ def test_output_ceilings_match_the_published_limits():
 
     assert model_info("claude-opus-5")["max_output"] == 128_000
     assert model_info("claude-haiku-4-5")["max_output"] == 64_000
-
-
-def test_a_cache_read_is_cheaper_than_a_miss():
-    from agent_server.config import MODELS
-
-    for model in MODELS:
-        assert model["price_in_hit"] < model["price_in_miss"], model["id"]

@@ -649,59 +649,28 @@ async def mark_messages_compacted(session_id: str, message_ids: list[int]):
     )
 
 
-# Anthropic charges 1.25x the base input rate to write a prompt into its cache.
-# Providers that do not bill cache writes separately report zero of them.
-CACHE_WRITE_MULTIPLIER = 1.25
-
-
-def _price(usage_json: str, pricing: dict) -> tuple[dict, float]:
-    """Split one usage record into token counts and its dollar cost.
-
-    `prompt_tokens` is inclusive of cached reads on every provider -- the
-    Anthropic adapter adds its separately-reported parts back together -- so
-    the uncached remainder is the difference.
-    """
+def _usage_dict(usage_json: str) -> dict:
+    """Parse one usage record into its token counts."""
     try:
-        u = json.loads(usage_json)
+        return json.loads(usage_json)
     except (json.JSONDecodeError, TypeError):
-        return {}, 0.0
-    if not pricing.get("priced"):
-        return u, 0.0
-    cached = u.get("cached_tokens", 0) or 0
-    written = u.get("cache_write_tokens", 0) or 0
-    prompt = u.get("prompt_tokens", 0) or 0
-    completion = u.get("completion_tokens", 0) or 0
-    # Reasoning is billed as output. DeepSeek reports it separately from
-    # completion_tokens, so leaving it out understated spend by the entire
-    # thinking volume -- which at high effort is most of the output.
-    reasoning = u.get("reasoning_tokens", 0) or 0
-    if reasoning and reasoning <= completion:
-        # Already inside completion_tokens; do not charge for it twice.
-        reasoning = 0
-    uncached = max(prompt - cached - written, 0)
-    cost = (
-        cached * pricing["price_in_hit"]
-        + written * pricing["price_in_miss"] * CACHE_WRITE_MULTIPLIER
-        + uncached * pricing["price_in_miss"]
-        + (completion + reasoning) * pricing["price_out"]
-    ) / 1_000_000
-    return u, cost
+        return {}
 
 
 async def get_session_usage(session_id: str) -> dict:
-    """Token totals, spend, and live context size for one session."""
+    """Token totals and live context size for one session."""
     from agent_server.config import COMPACT_THRESHOLD_TOKENS, model_info
 
     session = await get_session(session_id)
-    pricing = model_info((session or {}).get("model", ""))
+    info = model_info((session or {}).get("model", ""))
     rows = await _fetchall(
         "SELECT usage FROM messages WHERE session_id = ? AND usage IS NOT NULL",
         (session_id,),
     )
 
-    totals = {"input": 0, "cached": 0, "output": 0, "reasoning": 0, "cost": 0.0, "requests": 0}
+    totals = {"input": 0, "cached": 0, "output": 0, "reasoning": 0, "requests": 0}
     for row in rows:
-        u, cost = _price(row["usage"], pricing)
+        u = _usage_dict(row["usage"])
         if not u:
             continue
         totals["requests"] += 1
@@ -709,11 +678,10 @@ async def get_session_usage(session_id: str) -> dict:
         totals["cached"] += u.get("cached_tokens", 0) or 0
         totals["output"] += u.get("completion_tokens", 0) or 0
         totals["reasoning"] += u.get("reasoning_tokens", 0) or 0
-        totals["cost"] += cost
 
     # The most recent request's prompt size is the truest measure of live context.
     # Assistant rows only. Subagent usage is recorded on tool rows so that its
-    # cost counts, but a subagent's prompt is its own conversation and says
+    # tokens count, but a subagent's prompt is its own conversation and says
     # nothing about how full this session's context is.
     last = await _fetchone(
         "SELECT usage FROM messages WHERE session_id = ? AND usage IS NOT NULL"
@@ -742,7 +710,7 @@ async def get_session_usage(session_id: str) -> dict:
 
     context = 0
     if last and not stale:
-        u, _ = _price(last["usage"], {})
+        u = _usage_dict(last["usage"])
         context = u.get("prompt_tokens", 0) or 0
     if not context:
         row = await _fetchone(
@@ -759,10 +727,7 @@ async def get_session_usage(session_id: str) -> dict:
 
     totals["context"] = context
     totals["threshold"] = (session or {}).get("compact_threshold") or COMPACT_THRESHOLD_TOKENS
-    totals["max_context"] = pricing["context"]
-    # A custom endpoint can serve anything, so its cost is an unpriced zero
-    # rather than a measured one. The UI has to be able to tell them apart.
-    totals["priced"] = pricing["priced"]
+    totals["max_context"] = info["context"]
     totals["percent"] = round(100 * context / totals["threshold"], 1) if totals["threshold"] else 0
     totals["cache_hit_rate"] = (
         round(100 * totals["cached"] / totals["input"], 1) if totals["input"] else 0

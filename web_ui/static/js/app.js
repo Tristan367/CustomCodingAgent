@@ -1664,13 +1664,11 @@ function currentUsage() {
 }
 
 /* Everything before the last message is what gets re-read, so a change up
-   there is charged again in full. Better to ask than to surprise. */
+   there is read again in full. Better to ask than to surprise. */
 function openCacheModal(pause) {
-  const money = (n) => `$${Number(n).toFixed(4)}`;
   document.getElementById('cache-detail').textContent =
-    `Up to ${Number(pause.lost).toLocaleString()} cached tokens will be re-read at the `
-    + `uncached rate: at most ${money(pause.cost)}, against ${money(pause.saved_cost)} `
-    + `had the cache held. Cause: ${pause.reason}.`;
+    `Up to ${Number(pause.lost).toLocaleString()} cached tokens will be re-read `
+    + `at the uncached rate. Cause: ${pause.reason}.`;
   document.getElementById('cache-modal').hidden = false;
 }
 
@@ -1875,11 +1873,6 @@ function openThresholdModal() {
 function updateThresholdLabel() {
   const value = THRESHOLD_STEPS[Number(document.getElementById('threshold-slider').value)] || THRESHOLD_STEPS.at(-1);
   document.getElementById('threshold-value').textContent = formatTokens(value);
-  // Rough guide: a cached full-context request at V4 Pro's cache-hit rate.
-  const perRequest = (value * 0.003625) / 1000000;
-  document.getElementById('threshold-cost').textContent =
-    `At this size a cached request costs about $${perRequest.toFixed(4)}; `
-    + `an uncached one about $${((value * 0.435) / 1000000).toFixed(3)}.`;
 }
 
 async function saveThreshold() {

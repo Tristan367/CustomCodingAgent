@@ -36,12 +36,11 @@ def normalize_finish(reason: str | None) -> FinishReason:
 
 
 def blank_usage() -> dict:
-    """The shape every provider must fill in, so pricing can be one function.
+    """The shape every provider must fill in, so totals line up across providers.
 
     `prompt_tokens` is inclusive of cached reads, which is the OpenAI
-    convention the cost calculation assumes. Anthropic reports them separately
-    and its adapter adds them back in; without that the uncached remainder
-    clamped to zero and cache reads were billed as free.
+    convention. Anthropic reports them separately and its adapter adds them
+    back in; without that the cache-hit rate and context size are wrong.
     """
     return {
         "prompt_tokens": 0,

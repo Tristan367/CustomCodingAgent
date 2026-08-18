@@ -65,6 +65,7 @@ BROWSER_STATE_DIR.mkdir(parents=True, exist_ok=True)
 
 # ── Models ──────────────────────────────────────────────────────────────────
 # Context/limits per https://api-docs.deepseek.com/quick_start/pricing
+# (no price tracking: provider rates move and DeepSeek even varies by time of day)
 DEFAULT_PROVIDER = "deepseek"
 DEFAULT_MODEL = "deepseek-v4-pro"
 DEFAULT_THINKING_EFFORT = "high"
@@ -78,70 +79,46 @@ MODELS = [
         "name": "DeepSeek V4 Pro",
         "provider": "deepseek",
         "context": 1_000_000,
-        # USD per 1M tokens
-        "price_in_hit": 0.003625,
-        "price_in_miss": 0.435,
-        "price_out": 0.87,
     },
     {
         "id": "deepseek-v4-flash",
         "name": "DeepSeek V4 Flash",
         "provider": "deepseek",
         "context": 1_000_000,
-        "price_in_hit": 0.0028,
-        "price_in_miss": 0.14,
-        "price_out": 0.28,
     },
     {
         "id": "anthropic/claude-sonnet-4-20250514",
         "name": "Claude Sonnet 4",
         "provider": "openrouter",
         "context": 200_000,
-        "price_in_hit": 1.25,
-        "price_in_miss": 3.0,
-        "price_out": 15.0,
     },
     {
         "id": "openai/gpt-4.1",
         "name": "GPT-4.1",
         "provider": "openrouter",
         "context": 1_000_000,
-        "price_in_hit": 1.25,
-        "price_in_miss": 2.0,
-        "price_out": 8.0,
     },
     {
         "id": "google/gemini-2.5-pro",
         "name": "Gemini 2.5 Pro",
         "provider": "openrouter",
         "context": 1_000_000,
-        "price_in_hit": 0.25,
-        "price_in_miss": 1.25,
-        "price_out": 10.0,
     },
     {
         "id": "meta-llama/llama-4-maverick",
         "name": "Llama 4 Maverick",
         "provider": "openrouter",
         "context": 1_000_000,
-        "price_in_hit": 0.15,
-        "price_in_miss": 0.20,
-        "price_out": 0.60,
     },
-    # Anthropic, per platform.claude.com/docs/en/about-claude/models/overview
-    # and /pricing, checked 2026-08-10. A cache read is 0.1x the base input
-    # rate and a cache write 1.25x; the previous entries had the write rate in
-    # the hit column and Opus's context and output ceiling were both wrong by
-    # a factor of five, which fed straight into the compaction threshold.
+    # Anthropic, per platform.claude.com/docs/en/about-claude/models/overview,
+    # checked 2026-08-10. Opus's context and output ceiling had both been wrong
+    # by a factor of five, which fed straight into the compaction threshold.
     {
         "id": "claude-fable-5",
         "name": "Claude Fable 5",
         "provider": "anthropic",
         "context": 1_000_000,
         "max_output": 128_000,
-        "price_in_hit": 1.0,
-        "price_in_miss": 10.0,
-        "price_out": 50.0,
     },
     {
         "id": "claude-opus-5",
@@ -149,9 +126,6 @@ MODELS = [
         "provider": "anthropic",
         "context": 1_000_000,
         "max_output": 128_000,
-        "price_in_hit": 0.5,
-        "price_in_miss": 5.0,
-        "price_out": 25.0,
     },
     {
         "id": "claude-sonnet-5",
@@ -159,11 +133,6 @@ MODELS = [
         "provider": "anthropic",
         "context": 1_000_000,
         "max_output": 128_000,
-        # Introductory pricing of $2/$10 runs to 2026-08-31; the standard rate
-        # is $3/$15. Listed at the standard rate so spend is never understated.
-        "price_in_hit": 0.3,
-        "price_in_miss": 3.0,
-        "price_out": 15.0,
     },
     {
         "id": "claude-haiku-4-5",
@@ -171,25 +140,22 @@ MODELS = [
         "provider": "anthropic",
         "context": 200_000,
         "max_output": 64_000,
-        "price_in_hit": 0.1,
-        "price_in_miss": 1.0,
-        "price_out": 5.0,
     },
 ]
 
 MODELS_BY_ID = {m["id"]: m for m in MODELS}
 
 # DeepSeek model ids discovered from the /models endpoint at startup. They carry
-# no pricing or context metadata (the endpoint returns ids only), so they fall
-# through to UNKNOWN_MODEL for sizing and cost. Refreshed on every start so a
-# newly-released model appears without a code change, and never touched for
-# local/custom endpoints (which are queried only for what the operator serves).
+# no context metadata (the endpoint returns ids only), so they fall through to
+# UNKNOWN_MODEL for sizing. Refreshed on every start so a newly-released model
+# appears without a code change, and never touched for local/custom endpoints
+# (which are queried only for what the operator serves).
 DYNAMIC_DEEPSEEK_MODELS: list[str] = []
 
 
 def register_dynamic_deepseek_models(ids: list[str]) -> None:
     """Record ids the DeepSeek /models endpoint returned, minus ones already
-    priced by hand in MODELS."""
+    listed by hand in MODELS."""
     for mid in ids:
         if mid and mid not in MODELS_BY_ID and mid not in DYNAMIC_DEEPSEEK_MODELS:
             DYNAMIC_DEEPSEEK_MODELS.append(mid)
@@ -211,27 +177,23 @@ def dynamic_deepseek_models() -> list[dict]:
 def _humanize_model_id(mid: str) -> str:
     return " ".join("DeepSeek" if t == "deepseek" else t.capitalize() for t in mid.split("-"))
 
-# What a model whose pricing we do not know is assumed to cost and hold. A
-# custom endpoint can serve anything, so the honest answer is "unknown"; these
-# keep the context ring and the cost figure from reading as authoritative zeros.
+# What a model whose context we do not know is assumed to hold. A custom
+# endpoint can serve anything, so the honest answer is "unknown"; these keep the
+# context ring from reading as an authoritative zero.
 UNKNOWN_MODEL = {
     "context": 131_072,
     "max_output": 8_192,
-    "price_in_hit": 0.0,
-    "price_in_miss": 0.0,
-    "price_out": 0.0,
-    "priced": False,
 }
 
 DEFAULT_MAX_OUTPUT = 8_192
 
 
 def model_info(model_id: str) -> dict:
-    """Context window, output ceiling and pricing, or the unknown defaults."""
+    """Context window and output ceiling, or the unknown defaults."""
     entry = MODELS_BY_ID.get(model_id)
     if not entry:
         return {**UNKNOWN_MODEL, "id": model_id}
-    return {"max_output": DEFAULT_MAX_OUTPUT, **entry, "priced": True}
+    return {"max_output": DEFAULT_MAX_OUTPUT, **entry}
 
 
 def provider_for_model(model_id: str) -> str:
@@ -272,8 +234,8 @@ MIN_COMPACT_THRESHOLD = 4096
 THRESHOLD_STEPS = [4096 * 2 ** i for i in range(8)] + [1_000_000]
 
 # Warn before a request throws away this many previously cached tokens. At the
-# miss rate a cached prefix costs ~120x more to re-read, so a large accidental
-# invalidation is worth a confirmation rather than a surprise on the bill.
+# miss rate a cached prefix is ~120x more expensive to re-read, so a large
+# accidental invalidation is worth a confirmation rather than a surprise.
 CACHE_WARN_TOKENS = int(os.getenv("CACHE_WARN_TOKENS", "25000"))
 
 # Safety rails on the agent loop.

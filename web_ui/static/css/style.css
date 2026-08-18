@@ -455,13 +455,6 @@ hr { border: 0; border-top: 1px solid var(--border); margin: 6px 0; }
 
 .content-text > *:first-child { margin-top: 0; }
 .content-text > *:last-child { margin-bottom: 0; }
-/* The sentence currently being read aloud gets a subtle theme underline. */
-.tts-cursor {
-  text-decoration: underline;
-  text-decoration-color: var(--accent);
-  text-decoration-thickness: 2px;
-  text-underline-offset: 3px;
-}
 .content-text p { margin: 0 0 9px; }
 .content-text h1, .content-text h2, .content-text h3,
 .content-text h4, .content-text h5, .content-text h6 {
@@ -1388,7 +1381,7 @@ input[type="checkbox"] { accent-color: var(--accent); }
 .msg-side { position: sticky; top: 0; display: flex; flex-direction: column; align-items: flex-end; gap: 4px; }
 /* The hover-revealed controls must never interrupt a text-selection drag: the
    buttons are form controls, and dragging across one collapses the highlight. */
-.msg-side, .msg-side button, .msg-time, .vol-pop { user-select: none; -webkit-user-select: none; }
+.msg-side, .msg-side button, .msg-time { user-select: none; -webkit-user-select: none; }
 body.selecting .msg-actions,
 body.selecting .msg-copy,
 body.selecting .msg-time { opacity: 0 !important; visibility: hidden !important; }
@@ -1887,78 +1880,10 @@ input:disabled, textarea:disabled { opacity: 0.6; background: var(--bg-inset); }
   resize: vertical;
 }
 
-/* ── Speech ──────────────────────────────────────────────────────────────── */
-
-.play-btn { padding: 0 2px; }
-.msg-actions .play-btn {
-  width: 28px;
-  height: 28px;
-  min-height: 0;
-  padding: 0;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-}
-
-/* The reply being read keeps its control visible; the rest follow the
-   timestamps and appear on hover. */
-.message.speaking .msg-actions { opacity: 1; visibility: visible; }
-.message.speaking .play-btn { color: var(--accent); }
-
-/* Volume drops straight down out of the control, so it never widens the gutter
-   and reads the way a fader does. */
-.vol-pop {
-  position: absolute;
-  top: calc(100% + 3px);
-  left: 50%;
-  transform: translateX(-50%);
-  display: flex;
-  height: 0;
-  overflow: hidden;
-  opacity: 0;
-  transition: height 120ms ease, opacity 120ms ease;
-}
-.msg-actions::after {
-  content: '';
-  position: absolute;
-  top: 100%;
-  left: 0;
-  right: 0;
-  height: 4px;
-}
-.msg-actions:hover .vol-pop,
-.vol-pop:hover,
-.vol-pop:focus-within { height: 82px; opacity: 1; }
-
-.vol-pop input[type="range"] {
-  writing-mode: vertical-lr;
-  direction: rtl;                 /* full volume at the top */
-  /* The thumb is round and about 16px across, so a 14px box clipped a slice
-     off each side and left it looking rectangular. Give it room and keep the
-     track thin instead. */
-  width: 22px;
-  height: 78px;
-  margin: 2px 0 0;
-  background: transparent;
-  accent-color: var(--accent);
-  cursor: pointer;
-}
-.vol-pop input[type="range"]::-webkit-slider-runnable-track { width: 4px; }
-.vol-pop input[type="range"]::-moz-range-track { width: 4px; }
-
 @media (max-width: 640px) {
-  /* No hover on a touch screen, so the control is always shown and the slider
-     stays folded away where it cannot be hit by accident. */
+  /* No hover on a touch screen, so the control is always shown. */
   .msg-actions { opacity: 1; }
-  .vol-pop { display: none; }
 }
-
-/* Settings rows reuse .form-row, but a slider needs its label above it and the
-   Preview button has to sit on the same baseline. */
-.settings-row { flex-wrap: wrap; }
-.settings-row input[type="range"] { width: 100%; accent-color: var(--accent); cursor: pointer; }
-.settings-row output { color: var(--text); font-family: var(--mono); }
-.settings-row .btn-secondary { flex: 0 0 auto; }
 
 kbd {
   font-family: var(--mono);

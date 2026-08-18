@@ -259,13 +259,6 @@
     "name": "save_theme"
   },
   {
-    "path": "/_settings/tts",
-    "methods": [
-      "POST"
-    ],
-    "name": "save_tts_settings"
-  },
-  {
     "path": "/_shutdown",
     "methods": [
       "POST"
@@ -621,27 +614,6 @@
       "WEBSOCKET"
     ],
     "name": "stt_stream"
-  },
-  {
-    "path": "/api/tts/plan",
-    "methods": [
-      "POST"
-    ],
-    "name": "tts_plan"
-  },
-  {
-    "path": "/api/tts/speak",
-    "methods": [
-      "POST"
-    ],
-    "name": "tts_speak"
-  },
-  {
-    "path": "/api/tts/status",
-    "methods": [
-      "GET"
-    ],
-    "name": "tts_status"
   },
   {
     "path": "/docs",

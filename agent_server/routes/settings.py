@@ -1,14 +1,14 @@
-"""Application settings: providers, bash rules, sound control, and TTS."""
+"""Application settings: providers, bash rules, and sound control."""
 
 
 import json
 import re
 
-from fastapi import APIRouter, Form, Request
+from fastapi import APIRouter, Request
 
 from agent_server import database as db
 from agent_server.providers import get_provider, get_provider_settings_fields
-from agent_server.routes.context import _clamp, _home_context
+from agent_server.routes.context import _home_context
 from agent_server.templating import set_custom_color, set_theme, templates
 
 router = APIRouter()
@@ -61,23 +61,6 @@ async def save_sound_setting(request: Request):
         await db.set_setting("sound_choice", str(form.get("sound", "click")))
     if "volume" in form:
         await db.set_setting("sound_volume", str(form.get("volume", "0.5")))
-    return {"ok": True}
-
-
-@router.post("/_settings/tts")
-async def save_tts_settings(
-    voice: str = Form(""), speed: str = Form(""), volume: str = Form(""),
-    tone: str = Form(""),
-):
-    """Each field is optional so the controls can save independently."""
-    if voice:
-        await db.set_setting("tts_voice", voice)
-    if speed:
-        await db.set_setting("tts_speed", str(_clamp(speed, 0.5, 2.0, 1.0)))
-    if volume:
-        await db.set_setting("tts_volume", str(_clamp(volume, 0.0, 1.0, 0.66)))
-    if tone:
-        await db.set_setting("tts_tone", str(int(_clamp(tone, 2000, 20000, 20000))))
     return {"ok": True}
 
 

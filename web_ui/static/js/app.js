@@ -104,7 +104,6 @@ const App = {
   sessionId: null,
   projectDir: null,
   streaming: false,
-  ttsAvailable: false,
   timers: new Set(),
   abortController: null,
   els: {},
@@ -158,13 +157,11 @@ function initSession() {
     initJumpButton();
   }
   stopAllElapsed();
-  Speech.stop();
   renderStoredMessages();
   loadChangeSummary();
   restorePending();
   attachIfRunning();
   Dictation.init();
-  Speech.settings().then((ok) => { App.ttsAvailable = ok; attachPlayButtons(); });
   setupDragDrop();
   markSessionSeen();
   updateComposerButtons();
@@ -259,7 +256,6 @@ function renderStoredMessages() {
   markOpenableTools(document);
   setupMessageSide();
   refreshRevertButtons();
-  attachPlayButtons();
 }
 
 /* ── Sending ─────────────────────────────────────────────────────────────── */
@@ -3207,15 +3203,6 @@ document.addEventListener('keydown', (e) => {
     FileEditor.reopen();
     return;
   }
-  // Space reads the newest reply, the way it plays and pauses a video. Right
-  // Alt was the plan until it turned out Firefox owns it. Only when the caret
-  // is not in a field, and Space must still scroll nothing.
-  if (e.code === 'Space' && !e.ctrlKey && !e.altKey && !e.metaKey && !e.shiftKey
-      && !isTyping(e.target)) {
-    e.preventDefault();
-    if (!e.repeat) playLatestReply();
-    return;
-  }
   if (e.key === 'Escape' && App.streaming) {
     e.preventDefault();
     stopStreaming();
@@ -3402,465 +3389,6 @@ async function revokeWriteDir(path) {
   refreshMeta();
 }
 
-/* ── Speech ──────────────────────────────────────────────────────────────── */
-
-/* Reading a reply aloud, one growing chunk at a time.
- *
- * Synthesis is a few times faster than playback, so the trick is to start
- * speaking after a single sentence and then let the chunks get longer as a
- * buffer builds. A chunk boundary is a small unnatural pause; early on that is
- * a fair price for starting quickly, but once there is audio in reserve there
- * is no reason to keep paying it. So the next chunk takes one more sentence for
- * every clip already waiting, which is what stops a bulleted list being read as
- * three fast items, pause, three fast items.
- *
- * A short sentence is never a chunk on its own regardless of reserve -- "Yes."
- * followed by a gap sounds broken. RealtimeTTS calls this minimum_sentence_length
- * and lands on the same idea from the other direction.
- *
- * There is exactly one playback in the app. Starting a new one discards the old
- * one entirely, including its pause position: nothing about speech is stored
- * per message. */
-
-/* Split prose into speakable sentences the same way the server's `plan()` does,
- * so the underline can be laid down over exact sentence boundaries in the
- * rendered text instead of estimating them by proportion. */
-function splitProseSentences(text) {
-  const ABBREV = /\b(e\.g|i\.e|etc|vs|Mr|Mrs|Ms|Dr|Prof|St|approx|Fig|No|cf|al)\./gi;
-  const INITIAL = /\b([A-Z])\./g;
-  const DECIMAL = /(\d)\.(?=\d)/g;
-  const SENTENCE_END = /([.!?]+["')\]]*)\s+(?=[A-Z"'([])/g;
-  const out = [];
-  for (const para of text.split(/\n\s*\n/)) {
-    const p = para.trim();
-    if (!p) continue;
-    const safe = p
-      .replace(DECIMAL, (m) => m.replace(/\./g, '\x01'))
-      .replace(INITIAL, (m) => m.replace(/\./g, '\x01'))
-      .replace(ABBREV, (m) => m.replace(/\./g, '\x01'));
-    const marked = safe.replace(SENTENCE_END, '$1\x00');
-    for (const s of marked.split('\x00')) {
-      const clean = s.replace(/\x01/g, '.').trim();
-      if (clean) out.push(clean);
-    }
-  }
-  return out;
-}
-
-/* The text the voice actually reads, in order, with a blank line inserted at
- * every block boundary (a heading, a list item, a paragraph). Fenced code and
- * tables are dropped because synthesis skips them, and the blank lines mirror
- * the server's prose conversion so this split matches the audio's split.
- *
- * Rebuilt on every highlight, because wrapping a range in a span splits its
- * text node. The text itself is stable under that splitting -- an inter-word
- * space that becomes its own node is kept, while the formatting whitespace that
- * sits *between* blocks is dropped in favour of the blank line. */
-function speakableText(el) {
-  const content = el.querySelector('.content-text') || el;
-  const BLOCK = new Set(['P', 'LI', 'H1', 'H2', 'H3', 'H4', 'H5', 'H6', 'BLOCKQUOTE']);
-  const nodes = [];
-  const walker = document.createTreeWalker(content, NodeFilter.SHOW_TEXT);
-  while (walker.nextNode()) {
-    const n = walker.currentNode;
-    if (n.parentElement && n.parentElement.closest('pre, table')) continue;
-    nodes.push(n);
-  }
-  let text = '';
-  const spans = [];
-  let lastBlock = null;
-  for (const n of nodes) {
-    let block = n.parentElement;
-    while (block && block !== content && !BLOCK.has(block.tagName)) block = block.parentElement;
-    if (block === content) block = null;
-    if (!n.nodeValue.trim()) {
-      // Whitespace only: keep it if it is an inter-word space inside the same
-      // block, drop it if it is the formatting whitespace between two blocks.
-      if (block && block === lastBlock) {
-        spans.push({ node: n, start: text.length, end: text.length + n.nodeValue.length });
-        text += n.nodeValue;
-      }
-      continue;
-    }
-    if (lastBlock && block !== lastBlock) text += '\n\n';
-    spans.push({ node: n, start: text.length, end: text.length + n.nodeValue.length });
-    text += n.nodeValue;
-    lastBlock = block;
-  }
-  return { text, spans };
-}
-
-const Speech = {
-  el: null,            // the .message element being read
-  sentences: [],
-  domSpans: null,      // exact sentence ranges in the rendered DOM text
-  cursor: 0,           // next sentence awaiting synthesis
-  queue: [],           // { url, start, end } clips ready but not yet played
-  current: null,       // the clip in the element right now
-  speakingIndex: -1,   // sentence currently underlined
-  token: 0,            // bumped on every stop, to strand in-flight fetches
-  producing: false,
-  audioEl: null, ctx: null, filter: null, gainNode: null,
-  voice: '',
-  speed: 1,
-  volume: 0.66,
-  tone: 20000,         // lowpass cutoff in Hz; 20k is effectively off
-  MIN_CHARS: 60,
-  MAX_SENTENCES: 5,
-  ORPHAN_WORDS: 3,
-  HARD_MAX: 8,
-
-  async settings() {
-    try {
-      const s = await (await fetch('/api/tts/status')).json();
-      this.voice = s.voice || s.default_voice || '';
-      this.speed = s.speed || 1;
-      this.volume = s.volume != null ? s.volume : 0.66;
-      this.tone = s.tone || 20000;
-      return s.available;
-    } catch (_) { return false; }
-  },
-
-  /* One element for the whole app, reused for every clip.
-   *
-   * It has to be one, because a media element can only be adopted into a Web
-   * Audio graph once. Building the graph gives us the tone control -- a browser
-   * lowpass costs nothing and can be moved while a clip is playing, where
-   * filtering during synthesis would mean re-rendering the audio to change it. */
-  engine() {
-    if (this.audioEl) return this.audioEl;
-    const a = new Audio();
-    a.addEventListener('ended', () => this.advance());
-    a.addEventListener('error', () => this.advance());
-    a.addEventListener('timeupdate', () => this.onProgress());
-    this.audioEl = a;
-    try {
-      const Ctx = window.AudioContext || window.webkitAudioContext;
-      this.ctx = new Ctx();
-      this.filter = this.ctx.createBiquadFilter();
-      this.filter.type = 'lowpass';
-      this.filter.frequency.value = this.tone;
-      this.filter.Q.value = 0.7;
-      this.gainNode = this.ctx.createGain();
-      this.gainNode.gain.value = this.volume;
-      this.ctx.createMediaElementSource(a)
-        .connect(this.filter).connect(this.gainNode).connect(this.ctx.destination);
-      a.volume = 1;                       // level is the gain node's job now
-    } catch (_) {
-      // No Web Audio: still plays, just without the tone control.
-      this.ctx = null;
-      a.volume = this.volume;
-    }
-    return a;
-  },
-
-  playing() { return !!this.current && this.audioEl && !this.audioEl.paused; },
-
-  /* Click the control on the reply that is already talking to pause it, click
-   * again to carry on, click a different one to switch. */
-  async toggle(el) {
-    if (this.el === el && this.current) {
-      if (this.audioEl.paused) {
-        this.resume();
-      } else {
-        this.audioEl.pause();
-        this.clearHighlight();  // paused: nothing is being read, so no underline
-      }
-      this.paint();
-      return;
-    }
-    await this.start(el);
-  },
-
-  resume() {
-    if (this.ctx && this.ctx.state === 'suspended') this.ctx.resume();
-    this.audioEl.play().catch(() => {});
-    this.onProgress();  // re-underlines the sentence as playback resumes
-  },
-
-  /* Exact sentence ranges in the rendered DOM, so the underline follows real
-   * sentence boundaries rather than a proportional estimate. Only the text the
-   * voice actually reads is measured (fenced code and tables are skipped). */
-  buildDomSpans(el) {
-    const text = speakableText(el).text;
-    const sentences = [];
-    let cursor = 0;
-    for (const s of splitProseSentences(text)) {
-      const i = text.indexOf(s, cursor);
-      if (i < 0) return null;  // split did not round-trip; fall back to proportional
-      sentences.push({ start: i, end: i + s.length });
-      cursor = i + s.length;
-    }
-    return { sentences };
-  },
-
-  async start(el) {
-    this.stop();
-    const raw = el.querySelector('.content-text')?.dataset.raw || '';
-    if (!raw.trim()) return;
-    const token = this.token;
-    this.el = el;
-    this.paint();
-
-    let sentences = [];
-    try {
-      const resp = await fetch('/api/tts/plan', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ text: raw }),
-      });
-      sentences = (await resp.json()).sentences || [];
-    } catch (_) { /* handled below */ }
-
-    if (token !== this.token) return;          // superseded while planning
-    if (!sentences.length) { this.stop(); return; }
-    this.sentences = sentences;
-    this.domSpans = this.buildDomSpans(el);
-    this.produce();
-  },
-
-  /* How many sentences the next clip should cover. One to begin with, plus one
-   * for every clip already in reserve, then extended twice over: until it is
-   * long enough to be worth speaking, and until it is not about to leave a stub
-   * behind. A boundary before "Correct?" puts a pause in the worst place. */
-  nextChunk() {
-    const words = (s) => s.split(/\s+/).filter(Boolean).length;
-    const size = Math.min(1 + this.queue.length, this.MAX_SENTENCES);
-    let end = Math.min(this.cursor + size, this.sentences.length);
-    while (end < this.sentences.length && end - this.cursor < this.HARD_MAX
-           && this.sentences.slice(this.cursor, end).join(' ').length < this.MIN_CHARS) {
-      end += 1;
-    }
-    while (end < this.sentences.length && end - this.cursor < this.HARD_MAX
-           && words(this.sentences[end]) <= this.ORPHAN_WORDS) {
-      end += 1;
-    }
-    return this.sentences.slice(this.cursor, end);
-  },
-
-  async produce() {
-    if (this.producing) return;
-    this.producing = true;
-    const token = this.token;
-    try {
-      while (token === this.token && this.cursor < this.sentences.length) {
-        // Two clips in hand covers the next synthesis with room to spare.
-        // Stopping rather than waiting matters: a paused reply would otherwise
-        // leave this loop awake forever, and advance() starts it again the
-        // moment the reserve is drawn down.
-        if (this.queue.length >= 2) break;
-        const chunk = this.nextChunk();
-        const start = this.cursor;
-        this.cursor += chunk.length;
-        const url = await this.render(chunk.join(' '), token);
-        if (token !== this.token) { if (url) URL.revokeObjectURL(url); return; }
-        if (url) this.queue.push({ url, start, end: start + chunk.length });
-        if (!this.current) this.playNext();
-      }
-    } finally {
-      if (token === this.token) this.producing = false;
-    }
-  },
-
-  async render(text, token) {
-    try {
-      const resp = await fetch('/api/tts/speak', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ text, voice: this.voice, speed: this.speed }),
-      });
-      if (!resp.ok || token !== this.token) return null;
-      return URL.createObjectURL(await resp.blob());
-    } catch (_) { return null; }
-  },
-
-  advance() {
-    this.releaseCurrent();
-    this.playNext();
-    this.paint();
-  },
-
-  releaseCurrent() {
-    if (this.current) { URL.revokeObjectURL(this.current.url); this.current = null; }
-  },
-
-  playNext() {
-    const clip = this.queue.shift();
-    if (!clip) {
-      // Nothing buffered and nothing left to make: the reply is finished.
-      if (this.cursor >= this.sentences.length) this.stop();
-      return;
-    }
-    this.current = clip;
-    const a = this.engine();
-    a.src = clip.url;
-    this.resume();
-    this.highlight(clip.start);
-    this.paint();
-    // Keep the pipeline turning once playback has drawn down the reserve.
-    if (!this.producing) this.produce();
-  },
-
-  stop() {
-    this.token += 1;
-    if (this.audioEl) { this.audioEl.pause(); this.audioEl.removeAttribute('src'); }
-    this.releaseCurrent();
-    this.queue.forEach((c) => URL.revokeObjectURL(c.url));
-    this.queue = [];
-    this.sentences = [];
-    this.domSpans = null;
-    this.cursor = 0;
-    this.producing = false;
-    this.clearHighlight();
-    const was = this.el;
-    this.el = null;
-    if (was) this.paint(was);
-  },
-
-  setVolume(v) {
-    this.volume = v;
-    if (this.gainNode) this.gainNode.gain.value = v;
-    else if (this.audioEl) this.audioEl.volume = v;
-    document.querySelectorAll('.vol-pop input').forEach((s) => { s.value = String(v); });
-    this.save({ volume: v });
-  },
-
-  save(fields) {
-    const form = new FormData();
-    Object.entries(fields).forEach(([k, v]) => form.append(k, String(v)));
-    fetch('/_settings/tts', { method: 'POST', body: form }).catch(() => {});
-  },
-
-  /* ── Sentence underline ────────────────────────────────────────────────
-   * The sentence currently being read gets a subtle underline so the eye can
-   * follow the voice. A clip may cover several sentences, so the exact sentence
-   * is estimated from how far through the clip the audio has got, weighting by
-   * each sentence's length. */
-
-  clearHighlight() {
-    if (!this.el) return;
-    this.el.querySelectorAll('.tts-cursor').forEach((span) => {
-      const parent = span.parentNode;
-      span.replaceWith(...span.childNodes);
-    });
-    this.speakingIndex = -1;
-  },
-
-  highlight(index) {
-    const el = this.el;
-    const sentences = this.sentences;
-    if (!el || !Array.isArray(sentences) || !sentences.length) return;
-    if (index === this.speakingIndex) return;
-    this.speakingIndex = index;
-    el.querySelectorAll('.tts-cursor').forEach((span) => {
-      const parent = span.parentNode;
-      span.replaceWith(...span.childNodes);
-    });
-
-    let parts = [];
-    const spans = this.domSpans;
-    if (spans && spans.sentences.length === sentences.length && spans.sentences[index]) {
-      // Exact boundaries from the rendered text's own sentence split. This is
-      // what keeps the underline from drifting a few characters into the next
-      // line when a sentence ends a block.
-      const r = spans.sentences[index];
-      for (const sp of speakableText(el).spans) {
-        if (sp.end <= r.start || sp.start >= r.end) continue;
-        parts.push({ node: sp.node, s: Math.max(0, r.start - sp.start), e: Math.min(sp.node.nodeValue.length, r.end - sp.start) });
-      }
-    } else {
-      // Fallback: the prose and rendered text differ in length (a code block or
-      // unusual symbols), so estimate by proportion of the total length.
-      const total = sentences.reduce((s, t) => s + (t || '').length, 0);
-      if (!total) return;
-      let before = 0;
-      for (let i = 0; i < index; i++) before += (sentences[i] || '').length;
-      const content = el.querySelector('.content-text') || el;
-      const len = (content.textContent || '').length;
-      if (!len) return;
-      const start = Math.max(0, Math.round(len * (before / total)));
-      const end = Math.min(len, Math.round(len * ((before + (sentences[index] || '').length) / total)));
-      if (end <= start) return;
-      const walker = document.createTreeWalker(content, NodeFilter.SHOW_TEXT);
-      let offset = 0;
-      while (walker.nextNode()) {
-        const n = walker.currentNode;
-        const nLen = n.nodeValue.length;
-        const nStart = offset;
-        const nEnd = offset + nLen;
-        offset = nEnd;
-        if (nEnd <= start || nStart >= end) continue;
-        parts.push({ node: n, s: Math.max(0, start - nStart), e: Math.min(nLen, end - nStart) });
-      }
-    }
-    // Never underline whitespace: a sentence that ends a block would otherwise
-    // drag its underline across the blank line into the next block.
-    while (parts.length) {
-      const p = parts[0];
-      const m = p.node.nodeValue.slice(p.s, p.e).match(/^\s+/);
-      if (!m) break;
-      p.s += m[0].length;
-      if (p.s >= p.e) parts.shift(); else break;
-    }
-    while (parts.length) {
-      const p = parts[parts.length - 1];
-      const m = p.node.nodeValue.slice(p.s, p.e).match(/\s+$/);
-      if (!m) break;
-      p.e -= m[0].length;
-      if (p.s >= p.e) parts.pop(); else break;
-    }
-    for (const p of parts) {
-      const span = document.createElement('span');
-      span.className = 'tts-cursor';
-      const range = document.createRange();
-      range.setStart(p.node, p.s);
-      range.setEnd(p.node, p.e);
-      try { range.surroundContents(span); } catch (err) { /* ignore */ }
-    }
-  },
-
-  onProgress() {
-    const clip = this.current;
-    const a = this.audioEl;
-    if (!clip || !a || !a.duration || a.paused) return;  // paused: nothing to underline
-    const span = clip.end - clip.start;
-    if (span <= 1) return;  // a single-sentence clip was underlined when it began
-    const seg = this.sentences.slice(clip.start, clip.end);
-    const total = seg.reduce((s, t) => s + (t || '').length, 0);
-    if (!total) return;
-    const frac = Math.min(1, a.currentTime / a.duration);
-    let target = frac * total;
-    let acc = 0;
-    for (let i = 0; i < seg.length; i++) {
-      acc += (seg[i] || '').length;
-      if (target < acc || i === seg.length - 1) {
-        this.highlight(clip.start + i);
-        break;
-      }
-    }
-  },
-
-  /* The control reflects three states, and the reply being read is marked so it
-   * can be found again without storing an id anywhere. */
-  paint(target) {
-    const el = target || this.el;
-    document.querySelectorAll('.message.speaking').forEach((m) => {
-      if (m !== this.el) m.classList.remove('speaking');
-    });
-    if (!el) return;
-    const btn = el.querySelector('.play-btn');
-    const active = this.el === el;
-    const playing = active && this.playing();
-    el.classList.toggle('speaking', !!active);
-    if (btn) {
-      btn.innerHTML = playing
-        ? '<svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true"><path d="M6 5h4v14H6zM14 5h4v14h-4z" fill="currentColor"/></svg>'
-        : '<svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true"><path d="M8 5v14l11-7z" fill="currentColor"/></svg>';
-      btn.title = playing ? 'Pause' : 'Read this reply aloud';
-    }
-  },
-};
-
 /* Dragging to select chat text has to stay intact as the cursor passes over
    messages whose copy/play/time controls appear on hover. Those buttons are
    form controls, and the browser drops the selection when a drag crosses one.
@@ -3925,23 +3453,13 @@ function setupMessageSide() {
     }
 
     const nodeSide = side;
-    // Position copy/play from the bottom of the side column so they never
-    // overflow into the next message on short rows.
+    // Position the copy button from the bottom of the side column so it never
+    // overflows into the next message on short rows.
     const copyEl = side.querySelector('.msg-copy');
-    const actionsEl = side.querySelector('.msg-actions');
-    if (copyEl && actionsEl) {
-      copyEl.style.top = '';
-      actionsEl.style.top = '';
+    if (copyEl) {
       const observer = new ResizeObserver(() => {
         const h = side.clientHeight;
-        if (h < 84) {
-          // Buttons are ~56px tall. Stack from bottom so they stay inside.
-          actionsEl.style.top = Math.max(0, h - 28) + 'px';
-          copyEl.style.top = Math.max(0, h - 56) + 'px';
-        } else {
-          actionsEl.style.top = '';
-          copyEl.style.top = '';
-        }
+        copyEl.style.top = h < 28 ? Math.max(0, h - 28) + 'px' : '';
       });
       observer.observe(side);
       node._resizeObserver = observer;
@@ -3949,34 +3467,6 @@ function setupMessageSide() {
     }
 
     node.appendChild(nodeSide);
-  });
-}
-
-function attachPlayButtons() {
-  if (!App.ttsAvailable) return;
-  document.querySelectorAll('.message.assistant:not([data-play])').forEach((node) => {
-    const text = node.querySelector('.content-text');
-    if (!text || !text.dataset.raw?.trim()) return;
-    node.dataset.play = '1';
-    const side = node.querySelector('.msg-side');
-    if (!side) return;
-
-    const actions = el('span', 'msg-actions');
-    const playBtn = button('', 'play-btn', () => Speech.toggle(node));
-    playBtn.innerHTML = '<svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true"><path d="M8 5v14l11-7z" fill="currentColor"/></svg>';
-    playBtn.title = 'Read aloud';
-    actions.appendChild(playBtn);
-    const vol = el('span', 'vol-pop');
-    const slider = document.createElement('input');
-    slider.type = 'range';
-    slider.min = '0'; slider.max = '1'; slider.step = '0.01';
-    slider.value = String(Speech.volume);
-    slider.setAttribute('orient', 'vertical');
-    slider.title = 'Volume';
-    slider.addEventListener('input', () => Speech.setVolume(parseFloat(slider.value)));
-    vol.appendChild(slider);
-    actions.appendChild(vol);
-    side.appendChild(actions);
   });
 }
 
@@ -4089,24 +3579,6 @@ function isTyping(node) {
   if (!node) return false;
   if (node.isContentEditable) return true;
   return ['INPUT', 'TEXTAREA', 'SELECT'].includes(node.tagName);
-}
-
-/* Space reads the newest reply. Pressed again it pauses, and again resumes --
- * unless the agent has answered since, in which case the newest reply wins and
- * the old position is forgotten. Two quick presses start it over. */
-const REPLAY_DOUBLE_TAP_MS = 400;
-let lastPlayPress = 0;
-
-function playLatestReply() {
-  const all = document.querySelectorAll('.message.assistant[data-play]');
-  const latest = all[all.length - 1];
-  if (!latest) return;
-  scrollToBottom();
-  const now = performance.now();
-  const doubleTap = now - lastPlayPress < REPLAY_DOUBLE_TAP_MS;
-  lastPlayPress = now;
-  if (doubleTap) { Speech.start(latest); return; }
-  Speech.toggle(latest);
 }
 
 /* ── In-app file editor & browser ─────────────────────────────────────────── */

@@ -26,7 +26,6 @@ from agent_server.routes import (
     settings,
     sounds,
     tabs,
-    tts,
 )
 from agent_server.system_prompt import load_tool_description_overrides, migrate_prompts
 from agent_server.templating import STATIC_DIR
@@ -190,7 +189,6 @@ app.mount("/static", StaticFiles(directory=str(STATIC_DIR)), name="static")
 app.include_router(sessions.router)
 app.include_router(chat.router)
 app.include_router(files.router)
-app.include_router(tts.router)
 app.include_router(pages.router)
 app.include_router(tabs.router)
 app.include_router(settings.router)

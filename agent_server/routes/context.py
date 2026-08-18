@@ -17,7 +17,6 @@ from pathlib import Path
 
 from agent_server import agent, permissions
 from agent_server import database as db
-from agent_server import tts as tts_service
 from agent_server.compaction import should_offer_compaction
 from agent_server.config import (
     DEFAULT_MODEL,
@@ -64,13 +63,6 @@ def _page_or_body(request, page: str, body: str) -> str:
     swapped, which is why saving a tool or a secret grew another navbar.
     """
     return body if request.headers.get("HX-Request") else page
-
-
-def _clamp(raw: str, low: float, high: float, fallback: float) -> float:
-    try:
-        return min(max(float(raw), low), high)
-    except ValueError:
-        return fallback
 
 
 async def _sound_enabled() -> bool:
@@ -368,7 +360,6 @@ async def _home_context(
         "uploaded_sounds": _list_uploaded_sounds(),
         "stt": stt_availability(),
         "stt_models": [{"path": p, "name": Path(p).name} for p in list_whisper_models()],
-        "tts": tts_service.availability(),
         "settings": settings,
         "provider_settings": provider_settings,
         "custom_endpoints": custom_endpoints,

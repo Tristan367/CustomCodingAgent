@@ -6,6 +6,7 @@ from fastapi import APIRouter, Request
 from fastapi.responses import RedirectResponse
 
 from agent_server import database as db
+from agent_server.config import REASONING_EFFORTS
 from agent_server.routes.context import (
     _offerable_models,
     _page_or_body,
@@ -50,6 +51,7 @@ def _parse_tiers(p: dict) -> list[dict]:
             "off": off,
             "parallel_cap": max(0, int(entry.get("parallel_cap", 3) or 3)),
             "model": str(entry.get("model", "")).strip(),
+            "effort": str(entry.get("effort", "")).strip(),
         })
     return result
 
@@ -123,6 +125,10 @@ async def _prompts_context(
             f"{SYSTEM}:{p['name']}": (p.get("sa_tier_model") or "").strip()
             for p in sys
         },
+        "sa_tier1_effort": {
+            f"{SYSTEM}:{p['name']}": (p.get("sa_tier_effort") or "").strip()
+            for p in sys
+        },
         "master_spawn": {
             f"{SYSTEM}:{p['name']}": _cap_val(p.get("master_spawn_limit"), 0)
             for p in sys
@@ -146,6 +152,7 @@ async def _prompts_context(
         },
         "default_sa_body": DEFAULT_SUBAGENT_PROMPT.strip(),
         "profile_models": _offerable_models(),
+        "efforts": REASONING_EFFORTS,
         "saved": saved,
         "moved": moved,
     }
@@ -201,6 +208,7 @@ async def save_prompts(request: Request):
 
     sa_model = str(form.get("sa_model", "")).strip()
     sa_tier1_model = str(form.get("sa_tier_model", "")).strip()
+    sa_tier1_effort = str(form.get("sa_tier_effort", "")).strip()
 
     moved = 0
     if name and body and kind == SYSTEM:
@@ -218,8 +226,8 @@ async def save_prompts(request: Request):
             subagent_parallel_cap=sa_cap if sa_visible else None,
         )
         await db._execute(
-            "UPDATE prompts SET master_spawn_limit = ?, max_concurrent_subagents = ?, subagent_model = ?, sa_tier_model = ? WHERE kind = ? AND name = ?",
-            (master_spawn, max_conc, sa_model or None, sa_tier1_model or None, SYSTEM, name),
+            "UPDATE prompts SET master_spawn_limit = ?, max_concurrent_subagents = ?, subagent_model = ?, sa_tier_model = ?, sa_tier_effort = ? WHERE kind = ? AND name = ?",
+            (master_spawn, max_conc, sa_model or None, sa_tier1_model or None, sa_tier1_effort or None, SYSTEM, name),
         )
         # Store higher tiers as JSON.
         if tiers_json:
@@ -258,8 +266,9 @@ def _collect_tiers(form) -> str:
         except (TypeError, ValueError):
             cap = 3
         model = str(form.get(f"sa_model_{tier}", "")).strip()
+        effort = str(form.get(f"sa_effort_{tier}", "")).strip()
         off = ",".join(sorted(n for n in TOOLS if n not in enabled))
-        tiers.append({"body": body, "disabled_tools": off, "parallel_cap": cap, "model": model})
+        tiers.append({"body": body, "disabled_tools": off, "parallel_cap": cap, "model": model, "effort": effort})
         tier += 1
     if not tiers:
         return ""
@@ -288,12 +297,13 @@ async def new_prompt(request: Request):
     # Copy the remaining profile-level columns that save_prompt doesn't handle.
     await db._execute(
         "UPDATE prompts SET master_spawn_limit = ?, max_concurrent_subagents = ?,"
-        " subagent_model = ?, sa_tier_model = ?, subagent_tiers = ?"
+        " subagent_model = ?, sa_tier_model = ?, sa_tier_effort = ?, subagent_tiers = ?"
         " WHERE kind = ? AND name = ?",
         (default.get("master_spawn_limit") if default else 0,
          default.get("max_concurrent_subagents") if default else 100,
          default.get("subagent_model") if default else None,
          default.get("sa_tier_model") if default else None,
+         default.get("sa_tier_effort") if default else None,
          default.get("subagent_tiers") if default else None,
          SYSTEM, name),
     )

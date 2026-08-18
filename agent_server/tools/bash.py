@@ -8,9 +8,6 @@ import shlex
 from agent_server.config import MAX_TOOL_RESULT_CHARS
 from agent_server.tools.base import ToolContext, ToolResult, truncate
 
-DEFAULT_TIMEOUT_MS = 120_000
-MAX_TIMEOUT_MS = 600_000
-
 # Commands that only observe state. Used to keep the approval prompt from firing
 # on every `ls`, and surfaced in the UI as "read-only".
 READ_ONLY_PREFIXES = {
@@ -159,8 +156,7 @@ async def run_bash(
         if sudo_password:
             command = re.sub(r"-n\b\s*", "", command, count=1)
 
-    timeout_ms = min(timeout or DEFAULT_TIMEOUT_MS, MAX_TIMEOUT_MS)
-    timeout_sec = timeout_ms / 1000
+    timeout_ms = timeout  # the model's own, if it asked for one; None means no limit
     cwd = str(ctx.resolve(workdir)) if workdir else ctx.project_dir
     if not os.path.isdir(cwd):
         cwd = ctx.project_dir
@@ -184,12 +180,15 @@ async def run_bash(
             proc.stdin.close()
         elif has_sudo and not sudo_password and proc.stdin is not None:
             proc.stdin.close()
-        stdout, stderr, detached, truncated = await asyncio.wait_for(
-            _collect(proc), timeout=timeout_sec
-        )
+        if timeout_ms:
+            stdout, stderr, detached, truncated = await asyncio.wait_for(
+                _collect(proc), timeout=timeout_ms / 1000
+            )
+        else:
+            stdout, stderr, detached, truncated = await _collect(proc)
     except TimeoutError:
         _kill(proc)
-        return ToolResult.error(f"command timed out after {timeout_sec:g}s: {command}", title)
+        return ToolResult.error(f"command timed out after {timeout_ms / 1000:g}s: {command}", title)
     except asyncio.CancelledError:
         _kill(proc)
         raise
@@ -222,7 +221,7 @@ async def run_bash(
     body = "\n".join(parts) or "(no output)"
 
     return ToolResult(
-        output=truncate(body, MAX_TOOL_RESULT_CHARS, spill=True),
+        output=truncate(body, MAX_TOOL_RESULT_CHARS, spill=True, session_id=ctx.session_id),
         is_error=code != 0,
         title=f"{title} (exit {code})",
     )

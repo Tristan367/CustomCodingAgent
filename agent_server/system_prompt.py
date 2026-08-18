@@ -419,6 +419,25 @@ async def subagent_model_name(profile_name: str, tier: int = 0) -> str:
     return ""
 
 
+async def subagent_effort(profile_name: str, tier: int = 0) -> str:
+    """The thinking-effort override for a subagent at this tier, "" to inherit.
+
+    Tier 1 reads `sa_tier_effort`. Tiers 2+ read from the `subagent_tiers` JSON.
+    An empty string means "inherit the parent's effort" (or the model's default
+    when the subagent runs on a different model).
+    """
+    row = await db.get_prompt(profile_name)
+    if row is None:
+        return ""
+    if tier == 1:
+        return (row.get("sa_tier_effort") or "").strip()
+    if tier >= 2:
+        entry = _tier_entry(row, tier)
+        if entry is not None:
+            return str(entry.get("effort", "")).strip()
+    return ""
+
+
 async def prompt_body(name: str, kind: str = SYSTEM) -> str:
     """The text of a named prompt, falling back to `default` if it is gone."""
     row = await db.get_prompt(name, kind)

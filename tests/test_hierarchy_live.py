@@ -20,6 +20,11 @@ import json
 import os
 
 import httpx
+import pytest
+
+# Excluded from the regular suite: it talks to a live server and bills a real
+# provider for the smoke requests it makes.
+pytestmark = [pytest.mark.asyncio, pytest.mark.live]
 
 # ── Configuration (safe defaults) ────────────────────────────────────────────
 

@@ -1,7 +1,6 @@
 """Shared types for tool implementations."""
 
 import asyncio
-import hashlib
 import time
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -24,6 +23,9 @@ class ToolContext:
     # Which tier of subagent this is. 0 = first-level subagent, 1 = subsubagent,
     # etc. Incremented each time `task` launches from within a subagent.
     subagent_tier: int = 0
+    # The parent's thinking effort, so a subagent on the same model can inherit
+    # it. None means "provider default".
+    thinking_effort: str | None = None
     abort: asyncio.Event = field(default_factory=asyncio.Event)
 
     def resolve(self, path: str | None) -> Path:
@@ -96,7 +98,8 @@ def diff_stats(diff: str) -> tuple[int, int]:
     return added, removed
 
 
-def truncate(text: str, limit: int, note: str = "output", spill: bool = False) -> str:
+def truncate(text: str, limit: int, note: str = "output", spill: bool = False,
+             session_id: str = "") -> str:
     """Cut `text` to `limit`, optionally keeping the discarded tail on disk.
 
     Without a spill the overflow is gone for good, which is how a grep that
@@ -111,7 +114,7 @@ def truncate(text: str, limit: int, note: str = "output", spill: bool = False) -
     """
     if len(text) <= limit:
         return text
-    path = _spill(text) if spill else None
+    path = _spill(text, session_id) if spill else None
     if path:
         # Say what to do, not just what happened. Told only that output was
         # truncated, a model re-runs the tool with a narrower argument and pays
@@ -143,32 +146,36 @@ SPILL_DIR = DATA_DIR / "tool-output"
 SPILL_MAX_AGE = 2 * 24 * 60 * 60
 
 
-def _spill(text: str) -> Path | None:
-    """Write an over-long tool output somewhere the model can read it.
+def _spill(text: str, session_id: str = "") -> Path | None:
+    """Write an over-long tool output to the session's single spill file.
 
-    Named by content hash, so re-running the same command reuses one file
-    instead of littering. Best effort throughout: a full disk or a read-only
-    home must degrade to ordinary truncation, never break the tool call.
+    Each new spill overwrites the last, so there is always exactly one file
+    holding the most recent huge result. Best effort throughout: a full disk or
+    a read-only home must degrade to ordinary truncation, never break the tool
+    call.
     """
     try:
         SPILL_DIR.mkdir(parents=True, exist_ok=True)
-        path = SPILL_DIR / f"{hashlib.sha1(text.encode()).hexdigest()[:16]}.txt"
-        if path.exists():
-            # Reusing the file has to count as using it. Without this the clock
-            # keeps running from the first write, so output spilled again on day
-            # two would be handed to the model and deleted moments later.
-            path.touch()
-        else:
-            path.write_text(text)
+        path = SPILL_DIR / f"{session_id or 'latest'}.txt"
+        path.write_text(text)
         _prune_spills()
         return path
     except OSError:
         return None
 
 
+def clear_spills(session_id: str) -> None:
+    """Remove a session's spill file once its run is done."""
+    try:
+        (SPILL_DIR / f"{session_id}.txt").unlink(missing_ok=True)
+    except OSError:
+        pass
+
+
 def _prune_spills():
-    """Delete anything untouched for two days. These exist for the tool call
-    that produced them and the few that follow it; nothing reads them later."""
+    """Safety net: delete spills a crashed run left behind (older than two days).
+    A normal run wipes its own file in `clear_spills`, so this only catches the
+    ones that never got a clean ending."""
     cutoff = time.time() - SPILL_MAX_AGE
     for old in SPILL_DIR.glob("*.txt"):
         try:

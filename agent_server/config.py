@@ -244,8 +244,9 @@ MAX_TOOL_RESULT_CHARS = int(os.getenv("MAX_TOOL_RESULT_CHARS", "50000"))
 # ── Subagents ────────────────────────────────────────────────────────────────
 # A subagent runs until it answers or is cancelled by the user stopping the run.
 # There is no round cap or timeout: cutting a slow-but-productive agent off
-# mid-task throws away the work it has already done.
-SUBAGENT_EFFORT = os.getenv("SUBAGENT_EFFORT", "low")
+# mid-task throws away the work it has already done. Thinking effort is not
+# forced here either -- a subagent inherits the parent's effort, or the model's
+# default when it runs on a different model.
 
 # webfetch
 WEBFETCH_TIMEOUT = int(os.getenv("WEBFETCH_TIMEOUT", "30"))

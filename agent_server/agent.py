@@ -37,7 +37,7 @@ from agent_server.system_prompt import (
     session_system_prompt,
     session_tool_descriptions,
 )
-from agent_server.tools.base import ToolContext, ToolResult, truncate
+from agent_server.tools.base import ToolContext, ToolResult, clear_spills, truncate
 from agent_server.tools.registry import execute_tool, get_tool, tool_schemas
 
 log = logging.getLogger(__name__)
@@ -480,6 +480,7 @@ async def run(session_id: str, abort: asyncio.Event | None = None) -> AsyncItera
             model=session["model"],
             subagent_model=session.get("subagent_model") or "",
             prompt_profile=session.get("prompt_profile") or "default",
+            thinking_effort=session.get("thinking_effort"),
             abort=abort,
         )
         _set_status(session_id, "running")
@@ -515,6 +516,7 @@ async def run(session_id: str, abort: asyncio.Event | None = None) -> AsyncItera
         else:
             _compaction_snoozed.discard(session_id)
             _set_status(session_id, "idle", notify=outcome)
+            clear_spills(session_id)
             # A reply can land in the mailbox while the final model call is in
             # flight, after the last _flush_mailbox. Wake again so it is delivered.
             # Same for a message queued mid-run: if the model finished before the
@@ -1108,7 +1110,7 @@ async def _run_batch(
 async def _record(session_id: str, call: dict, result: ToolResult, duration_ms: int = 0) -> dict:
     from agent_server.providers.base import estimate_tokens
 
-    output = truncate(result.output, MAX_TOOL_RESULT_CHARS, spill=True)
+    output = truncate(result.output, MAX_TOOL_RESULT_CHARS, spill=True, session_id=session_id)
     # Taken from the call rather than the diff: unified_diff drops its header.
     args = parse_arguments(call)
     path = args.get("filePath") or args.get("path") or ""

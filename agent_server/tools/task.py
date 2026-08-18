@@ -10,10 +10,7 @@ import dataclasses
 import json
 
 import agent_server.system_prompt  # deferred: subagent_parallel_cap in run_task
-from agent_server.config import (
-    MAX_TOOL_RESULT_CHARS,
-    SUBAGENT_EFFORT,
-)
+from agent_server.config import MAX_TOOL_RESULT_CHARS
 from agent_server.conversation import normalize_tool_calls, parse_arguments, tool_call_name
 from agent_server.tools.base import ToolContext, ToolResult, truncate
 
@@ -182,6 +179,14 @@ async def _run(ctx: ToolContext, description: str, prompt: str, title: str, tool
     # serve an Anthropic model.
     provider_name = provider_for_model(effective_model) or ctx.provider
 
+    # Same model as the parent inherits the parent's thinking effort; a
+    # different model falls back to that model's default (no override).
+    effort = ctx.thinking_effort if effective_model == ctx.model else None
+    # A per-tier effort setting overrides the inherit/default behaviour.
+    override = await agent_server.system_prompt.subagent_effort(profile, tier)
+    if override:
+        effort = override
+
     provider = get_provider(provider_name)
 
     messages: list[dict] = [
@@ -203,7 +208,7 @@ async def _run(ctx: ToolContext, description: str, prompt: str, title: str, tool
         finish = "stop"
 
         async for event in provider.chat_completion(
-            messages=messages, tools=tools, model=effective_model, thinking_effort=SUBAGENT_EFFORT
+            messages=messages, tools=tools, model=effective_model, thinking_effort=effort
         ):
             if ctx.abort.is_set():
                 return ToolResult.error("cancelled", title, usage_total)
@@ -270,7 +275,7 @@ async def _run(ctx: ToolContext, description: str, prompt: str, title: str, tool
             messages.append({
                 "role": "tool",
                 "tool_call_id": call["id"],
-                "content": truncate(result.output, MAX_TOOL_RESULT_CHARS // 2, spill=True),
+                "content": truncate(result.output, MAX_TOOL_RESULT_CHARS // 2, spill=True, session_id=ctx.session_id),
             })
 
 

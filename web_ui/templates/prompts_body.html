@@ -158,6 +158,7 @@
             </details>
 
             {% set tier1_model = sa_tier1_model.get(selected, '') %}
+            {% set tier1_effort = sa_tier1_effort.get(selected, '') %}
             <div style="margin-top:8px; margin-bottom:10px; display:flex; align-items:center; justify-content:space-between">
                 <div style="display:flex; align-items:center; gap:8px">
                     <span class="hint">Subagent spawn limit</span>
@@ -174,6 +175,15 @@
                         <option value="" {% if not tier1_model %}selected{% endif %}>Inherit</option>
                         {% for m in profile_models %}
                         <option value="{{ m.id }}" {% if tier1_model == m.id %}selected{% endif %}>{{ m.name }}</option>
+                        {% endfor %}
+                    </select>
+                    <span class="hint">Thinking effort</span>
+                    <select name="sa_tier_effort"
+                            {% if selected_name in readonly %}disabled{% endif %}
+                            style="min-width:100px">
+                        <option value="" {% if not tier1_effort %}selected{% endif %}>Inherit</option>
+                        {% for e in efforts %}
+                        <option value="{{ e }}" {% if tier1_effort == e %}selected{% endif %}>{{ e }}</option>
                         {% endfor %}
                     </select>
                 </div>
@@ -242,6 +252,15 @@
                             <option value="" {% if not tier.model %}selected{% endif %}>Inherit</option>
                             {% for m in profile_models %}
                             <option value="{{ m.id }}" {% if tier.model == m.id %}selected{% endif %}>{{ m.name }}</option>
+                            {% endfor %}
+                        </select>
+                        <span class="hint">Thinking effort</span>
+                        <select name="sa_effort_{{ tno }}"
+                                {% if selected_name in readonly %}disabled{% endif %}
+                                style="min-width:100px">
+                            <option value="" {% if not tier.effort %}selected{% endif %}>Inherit</option>
+                            {% for e in efforts %}
+                            <option value="{{ e }}" {% if tier.effort == e %}selected{% endif %}>{{ e }}</option>
                             {% endfor %}
                         </select>
                     </div>
@@ -449,9 +468,11 @@
             clone.querySelectorAll('[name]').forEach(el => {
                 const m = el.name.match(/^(.+?)(_(\d+))?$/);
                 if (m) {
-                    // Special: "sa_tier_model" → "sa_model_2"
+                    // Special: "sa_tier_model" → "sa_model_2", "sa_tier_effort" → "sa_effort_2".
                     if (el.name === 'sa_tier_model') {
                         el.name = 'sa_model_' + num;
+                    } else if (el.name === 'sa_tier_effort') {
+                        el.name = 'sa_effort_' + num;
                     } else {
                         el.name = m[3] ? m[1] + '_' + num : m[1] + '_' + num;
                     }

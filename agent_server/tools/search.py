@@ -78,7 +78,7 @@ async def grep_search(
         output += f"\n\n... and {len(lines) - MAX_MATCHES:,} more matches. Narrow the pattern or set `include`."
     files = len({ln.split(":", 1)[0] for ln in shown})
     return ToolResult(
-        output=truncate(output, MAX_TOOL_RESULT_CHARS, spill=True),
+        output=truncate(output, MAX_TOOL_RESULT_CHARS, spill=True, session_id=ctx.session_id),
         title=f"{title} ({len(lines)} matches in {files} files)",
     )
 

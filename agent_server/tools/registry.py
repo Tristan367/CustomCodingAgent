@@ -213,7 +213,7 @@ register(Tool(
         "type": "object",
         "properties": {
             "command": {"type": "string", "description": "Shell command to run"},
-            "timeout": {"type": "integer", "description": "Timeout in milliseconds (default 120000)"},
+            "timeout": {"type": "integer", "description": "Timeout in milliseconds (optional; no timeout when omitted)"},
             "workdir": {"type": "string", "description": "Directory to run in (defaults to project dir)"},
         },
         "required": ["command"],

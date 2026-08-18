@@ -133,7 +133,7 @@ async def webfetch(ctx: ToolContext, *, url: str, **_) -> ToolResult:
         return ToolResult(output=f"(empty response from {current}, HTTP {status_code})", title=title)
 
     return ToolResult(
-        output=truncate(text, MAX_TOOL_RESULT_CHARS, "page", spill=True),
+        output=truncate(text, MAX_TOOL_RESULT_CHARS, "page", spill=True, session_id=ctx.session_id),
         title=f"{title} ({len(text):,} chars)",
     )
 
@@ -184,7 +184,7 @@ async def websearch(ctx: ToolContext, *, query: str, **_) -> ToolResult:
     for r in results:
         lines.append(f"{r['title']} — {r['snippet']}\n  {r['url']}")
     return ToolResult(
-        output=truncate("\n\n".join(lines), MAX_TOOL_RESULT_CHARS, "search", spill=True),
+        output=truncate("\n\n".join(lines), MAX_TOOL_RESULT_CHARS, "search", spill=True, session_id=ctx.session_id),
         title=f"{title} ({len(results)} results)",
     )
 

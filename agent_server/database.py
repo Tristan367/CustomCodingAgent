@@ -199,6 +199,8 @@ MIGRATIONS: list[tuple[str, str, str]] = [
     ("prompts", "subagent_model", "TEXT"),
     # Tier-1 subagent model override. NULL uses subagent_model (the profile default).
     ("prompts", "sa_tier_model", "TEXT"),
+    # Tier-1 subagent thinking-effort override. NULL/"" means inherit the parent.
+    ("prompts", "sa_tier_effort", "TEXT"),
     # Maximum total subagents running concurrently in a session using this
     # profile (0 = unlimited). Acts as a global safety valve across all tiers.
     ("prompts", "max_concurrent_subagents", "INTEGER DEFAULT 100"),

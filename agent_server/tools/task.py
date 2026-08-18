@@ -13,7 +13,6 @@ import agent_server.system_prompt  # deferred: subagent_parallel_cap in run_task
 from agent_server.config import (
     MAX_TOOL_RESULT_CHARS,
     SUBAGENT_EFFORT,
-    SUBAGENT_MAX_ROUNDS,
     SUBAGENT_TIMEOUT,
 )
 from agent_server.conversation import normalize_tool_calls, parse_arguments, tool_call_name
@@ -32,7 +31,6 @@ def _subagent_tools():
 # disabled list so a profile cannot accidentally re-enable it.
 TOP_LEVEL_ONLY = frozenset({"send_message"})
 
-MAX_ROUNDS = SUBAGENT_MAX_ROUNDS
 TIMEOUT = SUBAGENT_TIMEOUT
 
 # Final fallback — should only be used if default_subagent.md is missing AND
@@ -198,7 +196,9 @@ async def _run(ctx: ToolContext, description: str, prompt: str, title: str, tool
 
     usage_total: dict = {}
 
-    for _round in range(MAX_ROUNDS):
+    # No round cap: the subagent runs until it answers, is cancelled, or the
+    # enclosing `asyncio.wait_for(..., timeout=TIMEOUT)` fires.
+    while True:
         if ctx.abort.is_set():
             return ToolResult.error("cancelled", title, usage_total)
 
@@ -277,10 +277,6 @@ async def _run(ctx: ToolContext, description: str, prompt: str, title: str, tool
                 "tool_call_id": call["id"],
                 "content": truncate(result.output, MAX_TOOL_RESULT_CHARS // 2, spill=True),
             })
-
-    return ToolResult.error(
-        f"subagent exceeded {MAX_ROUNDS} rounds without answering", title, usage_total
-    )
 
 
 def _accumulate(partials: dict[int, dict], deltas: list[dict]):

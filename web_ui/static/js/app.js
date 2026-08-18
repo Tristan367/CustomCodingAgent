@@ -1123,7 +1123,9 @@ function hideAllThinking() {
   App.els.messages?.querySelectorAll('.message.thinking').forEach((n) => { n.hidden = true; });
 }
 function hideAllToolCalls() {
-  App.els.messages?.querySelectorAll('.message.tool').forEach((n) => { n.hidden = true; });
+  // Only completed calls are "past"; parallel ones that are still running stay
+  // visible so the user can see every subagent that is still working.
+  App.els.messages?.querySelectorAll('.message.tool:not(.pending)').forEach((n) => { n.hidden = true; });
 }
 
 function appendToolCall(event) {

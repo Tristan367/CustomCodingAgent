@@ -115,7 +115,6 @@ const App = {
 /* ── Boot ────────────────────────────────────────────────────────────────── */
 
 function initSession() {
-  disposeDetachedSides();
   const view = document.getElementById('session-view');
   const previous = App.sessionId;
   App.sessionId = view ? view.dataset.sessionId : null;
@@ -238,7 +237,6 @@ async function refreshTranscript() {
     if (fresh && App.els.messages) {
       App.els.messages.replaceWith(fresh);
       App.els.messages = fresh;
-      disposeDetachedSides();
       renderStoredMessages();
       scrollToBottom(true);
     }
@@ -3411,22 +3409,6 @@ window.addEventListener('blur', () => {
   document.body.classList.remove('selecting');
 });
 
-// Message elements that carry a side-column ResizeObserver, so a replaced
-// transcript can disconnect them. Without this a fresh observer per message
-// retained every detached subtree (ResizeObserver keeps a strong reference to
-// its targets) across refreshes and session switches.
-const sideObserved = new Set();
-
-function disposeDetachedSides() {
-  for (const node of [...sideObserved]) {
-    if (!node.isConnected) {
-      if (node._resizeObserver) node._resizeObserver.disconnect();
-      node._resizeObserver = null;
-      sideObserved.delete(node);
-    }
-  }
-}
-
 function setupMessageSide() {
   document.querySelectorAll('.message:not([data-side-done])').forEach((node) => {
     node.dataset.sideDone = '1';
@@ -3452,21 +3434,7 @@ function setupMessageSide() {
       });
     }
 
-    const nodeSide = side;
-    // Position the copy button from the bottom of the side column so it never
-    // overflows into the next message on short rows.
-    const copyEl = side.querySelector('.msg-copy');
-    if (copyEl) {
-      const observer = new ResizeObserver(() => {
-        const h = side.clientHeight;
-        copyEl.style.top = h < 28 ? Math.max(0, h - 28) + 'px' : '';
-      });
-      observer.observe(side);
-      node._resizeObserver = observer;
-      sideObserved.add(node);
-    }
-
-    node.appendChild(nodeSide);
+    node.appendChild(side);
   });
 }
 

@@ -631,7 +631,7 @@ a.file-ref:hover { border-bottom-style: solid; color: var(--text); background: v
   cursor: pointer;
   font-size: 12px;
   font-family: var(--mono);
-  color: var(--text-dim);
+  color: var(--text-faint);
   padding: 2px 0;
   list-style: none;
   display: flex;

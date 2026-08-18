@@ -207,11 +207,11 @@ class AnthropicProvider(Provider):
                         _merge_usage(usage, event.usage)
 
         except anthropic.APIStatusError as e:
-            yield {"type": "error", "message": _describe(e)}
+            yield {"type": "error", "message": _describe(e), "retryable": _retryable(e)}
             return
         except Exception as e:
             log.warning("provider %s request failed", self.name, exc_info=True)
-            yield {"type": "error", "message": f"{type(e).__name__}: {e}"}
+            yield {"type": "error", "message": f"{type(e).__name__}: {e}", "retryable": True}
             return
 
         # Usage before finish: `finish` is documented as terminal, and yielding
@@ -289,6 +289,10 @@ def _describe(e: anthropic.APIStatusError) -> str:
     except Exception:
         detail = (getattr(e, "message", "") or str(e))[:400]
     return f"Anthropic API error {e.status_code}: {detail or 'unknown error'}"
+
+
+def _retryable(e: anthropic.APIStatusError) -> bool:
+    return e.status_code == 429 or e.status_code >= 500
 
 
 def _extract_system(messages: list[dict]) -> str:

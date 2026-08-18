@@ -72,11 +72,11 @@ class OpenAICompatibleProvider(Provider):
         try:
             stream = await self._get_client().chat.completions.create(**kwargs)
         except openai.APIStatusError as e:
-            yield {"type": "error", "message": _describe(e, self.name)}
+            yield {"type": "error", "message": _describe(e, self.name), "retryable": _retryable(e)}
             return
         except Exception as e:
             log.warning("provider %s request failed", self.name, exc_info=True)
-            yield {"type": "error", "message": f"{type(e).__name__}: {e}"}
+            yield {"type": "error", "message": f"{type(e).__name__}: {e}", "retryable": True}
             return
 
         finish_reason = None
@@ -122,11 +122,11 @@ class OpenAICompatibleProvider(Provider):
         except asyncio.CancelledError:
             raise
         except openai.APIStatusError as e:
-            yield {"type": "error", "message": _describe(e, self.name)}
+            yield {"type": "error", "message": _describe(e, self.name), "retryable": _retryable(e)}
             return
         except Exception as e:
             log.warning("provider %s stream failed", self.name, exc_info=True)
-            yield {"type": "error", "message": f"Stream failed: {type(e).__name__}: {e}"}
+            yield {"type": "error", "message": f"Stream failed: {type(e).__name__}: {e}", "retryable": True}
             return
         finally:
             # Covers the abort path too. `agent._loop` breaks out of its own
@@ -168,3 +168,12 @@ def _describe(e: openai.APIStatusError, name: str = "API") -> str:
         log.debug("reading API error detail failed", exc_info=True)
         detail = (getattr(e, "message", "") or str(e))[:400]
     return f"{name} API error {e.status_code}: {detail or 'unknown error'}"
+
+
+def _retryable(e: openai.APIStatusError) -> bool:
+    """Whether asking again has a chance of succeeding.
+
+    429 and 5xx are transient; a 4xx means the request itself is wrong and
+    retrying it would only repeat the same rejection.
+    """
+    return e.status_code == 429 or e.status_code >= 500

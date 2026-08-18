@@ -15,6 +15,7 @@ from agent_server.conversation import (
     pending_tool_calls,
 )
 from agent_server.providers import get_provider
+from agent_server.providers.base import completion_with_retry
 from agent_server.system_prompt import get_compact_prompt, session_system_prompt
 
 # Work kept verbatim at the tail so recent context survives compaction. A
@@ -254,7 +255,8 @@ async def compact_session_events(
 
         messages = await _summariser_messages(session, rows, to_compact, instructions)
         summary = ""
-        async for event in provider.chat_completion(
+        async for event in completion_with_retry(
+            provider,
             messages=messages,
             tools=[],
             model=session["model"],
@@ -263,6 +265,11 @@ async def compact_session_events(
             if event["type"] == "content":
                 summary += event["text"]
                 yield {"type": "compact_delta", "text": event["text"]}
+            elif event["type"] == "retry":
+                # The partial summary already streamed is being replaced; tell
+                # the client to clear its draft and start it again.
+                summary = ""
+                yield {"type": "compact_reset", "message": event["message"]}
             elif event["type"] == "error":
                 yield fail(event["message"])
                 return

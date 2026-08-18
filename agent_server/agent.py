@@ -31,7 +31,7 @@ from agent_server.conversation import (
     tool_call_name,
 )
 from agent_server.providers import Provider, get_provider
-from agent_server.providers.base import message_chars, observe_usage
+from agent_server.providers.base import completion_with_retry, message_chars, observe_usage
 from agent_server.system_prompt import (
     disabled_tools,
     session_system_prompt,
@@ -663,7 +663,9 @@ async def _loop(
         # the provider so it can show an indicator instead of looking hung.
         yield {"type": "working"}
 
-        async for event in provider.chat_completion(
+        async for event in completion_with_retry(
+            provider,
+            abort=abort,
             messages=messages,
             tools=tools,
             model=session["model"],
@@ -700,6 +702,16 @@ async def _loop(
                 usage = event["usage"]
             elif etype == "finish":
                 finish = event["reason"]
+            elif etype == "retry":
+                # A doomed attempt already streamed some output; discard it and
+                # let the retry start from a clean slate. The client resets its
+                # partial bubble on the same event.
+                content = ""
+                reasoning = ""
+                partials = {}
+                usage = None
+                finish = "stop"
+                yield event
             elif etype == "error":
                 failed = True
                 # Persist partial output so the turn is not silently lost.

@@ -6,11 +6,21 @@ as ``error`` events, because an exception thrown after SSE headers are flushed
 surfaces in the browser as an opaque "Error in input stream".
 """
 
+import asyncio
+import time
 from abc import ABC, abstractmethod
 from collections.abc import AsyncIterator
 from typing import Literal, TypedDict
 
 from agent_server.providers import credentials
+
+# A single transient provider failure -- a dropped connection, a timeout, a 5xx
+# -- must not end an autonomous run. The agent (and its subagents and compaction
+# summariser) retry a failed request a few times before giving up, because a
+# long-horizon task is guaranteed to hit one of these eventually and the work
+# already done is too expensive to throw away on a hiccup.
+MODEL_RETRY_ATTEMPTS = 3
+MODEL_RETRY_DELAYS = (2.0, 8.0)
 
 FinishReason = Literal["stop", "tool_calls", "length", "content_filter", "error"]
 
@@ -33,6 +43,60 @@ def normalize_finish(reason: str | None) -> FinishReason:
     if not reason:
         return "stop"
     return _FINISH_ALIASES.get(reason, reason)  # type: ignore[return-value]
+
+
+async def _wait(delay: float, abort) -> bool:
+    """Sleep up to `delay` seconds; return True if `abort` fired during it."""
+    if abort is None:
+        await asyncio.sleep(delay)
+        return False
+    deadline = time.monotonic() + delay
+    while time.monotonic() < deadline:
+        if abort.is_set():
+            return True
+        await asyncio.sleep(0.25)
+    return abort.is_set()
+
+
+async def completion_with_retry(provider, abort=None, **kwargs):
+    """Stream `provider.chat_completion(**kwargs)`, retrying transient failures.
+
+    Providers never raise; a failure is an ``error`` event. This wrapper turns a
+    retryable one (a transport error, not a request the caller got wrong) into a
+    ``retry`` event, then asks again. The ``retry`` event lets the caller discard
+    whatever it accumulated from the doomed attempt and lets the UI drop the
+    partial bubble. A non-retryable error, or a final failed attempt, is yielded
+    as a plain ``error`` event and the stream ends.
+
+    ``abort`` (an ``asyncio.Event``) is optional; if it fires during a backoff the
+    wrapper stops yielding so the caller's own abort handling takes over.
+    """
+    for attempt in range(MODEL_RETRY_ATTEMPTS):
+        errored = False
+        async for event in provider.chat_completion(**kwargs):
+            if event["type"] != "error":
+                yield event
+                continue
+            errored = True
+            message = event["message"]
+            if not event.get("retryable") or attempt == MODEL_RETRY_ATTEMPTS - 1:
+                yield {"type": "error", "message": message}
+                return
+            delay = MODEL_RETRY_DELAYS[min(attempt, len(MODEL_RETRY_DELAYS) - 1)]
+            yield {
+                "type": "retry",
+                "message": (
+                    f"The model connection dropped ({message}). "
+                    f"Retrying in {delay:.0f}s (attempt {attempt + 2} of {MODEL_RETRY_ATTEMPTS})."
+                ),
+                "delay": delay,
+            }
+            if await _wait(delay, abort):
+                return
+            break
+        if not errored:
+            return
+    yield {"type": "error", "message": "The model kept failing; retries exhausted."}
 
 
 def blank_usage() -> dict:
@@ -71,6 +135,7 @@ class StreamEvent(TypedDict, total=False):
       usage      -- final token accounting (`usage`)
       finish     -- terminal event (`reason`)
       error      -- transport/API failure (`message`), always terminal
+                    (`retryable` is True when retrying may help)
     """
     type: Literal["reasoning", "content", "tool_calls", "usage", "finish", "error"]
     text: str
@@ -78,6 +143,7 @@ class StreamEvent(TypedDict, total=False):
     usage: dict
     reason: FinishReason
     message: str
+    retryable: bool
 
 
 class Provider(ABC):

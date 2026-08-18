@@ -482,6 +482,23 @@ function endAssistantSegment(stream) {
   setupMessageSide();
 }
 
+/* A provider retry supersedes whatever was streamed before the failure. Drop
+   the partial assistant/reasoning bubbles so the fresh attempt starts clean
+   instead of garbling onto the old text. */
+function resetStream(stream) {
+  if (stream.reasoningEl) {
+    stream.reasoningEl.remove();
+    stream.reasoningEl = null;
+  }
+  if (stream.assistantEl) {
+    stream.assistantEl.remove();
+    stream.assistantEl = null;
+    stream.contentEl = null;
+    stream.text = '';
+  }
+  clearToolProgress(stream);
+}
+
 function handleEvent(event, stream) {
   // Any event means the request landed; the placeholder has done its job.
   if (event.type !== 'turn_start') clearStatus();
@@ -552,6 +569,14 @@ function handleEvent(event, stream) {
       autoscroll();
       break;
 
+    case 'compact_reset':
+      if (stream.compactEl) {
+        stream.compactEl.closest('.message')?.remove();
+        stream.compactEl = null;
+      }
+      appendNotice('info', event.message);
+      break;
+
     case 'compact_done':
     case 'compacted': {
       if (stream.compactEl) {
@@ -604,6 +629,11 @@ function handleEvent(event, stream) {
 
     case 'notice':
       appendNotice(event.level === 'warn' ? 'error' : 'info', event.message);
+      break;
+
+    case 'retry':
+      resetStream(stream);
+      appendNotice('info', event.message);
       break;
 
     case 'cache_warning':

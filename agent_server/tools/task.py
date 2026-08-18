@@ -148,6 +148,7 @@ def _combine(results, title):
 async def _run(ctx: ToolContext, description: str, prompt: str, title: str, tool_cache: dict | None = None, tier: int = 0) -> ToolResult:
     from agent_server.config import provider_for_model
     from agent_server.providers import get_provider
+    from agent_server.providers.base import completion_with_retry
     from agent_server.system_prompt import subagent_body as _subagent_body
     from agent_server.system_prompt import subagent_disabled_tools
     from agent_server.tools.registry import execute_tool, tool_schemas
@@ -207,8 +208,13 @@ async def _run(ctx: ToolContext, description: str, prompt: str, title: str, tool
         partials: dict[int, dict] = {}
         finish = "stop"
 
-        async for event in provider.chat_completion(
-            messages=messages, tools=tools, model=effective_model, thinking_effort=effort
+        async for event in completion_with_retry(
+            provider,
+            abort=ctx.abort,
+            messages=messages,
+            tools=tools,
+            model=effective_model,
+            thinking_effort=effort,
         ):
             if ctx.abort.is_set():
                 return ToolResult.error("cancelled", title, usage_total)
@@ -223,6 +229,13 @@ async def _run(ctx: ToolContext, description: str, prompt: str, title: str, tool
                 for key, value in (event["usage"] or {}).items():
                     if isinstance(value, (int, float)):
                         usage_total[key] = usage_total.get(key, 0) + value
+            elif etype == "retry":
+                # A dropped connection mid-answer: discard the partial reply and
+                # let the retry build it again from scratch.
+                content = ""
+                reasoning = ""
+                partials = {}
+                finish = "stop"
             elif etype == "error":
                 return ToolResult.error(event["message"], title, usage_total)
             elif etype == "finish":

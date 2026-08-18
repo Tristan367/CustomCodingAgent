@@ -105,3 +105,63 @@ async def test_the_user_can_still_stop_it(session, monkeypatch):
 
     assert any(e["type"] == "aborted" for e in events)
     assert provider.calls < 20, "abort did not end the loop promptly"
+
+
+class FlakyProvider:
+    """Drops the connection on the first `failures` calls, then answers."""
+
+    def __init__(self, failures: int, retryable: bool = True):
+        self.failures = failures
+        self.retryable = retryable
+        self.calls = 0
+
+    def has_credentials(self):
+        return True
+
+    def supports_vision(self):
+        return True
+
+    def count_tokens(self, messages):
+        return 1
+
+    async def chat_completion(self, messages, tools, model, thinking_effort=None):
+        self.calls += 1
+        if self.calls <= self.failures:
+            yield {
+                "type": "error",
+                "message": "Stream failed: httpx.ReadError: connection reset",
+                "retryable": self.retryable,
+            }
+        else:
+            yield {"type": "content", "text": "done"}
+            yield {"type": "finish", "reason": "stop"}
+
+
+async def test_a_dropped_connection_retries_instead_of_ending_the_run(session, monkeypatch):
+    """A transient provider failure must not end an autonomous run."""
+    from agent_server.providers import base as provider_base
+
+    monkeypatch.setattr(provider_base, "MODEL_RETRY_DELAYS", (0.0, 0.0))
+    provider = FlakyProvider(failures=1)
+    monkeypatch.setattr(agent, "get_provider", lambda _p: provider)
+
+    events = [e async for e in agent.run(session["id"])]
+
+    assert provider.calls == 2, f"expected a retry, got {provider.calls} calls"
+    assert any(e["type"] == "retry" for e in events), "no retry event was emitted"
+    assert events[-1]["type"] == "done", "the run did not complete after the retry"
+
+
+async def test_a_bad_request_is_not_retried(session, monkeypatch):
+    """A 4xx means the request itself is wrong; retrying repeats the rejection."""
+    from agent_server.providers import base as provider_base
+
+    monkeypatch.setattr(provider_base, "MODEL_RETRY_DELAYS", (0.0, 0.0))
+    provider = FlakyProvider(failures=1, retryable=False)
+    monkeypatch.setattr(agent, "get_provider", lambda _p: provider)
+
+    events = [e async for e in agent.run(session["id"])]
+
+    assert provider.calls == 1, "a non-retryable error should not be retried"
+    assert not any(e["type"] == "retry" for e in events)
+    assert any(e["type"] == "error" for e in events)

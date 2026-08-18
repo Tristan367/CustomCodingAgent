@@ -3567,7 +3567,12 @@ const Speech = {
    * again to carry on, click a different one to switch. */
   async toggle(el) {
     if (this.el === el && this.current) {
-      if (this.audioEl.paused) this.resume(); else this.audioEl.pause();
+      if (this.audioEl.paused) {
+        this.resume();
+      } else {
+        this.audioEl.pause();
+        this.clearHighlight();  // paused: nothing is being read, so no underline
+      }
       this.paint();
       return;
     }
@@ -3577,6 +3582,7 @@ const Speech = {
   resume() {
     if (this.ctx && this.ctx.state === 'suspended') this.ctx.resume();
     this.audioEl.play().catch(() => {});
+    this.onProgress();  // re-underlines the sentence as playback resumes
   },
 
   /* Exact sentence ranges in the rendered DOM, so the underline follows real
@@ -3823,7 +3829,7 @@ const Speech = {
   onProgress() {
     const clip = this.current;
     const a = this.audioEl;
-    if (!clip || !a || !a.duration) return;
+    if (!clip || !a || !a.duration || a.paused) return;  // paused: nothing to underline
     const span = clip.end - clip.start;
     if (span <= 1) return;  // a single-sentence clip was underlined when it began
     const seg = this.sentences.slice(clip.start, clip.end);

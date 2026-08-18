@@ -96,6 +96,12 @@ _EMPHASIS = re.compile(r"(\*\*|\*|~~)(?=\S)(.+?)(?<=\S)\1", re.S)
 _INLINE_CODE = re.compile(r"`([^`]+)`")
 _BARE_URL = re.compile(r"<?https?://\S+>?")
 _BLANKS = re.compile(r"\n{3,}")
+# Emoji are pictures, not words: strip them so they are not spelled out or
+# garbled. Covers the pictograph, emoticon, symbol and flag blocks plus the
+# variation selector and zero-width joiner used to compose them.
+_EMOJI = re.compile(
+    "[\U0001F000-\U0001FAFF\U00002600-\U000027BF\U0000FE0F\U0000200D]"
+)
 
 
 def _blocks(text: str) -> list[str]:
@@ -130,6 +136,7 @@ def to_prose(text: str) -> str:
     keeps its text but loses the backticks, because an identifier mid-sentence
     usually is the sentence.
     """
+    text = _EMOJI.sub("", text)
     text = _FENCED.sub("\n\n", text)
     text = _TABLE_ROW.sub("", text)
     text = _RULE.sub("", text)
@@ -164,8 +171,11 @@ _SPOKEN = [
     # Money before the decimal rule, so the unit lands after the number.
     (re.compile(r"\$(\d+(?:\.\d+)?)"), r"\1 dollars"),
 
-    # "3.3" is two numbers to espeak unless the dot is spoken.
-    (re.compile(r"(\d)\.(\d)"), r"\1 point \2"),
+    # A dot glued to a digit is "point" (3.2), a dot glued to a letter is "dot"
+    # (file.py). Only when there is no space after it, so sentence-ending full
+    # stops are left alone.
+    (re.compile(r"\.(?=\d)"), " point "),
+    (re.compile(r"\.(?=[A-Za-z])"), " dot "),
 
     (re.compile(r"~\s*(?=\d)"), "about "),
     (re.compile(r"#(?=\d)"), "number "),
@@ -176,10 +186,15 @@ _SPOKEN = [
     # Horizontal whitespace only in these: \s would swallow the blank lines
     # that separate one list item from the next, welding the whole reply into
     # a single breathless block.
-    (re.compile(r"[^\S\n]*[\u2014\u2013][^\S\n]*"), ", "),   # em/en dash -> a pause
+    (re.compile(r"[^\S\n]*\u2014[^\S\n]*"), ". "),   # em dash -> a full-stop pause
+    (re.compile(r"[^\S\n]*\u2013[^\S\n]*"), ", "),   # en dash -> a short pause
     (re.compile(r"[^\S\n]*--[^\S\n]*"), ", "),
     (re.compile(r"[^\S\n]*\u2192[^\S\n]*"), " becomes "),
     (re.compile(r"[^\S\n]*&[^\S\n]*"), " and "),
+    # File paths read as their segments: /tmp/file.py -> "tmp file dot py".
+    (re.compile(r"/"), " "),
+    # Collapse ellipses and any repeated full stops into one pause.
+    (re.compile(r"\.{2,}"), "."),
     (re.compile(r"[^\S\n]{2,}"), " "),
 ]
 
@@ -223,7 +238,12 @@ def sentences(text: str) -> list[str]:
         safe = _DECIMAL.sub(r"\1" + _DOT, _INITIAL.sub(r"\1" + _DOT,
                             _ABBREV.sub(r"\1" + _DOT, para)))
         parts = _SENTENCE_END.sub("\\1\x00", safe).split("\x00")
-        out.extend(p.replace(_DOT, ".").strip() for p in parts if p.strip())
+        parts = [p.replace(_DOT, ".").strip() for p in parts if p.strip()]
+        # A block that ends without sentence punctuation is a line break for the
+        # voice: give it a full stop so the pause is actually spoken.
+        if parts and not parts[-1].endswith((".", "!", "?")):
+            parts[-1] = parts[-1].rstrip(",:;-") + "."
+        out.extend(parts)
     return out
 
 

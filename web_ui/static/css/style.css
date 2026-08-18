@@ -316,6 +316,7 @@ hr { border: 0; border-top: 1px solid var(--border); margin: 6px 0; }
 .session-dir {
   color: var(--text-faint);
   flex: 0 1 auto;
+  min-width: 12ch;   /* never shrink the working directory out of sight */
   max-width: 34ch;
   overflow: hidden;
   text-overflow: ellipsis;

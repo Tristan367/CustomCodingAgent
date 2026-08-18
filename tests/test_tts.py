@@ -50,6 +50,13 @@ def test_underscores_in_identifiers_survive():
     assert prose == "Run web_ui/static/js/app.js and __init__.py."
 
 
+def test_emojis_are_stripped():
+    """Emoji are pictures, not words, so they never reach the synthesiser."""
+    prose = tts.to_prose("Done \U0001F44D and ready \u2728.")
+    assert "\U0001F44D" not in prose and "\u2728" not in prose
+    assert "Done" in prose and "ready" in prose
+
+
 # ── Sentence splitting ──────────────────────────────────────────────────────
 
 def test_a_soft_wrapped_sentence_is_not_split_in_half():
@@ -64,7 +71,7 @@ def test_a_soft_wrapped_sentence_is_not_split_in_half():
 
 def test_list_items_stay_separate():
     md = "- First item\n- Second item\n- Third item"
-    assert tts.plan(md) == ["First item", "Second item", "Third item"]
+    assert tts.plan(md) == ["First item.", "Second item.", "Third item."]
 
 
 @pytest.mark.parametrize("text,head", [
@@ -90,17 +97,31 @@ def test_abbreviations_and_numbers_do_not_end_a_sentence(text, head):
     ("$0.11 total", "0 point 11 dollars total"),
     ("#3 and 50/50", "number 3 and 50 50"),
     ("e.g. this", "for example this"),
-    ("a — b", "a, b"),
+    ("a — b", "a. b"),
     ("AI & ML", "AI and ML"),
 ])
 def test_symbols_are_spoken_not_spelled(raw, spoken):
     assert tts.normalise(raw) == spoken
 
 
+@pytest.mark.parametrize("raw,spoken", [
+    # A dot glued to a digit is "point", to a letter is "dot".
+    ("Version 3.2.1 shipped", "Version 3 point 2 point 1 shipped"),
+    ("Edit file.py and run app.js", "Edit file dot py and run app dot js"),
+    ("See U.S.A. for details", "See U dot S dot A. for details"),
+    # File paths lose their slashes.
+    ("Run /tmp/file.py now", "Run tmp file dot py now"),
+    # Repeated full stops collapse to one pause.
+    ("Wait... then go", "Wait. then go"),
+])
+def test_dots_slashes_and_repeated_stops(raw, spoken):
+    assert tts.normalise(raw) == spoken
+
+
 def test_normalising_keeps_the_blank_lines_between_list_items():
     r"""Collapsing runs of whitespace welded every item into one block, because
     \s also matches the newlines that separate them."""
-    assert tts.plan("- First item\n- Second item") == ["First item", "Second item"]
+    assert tts.plan("- First item\n- Second item") == ["First item.", "Second item."]
 
 
 def test_a_clip_gets_silence_at_the_front():

@@ -658,6 +658,11 @@ async def _loop(
         finish = "stop"
         failed = False
 
+        # The gap between a tool result and the model's first token is the one
+        # place nothing is visibly happening. Tell the client we are waiting on
+        # the provider so it can show an indicator instead of looking hung.
+        yield {"type": "working"}
+
         async for event in provider.chat_completion(
             messages=messages,
             tools=tools,

@@ -235,8 +235,18 @@ async function refreshTranscript() {
     holder.innerHTML = html;
     const fresh = holder.querySelector('#messages');
     if (fresh && App.els.messages) {
+      // A tool that starts while this fetch is in flight would have its row
+      // replaced by a transcript that predates it, leaving its tool_end with
+      // nothing to update. Carry still-running rows across the swap.
+      const running = [...App.els.messages.querySelectorAll('.message.tool.pending')];
       App.els.messages.replaceWith(fresh);
       App.els.messages = fresh;
+      for (const row of running) {
+        const id = row.dataset.toolCallId;
+        if (!id || !fresh.querySelector(`.message.tool[data-tool-call-id="${cssEscape(id)}"]`)) {
+          fresh.appendChild(row);
+        }
+      }
       renderStoredMessages();
       // The fresh partial may carry a pending-restore placeholder (a run paused
       // on a permission); turn it back into the approval card, not a bare
@@ -482,6 +492,13 @@ function handleEvent(event, stream) {
       attachMessageActions(event.user_message_id);
       break;
 
+    case 'working':
+      // The provider is being asked for the next round; nothing has streamed
+      // yet. Re-show the indicator (cleared above) so a slow connect doesn't
+      // read as a hang.
+      showStatus('Waiting for the model');
+      break;
+
     case 'reasoning':
       if (!stream.reasoningEl) {
         if (App.hideThinking) hideAllThinking();
@@ -526,7 +543,7 @@ function handleEvent(event, stream) {
     }
 
     case 'compacting':
-      appendNotice('info', 'Compacting the conversation...');
+      appendCompactingNotice();
       break;
 
     case 'compact_delta':
@@ -643,8 +660,20 @@ function flushRender(stream) {
   autoscroll();
 }
 
+let metaTimer = null;
 function setStreaming(active) {
   App.streaming = active;
+  if (active) {
+    // The context ring is only recomputed on refresh/turn-end otherwise, so a
+    // long turn reads as a frozen dial even while the model chews through the
+    // window. Poll it cheaply instead of once per token.
+    if (!metaTimer) {
+      metaTimer = setInterval(() => { if (App.streaming) refreshMeta(); }, 5000);
+    }
+  } else {
+    if (metaTimer) { clearInterval(metaTimer); metaTimer = null; }
+    refreshMeta();
+  }
   if (App.els.textarea) {
     App.els.textarea.placeholder = active
       ? 'Message the agent \u2014 sent at the next step'
@@ -940,16 +969,26 @@ function roleEl(text) {
 /* A transient "Sending / Waiting" line, so there is feedback in the second or
  * two before the first token arrives. */
 let statusEl = null;
+let statusTimer = null;
+let statusBegan = 0;
 
 function showStatus(text) {
   clearStatus();
   const node = el('div', 'message status-line');
   node.appendChild(el('div', 'msg-role', ''));
   const body = el('div', 'msg-content');
-  body.append(el('span', 'spinner-dot'), el('span', 'status-text', text));
+  body.append(el('span', 'spinner-dot'), el('span', 'status-text', text),
+              el('span', 'status-elapsed', ''));
   node.appendChild(body);
   App.els.messages.appendChild(node);
   statusEl = node;
+  statusBegan = performance.now();
+  statusTimer = setInterval(() => {
+    const label = statusEl && statusEl.querySelector('.status-elapsed');
+    if (!label) return;
+    const secs = Math.floor((performance.now() - statusBegan) / 1000);
+    label.textContent = secs >= 2 ? ` \u00b7 ${secs}s` : '';
+  }, 1000);
   autoscroll();
   return { remove: clearStatus };
 }
@@ -962,6 +1001,7 @@ function setStatusText(text) {
 function clearStatus() {
   if (statusEl) statusEl.remove();
   statusEl = null;
+  if (statusTimer) { clearInterval(statusTimer); statusTimer = null; }
 }
 
 function appendMessage(role, text) {
@@ -1340,10 +1380,15 @@ function renderChangeSummary(changes) {
 }
 
 /* Re-render the change summary from the database after a reload, so the list of
- * changed files survives navigating away and back. */
+ * changed files survives navigating away and back. Only once the run is not
+ * mid-flight: a summary of a turn still in progress is a partial list that
+ * would keep re-appearing on every tab switch. */
 async function loadChangeSummary() {
   if (!App.sessionId) return;
   try {
+    const status = await (await fetch('/api/status')).json();
+    const running = (status.sessions || {})[App.sessionId]?.status === 'running';
+    if (running) return;
     const resp = await fetch(`/api/sessions/${App.sessionId}/changes`);
     if (!resp.ok) return;
     renderChangeSummary(await resp.json());
@@ -1512,6 +1557,22 @@ function appendNotice(kind, text) {
   body.appendChild(el('div', 'content-text', text));
   node.appendChild(body);
   App.els.messages.appendChild(node);
+  autoscroll();
+}
+
+/* The compaction notice stays up for the whole summary, which is slow enough to
+ * read as a hang. Show a running duration next to it. */
+function appendCompactingNotice() {
+  const node = el('div', 'message notice notice-info');
+  node.appendChild(roleEl('info'));
+  const body = el('div', 'msg-content');
+  const text = el('div', 'content-text');
+  text.append(el('span', '', 'Compacting the conversation\u2026 '),
+              el('span', 'tool-elapsed', '0.0s'));
+  body.appendChild(text);
+  node.appendChild(body);
+  App.els.messages.appendChild(node);
+  startElapsed(node, node.querySelector('.tool-elapsed'));
   autoscroll();
 }
 

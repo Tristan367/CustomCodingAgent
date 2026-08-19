@@ -661,7 +661,7 @@ def _usage_dict(usage_json: str) -> dict:
 
 async def get_session_usage(session_id: str) -> dict:
     """Token totals and live context size for one session."""
-    from agent_server.config import COMPACT_THRESHOLD_TOKENS, model_info
+    from agent_server.config import default_compact_threshold, model_info
 
     session = await get_session(session_id)
     info = model_info((session or {}).get("model", ""))
@@ -728,7 +728,7 @@ async def get_session_usage(session_id: str) -> dict:
         context = (row or {}).get("total", 0) + (summaries or {}).get("total", 0)
 
     totals["context"] = context
-    totals["threshold"] = (session or {}).get("compact_threshold") or COMPACT_THRESHOLD_TOKENS
+    totals["threshold"] = (session or {}).get("compact_threshold") or default_compact_threshold(info["context"])
     totals["max_context"] = info["context"]
     totals["percent"] = round(100 * context / totals["threshold"], 1) if totals["threshold"] else 0
     totals["cache_hit_rate"] = (

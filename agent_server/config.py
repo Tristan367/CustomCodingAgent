@@ -226,9 +226,18 @@ def resolve_model_choice(choice: str, custom_model: str = "") -> tuple[str, str]
     return provider_for_model(choice), choice
 
 # Offer compaction once a session's live context passes this many tokens.
-# Overridable per session; the ceiling is the model's context window.
-COMPACT_THRESHOLD_TOKENS = int(os.getenv("COMPACT_THRESHOLD_TOKENS", "262144"))
+# Overridable per session. The default is model-aware: 75% of the model's
+# context window, capped at COMPACT_THRESHOLD_TOKENS. A flat 256K wasted three
+# quarters of a 1M window (compacting long before the model ran out), while a
+# flat 750K would exceed a smaller model's window and stop it ever compacting.
+COMPACT_THRESHOLD_TOKENS = int(os.getenv("COMPACT_THRESHOLD_TOKENS", "750000"))
+COMPACT_THRESHOLD_RATIO = 0.75
 MIN_COMPACT_THRESHOLD = 4096
+
+
+def default_compact_threshold(max_context: int) -> int:
+    """Compaction point for a model with no per-session override."""
+    return min(COMPACT_THRESHOLD_TOKENS, int(max_context * COMPACT_THRESHOLD_RATIO))
 
 # Slider stops offered in the UI: powers of two from 4K to 1M.
 THRESHOLD_STEPS = [4096 * 2 ** i for i in range(8)] + [1_000_000]

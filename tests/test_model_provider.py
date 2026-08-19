@@ -207,3 +207,16 @@ async def test_a_discovered_model_still_refuses_a_mismatched_provider(
     register_dynamic_deepseek_models(["deepseek-v4-pro-0813"])
     with pytest.raises(HTTPException, match="served by deepseek"):
         await _validate(SessionUpdate(model="deepseek-v4-pro-0813", provider="anthropic"))
+
+
+def test_default_compaction_threshold_scales_with_the_model_window():
+    """75% of the window, capped at 750K.
+
+    A 1M model compacts at 750K, but a smaller model must still compact before
+    it runs out -- a flat 750K would exceed its window and never fire.
+    """
+    from agent_server.config import default_compact_threshold
+
+    assert default_compact_threshold(1_000_000) == 750_000
+    assert default_compact_threshold(131_072) == 98_304
+    assert default_compact_threshold(32_768) == 24_576

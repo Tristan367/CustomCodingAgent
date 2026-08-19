@@ -1,5 +1,12 @@
 <div id="prompts-page">
-    <h2>Profiles</h2>
+    {# The two configuration pages are edited together far more often than
+       either is edited alone -- a new profile usually wants a tool that does
+       not exist yet. Going via the home page to cross between them was two
+       clicks for something that should be one. #}
+    <nav class="page-head">
+        <h2>Profiles</h2>
+        <a href="/tools">Custom Tools</a>
+    </nav>
     {% if saved %}
     <div class="success-banner">
         Saved.

@@ -2,7 +2,7 @@
     {% if error %}<div class="error-banner">{{ error }}</div>{% endif %}
 
     <nav class="home-nav">
-        <a href="/prompts">Prompts</a>
+        <a href="/prompts">Profiles</a>
         <a href="/tools">Tools</a>
     </nav>
 
@@ -243,8 +243,8 @@ async function restartMyriadCode(button) {
             unavailable. Install it with <code>pip install faster-whisper</code>.
             {% endif %}
         </p>
-        <div class="tool-grid" style="margin-top:12px">
-            <span class="hint" style="grid-column:1/-1;margin:0">Expand these tool results automatically:</span>
+        <p class="hint" style="margin:12px 0 0">Expand these tool results automatically:</p>
+        <div class="tool-grid">
             {% for t in expandable_tools %}
             <label class="checkbox-label">
                 <input type="checkbox" value="{{ t }}" class="expand-tool-check"
@@ -254,8 +254,8 @@ async function restartMyriadCode(button) {
             </label>
             {% endfor %}
         </div>
-        <div class="tool-grid" style="margin-top:12px">
-            <span class="hint" style="grid-column:1/-1;margin:0">Keep the transcript clean:</span>
+        <p class="hint" style="margin:12px 0 0">Keep the transcript clean:</p>
+        <div class="tool-grid">
             <label class="checkbox-label">
                 <input type="checkbox" id="hide-thinking"
                        {% if hide_thinking %}checked{% endif %}

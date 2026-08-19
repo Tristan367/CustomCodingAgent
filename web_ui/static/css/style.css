@@ -2376,6 +2376,22 @@ dialog.file-browser::backdrop { background: transparent; }
 }
 .home-nav a:hover { text-decoration: underline; }
 
+/* Title on the left, the link to the other configuration page on the right.
+   The h2's own margin is dropped so the two sit on one baseline. */
+.page-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  gap: var(--s4);
+}
+.page-head h2 { margin: 0; }
+.page-head a {
+  color: var(--accent);
+  font-weight: 600;
+  text-decoration: none;
+}
+.page-head a:hover { text-decoration: underline; }
+
 /* ── Keyboard shortcuts ───────────────────────────────────────────────────── */
 
 .key-group { border-bottom: 1px solid var(--border); }

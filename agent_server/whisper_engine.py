@@ -181,15 +181,30 @@ _engine_lock = asyncio.Lock()
 
 
 async def get_engine(model_name: str = "") -> WhisperEngine:
-    """The shared engine, loading the model on first use."""
+    """The shared engine, loading the model on first use.
+
+    A name that will not load falls back to the default rather than leaving
+    dictation dead. The setting is one text field: a typo, a stale path, or a
+    repo that has moved should cost the user the model they asked for, not the
+    feature.
+    """
     global _engine
     wanted = model_name or DEFAULT_MODEL
     async with _engine_lock:
         if _engine is None or _engine.model_name != wanted:
-            if _engine is not None:
-                _engine = None
+            _engine = None
             engine = WhisperEngine(wanted)
-            await asyncio.to_thread(engine.load)
+            try:
+                await asyncio.to_thread(engine.load)
+            except Exception:
+                if wanted == DEFAULT_MODEL:
+                    raise
+                log.warning(
+                    "speech model %r could not be loaded; falling back to %s",
+                    wanted, DEFAULT_MODEL, exc_info=True,
+                )
+                engine = WhisperEngine(DEFAULT_MODEL)
+                await asyncio.to_thread(engine.load)
             _engine = engine
         return _engine
 

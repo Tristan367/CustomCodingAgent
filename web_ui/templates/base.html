@@ -24,9 +24,11 @@
                 <path d="M8 8 L54 32 L8 56 L8 42 L24 32 L8 22 Z" fill="var(--accent)"/>
             </svg>
         </a>
+        {# Only what belongs in front of you at all times: the tabs, and the
+           brake. Prompts and Tools are configuration -- visited occasionally,
+           and taking room from the tab bar every second in between. They live
+           on the home page now. #}
         <nav id="tab-bar"><div class="tab-scroll" id="tab-scroll"></div></nav>
-        <a href="/prompts" class="topbar-link" title="Prompts">Prompts</a>
-        <a href="/tools" class="topbar-link" title="Custom tools">Tools</a>
         <button type="button" id="stop-all-btn" class="topbar-link stop-all" title="Stop every agent and clear all pending messages"
                 onclick="stopAll()">&#9632;</button>
     </header>

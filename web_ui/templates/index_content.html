@@ -1,6 +1,12 @@
 <div id="home-page">
     {% if error %}<div class="error-banner">{{ error }}</div>{% endif %}
 
+    <nav class="home-nav">
+        <a href="/prompts">Prompts</a>
+        <a href="/tools">Tools</a>
+        <span class="hint">System prompts and profiles &middot; custom tools, secrets and built-in descriptions</span>
+    </nav>
+
     <div class="provider-grid">
     {% for ps in provider_settings %}
     <section class="panel">

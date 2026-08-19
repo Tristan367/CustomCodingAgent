@@ -1,6 +1,7 @@
 """Static configuration. Runtime-mutable settings live in the `settings` DB table."""
 
 import os
+import re
 import shutil
 import tempfile
 from pathlib import Path
@@ -272,14 +273,43 @@ WEBFETCH_ALLOW_PRIVATE = os.getenv("WEBFETCH_ALLOW_PRIVATE", "0") == "1"
 
 
 
+def normalise_whisper_model(value: str) -> str:
+    """Accept what the setting used to hold as well as what it holds now.
+
+    The model was the path of a GGML file the user downloaded by hand; it is a
+    name now, which faster-whisper resolves and fetches itself. An install that
+    predates the change still has the old path stored, and handing that to
+    faster-whisper produced a message about Hugging Face repo ids that says
+    nothing about what actually happened -- so the path is read for the size it
+    names and turned into the equivalent name.
+
+    A directory is left alone: that is how a local CTranslate2 model is given,
+    and it is still valid. So is anything already in the form of a name or a
+    repo id.
+    """
+    value = (value or "").strip()
+    if not value:
+        return ""
+    if Path(value).is_dir():
+        return value
+    name = Path(value).name
+    if not (name.endswith(".bin") or name.startswith("ggml-")):
+        return value
+    # ggml-small.en-q8_0.bin -> small.en
+    name = name.removesuffix(".bin").removeprefix("ggml-")
+    name = re.sub(r"-q\d+(_\d+)?$", "", name)
+    from agent_server.whisper_engine import MODEL_SIZES
+
+    return name if name in MODEL_SIZES else ""
+
+
 def _default_whisper_model() -> str:
     """The model to load when nothing has been chosen.
 
     A name, not a path: faster-whisper resolves it against its cache and
-    downloads it once. The old setting was the path of a GGML file the user had
-    to fetch by hand, which is why dictation used to be off until you had.
+    downloads it once.
     """
-    return os.getenv("WHISPER_MODEL") or whisper_engine_default()
+    return normalise_whisper_model(os.getenv("WHISPER_MODEL", "")) or whisper_engine_default()
 
 
 def whisper_engine_default() -> str:
@@ -299,7 +329,7 @@ def whisper_model() -> str:
 def set_whisper_model(value: str) -> None:
     """Switch the active model; empty falls back to env/the default."""
     global _whisper_model
-    _whisper_model = (value or "").strip() or _default_whisper_model()
+    _whisper_model = normalise_whisper_model(value) or _default_whisper_model()
 
 
 def list_whisper_models() -> list[str]:

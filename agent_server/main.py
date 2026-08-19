@@ -154,7 +154,17 @@ async def lifespan(app: FastAPI):
     set_custom_color((await db.get_setting("theme_custom")) or "")
     from agent_server import config
 
-    config.set_whisper_model((await db.get_setting("whisper_model")) or "")
+    # An install predating the move to faster-whisper still has the path of a
+    # GGML file stored here. Reading it for the size it names is not enough on
+    # its own -- the settings dropdown shows whatever is stored, so the path
+    # would keep showing up there -- so the translated name is written back.
+    stored_whisper = (await db.get_setting("whisper_model")) or ""
+    config.set_whisper_model(stored_whisper)
+    if stored_whisper and stored_whisper != config.whisper_model():
+        await db.set_setting("whisper_model", config.whisper_model())
+        log.info(
+            "speech model setting migrated: %s -> %s", stored_whisper, config.whisper_model()
+        )
     reaper = asyncio.create_task(_reap_browsers())
     whisper_warmup = asyncio.create_task(_warm_whisper())
 

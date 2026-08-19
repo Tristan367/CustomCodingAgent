@@ -187,7 +187,12 @@ Two independent gates (`agent_server/permissions.py`):
   Swapping the engine changed none of that — only what runs the inference.
 - Model is runtime-selectable from the home page and is a *name* (`base.en`,
   `small.en`, `large-v3-turbo`) or a local CTranslate2 directory, not a file you
-  had to fetch. Downloaded once on first use.
+  had to fetch. Downloaded once on first use. An install predating the move
+  still has a GGML path stored: it is read for the size it names, and the
+  translated name written back, so the setting and the dropdown agree. A name
+  that will not load falls back to the default rather than leaving dictation
+  dead -- the setting is one text field, and a typo should cost the model you
+  asked for, not the feature.
 - A manual edit of the composer while recording tears the session down cleanly.
 - Noise cleanup: whisper's `[BLANK_AUDIO]`-style event tokens, lowercase sound
   descriptions, `--` em-dashes, space-before-punctuation, missing space after

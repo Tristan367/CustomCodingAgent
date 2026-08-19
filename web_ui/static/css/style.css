@@ -2251,7 +2251,18 @@ dialog.file-browser::backdrop { background: transparent; }
 .fb-row:hover { background: var(--bg-inset); }
 .fb-row.selected { background: var(--bg-hover); }
 .fb-icon { color: var(--text-faint); width: 12px; flex: 0 0 auto; }
-.fb-name { color: var(--text); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+/* `overflow: hidden` is needed for the ellipsis, and it clips at the content
+   box -- which at 12.5px x 1.55 is 19.375px and rounds down to 19, taking the
+   bottom of every g, y, p and j with it. Round line-height up to a whole pixel
+   and leave a little room under the baseline. */
+.fb-name {
+  color: var(--text);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  line-height: 20px;
+  padding-bottom: 1px;
+}
 .fb-dir .fb-name { color: var(--accent); }
 .fb-size { margin-left: auto; color: var(--text-faint); font-size: 11px; flex: 0 0 auto; }
 .fb-note { padding: 10px 12px; color: var(--text-faint); font-family: var(--sans); font-size: 12.5px; }
@@ -2285,6 +2296,24 @@ dialog.file-browser::backdrop { background: transparent; }
 }
 
 /* Right-click "copy path" menu. */
+/* ── Home page navigation ─────────────────────────────────────────────────── */
+
+.home-nav {
+  display: flex;
+  align-items: baseline;
+  gap: var(--s4);
+  padding-bottom: var(--s3);
+  margin-bottom: var(--s3);
+  border-bottom: 1px solid var(--border);
+}
+.home-nav a {
+  color: var(--accent);
+  font-weight: 600;
+  text-decoration: none;
+}
+.home-nav a:hover { text-decoration: underline; }
+.home-nav .hint { margin: 0; }
+
 /* ── Keyboard shortcuts ───────────────────────────────────────────────────── */
 
 .key-group { border-bottom: 1px solid var(--border); }

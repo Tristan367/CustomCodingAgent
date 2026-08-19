@@ -1,0 +1,22 @@
+{# Options for a model dropdown, grouped by who serves the model.
+
+   OpenRouter resells nearly everything the first-party providers offer, so a
+   flat list showed "Claude Opus 5" and "Gemini 2.5 Pro" with no way to tell
+   which key, which price, and which rate limit you were about to use. The
+   grouping is a native <optgroup>, so the answer is on screen without a longer
+   label on every row.
+
+   One macro for all three dropdowns -- new session, session model, subagent
+   model -- because they drifted apart the last time they were three copies. #}
+{% macro model_options(models, selected, skip_custom=false, with_data=false) %}
+    {% set shown = models | rejectattr('needs_model_id') | list if skip_custom else models %}
+    {% for provider_name, group in shown | groupby('provider_name') %}
+    <optgroup label="{{ provider_name }}">
+        {% for m in group %}
+        <option value="{{ m.id }}"
+                {%- if with_data %} data-needs-model-id="{{ 1 if m.needs_model_id else 0 }}"{% endif %}
+                {%- if m.id == selected %} selected{% endif %}>{{ m.name }}</option>
+        {% endfor %}
+    </optgroup>
+    {% endfor %}
+{% endmacro %}

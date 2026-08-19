@@ -178,7 +178,11 @@ def _offerable_models() -> list[dict]:
         except ValueError:
             continue
         if provider.has_credentials():
-            offered.append(model)
+            # Who actually serves it. OpenRouter resells almost everything the
+            # first-party providers offer, so "Claude Opus 5" and "Gemini 2.5
+            # Pro" each name two different routes with different keys, prices
+            # and rate limits. The dropdowns group on this.
+            offered.append(dict(model, provider_name=provider.name))
 
     for key, provider in _providers.items():
         if key.startswith("custom:") and provider.has_credentials():
@@ -186,13 +190,17 @@ def _offerable_models() -> list[dict]:
                 "id": key,
                 "name": f"{provider.name} (custom endpoint)",
                 "provider": key,
+                "provider_name": "Custom endpoints",
             })
 
     # Models discovered from the DeepSeek /models endpoint at startup, offered
     # only while the key is present so a model that cannot authenticate is never
     # presented as runnable.
     if DYNAMIC_DEEPSEEK_MODELS and get_provider("deepseek").has_credentials():
-        offered.extend(dynamic_deepseek_models())
+        offered.extend(
+            dict(m, provider_name=get_provider("deepseek").name)
+            for m in dynamic_deepseek_models()
+        )
     return offered
 
 

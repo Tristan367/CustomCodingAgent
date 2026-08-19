@@ -1,3 +1,4 @@
+{% from "components/_model_options.html" import model_options %}
 {% set pct = usage.percent if usage.percent else 0 %}
 {% set ring = 'ring-danger' if pct >= 90 else ('ring-warn' if pct >= 70 else 'ring-ok') %}
 <div id="session-meta" data-threshold="{{ usage.threshold }}" data-max-context="{{ usage.max_context }}">
@@ -95,9 +96,7 @@
                                 {% if session.model not in models | map(attribute='id') | list %}
                                 <option value="{{ session.model }}" selected>{{ session.model }} (current)</option>
                                 {% endif %}
-                                {% for m in models if not m.needs_model_id %}
-                                <option value="{{ m.id }}" {% if session.model == m.id %}selected{% endif %}>{{ m.name }}</option>
-                                {% endfor %}
+                                {{ model_options(models, session.model, skip_custom=true) }}
                             </select>
                         </label>
                         <label>Thinking effort
@@ -118,12 +117,7 @@
                         <label>Subagent model
                             <select name="subagent_model">
                                 <option value="">Same as this session</option>
-                                {% for m in models %}
-                                {% if not m.needs_model_id %}
-                                <option value="{{ m.id }}"
-                                    {% if session.subagent_model == m.id %}selected{% endif %}>{{ m.name }}</option>
-                                {% endif %}
-                                {% endfor %}
+                                {{ model_options(models, session.subagent_model, skip_custom=true) }}
                             </select>
                         </label>
                         <label>Compaction threshold (tokens)

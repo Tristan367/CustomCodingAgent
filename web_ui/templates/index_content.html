@@ -1,3 +1,4 @@
+{% from "components/_model_options.html" import model_options %}
 <div id="home-page">
     {% if error %}<div class="error-banner">{{ error }}</div>{% endif %}
 
@@ -147,12 +148,11 @@ async function restartMyriadCode(button) {
                        control. A custom endpoint contributes one option and reveals
                        a field for the model id, which only its operator knows. #}
                     <select name="model" id="model-select">
-                        {% for m in models %}
-                        <option value="{{ m.id }}" data-needs-model-id="{{ 1 if m.needs_model_id else 0 }}"
-                                {% if m.id == clone_defaults.get('clone_model', default_model) %}selected{% endif %}>{{ m.name }}</option>
+                        {% if models %}
+                        {{ model_options(models, clone_defaults.get('clone_model', default_model), with_data=true) }}
                         {% else %}
                         <option value="" disabled selected>No API key configured yet</option>
-                        {% endfor %}
+                        {% endif %}
                     </select>
                     <input type="text" name="custom_model" id="custom-model-input"
                            placeholder="model id, e.g. qwen3-coder:30b"

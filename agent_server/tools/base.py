@@ -58,6 +58,11 @@ class ToolResult:
     code: str = ""
     # 1-indexed line number of the first line in `code`, for the gutter.
     code_start: int = 1
+    # The file this result is about, absolute and resolved. Display-only: the UI
+    # opens it in the editor when the block is clicked. It is carried here rather
+    # than parsed back out of `title`, which is left-truncated for display and so
+    # is not a path at all for anything nested more than a couple of levels deep.
+    file_path: str = ""
     # Token usage for tools that call a model themselves, so their spend is
     # attributed to the session instead of vanishing.
     usage: dict | None = None

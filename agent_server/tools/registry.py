@@ -34,7 +34,6 @@ class Tool:
     # call itself `read`, and shadowing a built-in must not inherit the
     # built-in's right to skip the permission gate and run concurrently.
     parallel_safe: bool = field(default=False)
-    vision_only: bool = field(default=False)
 
     def schema(self) -> dict:
         return {
@@ -123,15 +122,13 @@ def unregister_custom(names: set[str]):
 register(Tool(
     name="read",
     description=(
-        "Read a file or directory from the filesystem. Prints a `[path#tag]` header, "
-        "then lines as `N: text` with N the 1-indexed line number. Pass that tag and "
-        "the line numbers to `edit` to change lines without retyping them. The tag "
-        "fingerprints the whole file, so it proves nothing moved underneath you.\n"
+        "Read a file or directory from the filesystem. Prints lines as `N: text`, "
+        "with N the 1-indexed line number.\n"
         "Only lines shown here may be edited; use offset/limit to reach the rest. "
         "Prefer absolute paths.\n"
         "Reading registers the file for this session: after one read you may edit or "
-        "write it repeatedly with no further reads. Re-read only when `edit` tells you "
-        "the file changed on disk since you read it."
+        "write it repeatedly with no further reads. Re-read only when a tool tells you "
+        "the file changed on disk."
     ),
     parameters={
         "type": "object",
@@ -149,35 +146,28 @@ register(Tool(
 register(Tool(
     name="edit",
     description=(
-        "Apply changes to an existing file. Prefer the tagged-line mode: call `read` "
-        "first, then pass the tag it printed plus startLine/endLine, with the "
-        "replacement in newText.\n"
-        "`read` prints a header like `[src/app.py#a3f9]` above the lines, and lines "
-        "as `42: return x`. So startLine 42, tag a3f9.\n"
-        "The tag fingerprints the whole file, so it changes whenever the file changes "
-        "on disk. If `edit` rejects your tag as stale, the user (or another process) "
-        "modified the file since you read it: re-read it and apply your edit to the "
-        "fresh content. NEVER invent, guess or adjust a tag -- copy the one you were "
-        "given.\n"
+        "Replace exact text in a file you have read. `oldString` must appear in the "
+        "file character for character -- copy it from what `read` printed, including "
+        "indentation, rather than retyping it from memory.\n"
+        "It must also be unique: include a line or two either side until it is, or "
+        "pass replaceAll=true to change every occurrence.\n"
+        "If it is not found, nothing is written and the file is untouched -- the "
+        "usual cause is whitespace, a tab where the file has spaces or a trailing "
+        "space you dropped. Look at the text again rather than guessing a variation.\n"
         "You can only edit lines `read` actually displayed. Re-read with an offset to "
         "reach lines you have not seen.\n"
-        "Each successful edit returns the file's new tag, so consecutive edits need "
-        "no re-read.\n"
-        "Fallback: oldString/newString for exact text replacement."
+        "Each edit returns the changed region as it now stands, so you can see where "
+        "your text landed without re-reading."
     ),
     parameters={
         "type": "object",
         "properties": {
             "filePath": {"type": "string", "description": "Path to the file"},
-            "tag": {"type": "string", "description": "4-char tag from the [path#tag] header of your `read`"},
-            "startLine": {"type": "integer", "description": "1-indexed first line to replace"},
-            "endLine": {"type": "integer", "description": "1-indexed last line to replace (omit for a single line)"},
-            "newText": {"type": "string", "description": "Replacement lines (omit to delete the range)"},
-            "oldString": {"type": "string", "description": "Exact text to replace (fallback)"},
-            "newString": {"type": "string", "description": "Replacement text for oldString mode"},
+            "oldString": {"type": "string", "description": "Exact text to replace, copied from the file"},
+            "newString": {"type": "string", "description": "What to put in its place (empty to delete)"},
             "replaceAll": {"type": "boolean", "description": "Replace every occurrence"},
         },
-        "required": ["filePath"],
+        "required": ["filePath", "oldString", "newString"],
     },
     handler=edit_file,
 ))
@@ -336,21 +326,15 @@ register(Tool(
         "Screenshot the desktop -- for anything that is not a web page: a native "
         "game, a desktop app, an emulator, a terminal. Use `browser` for web pages; "
         "it can interact with them, and this cannot.\n"
-        "Pass `prompt` to have the capture described in the same call, or omit it to "
-        "just save the frames and ask about them later with `vision`. `count` with "
-        "`interval_ms` records a burst, which is how you inspect an animation or "
-        "watch something change. `region` is 'x,y,w,h' if you only want part of the "
-        "screen.\n"
+        "Returns the path of every frame it saved. `count` with `interval_ms` records "
+        "a burst, which is how you inspect an animation or watch something change. "
+        "`region` is 'x,y,w,h' if you only want part of the screen.\n"
         "This needs a screen-capture tool installed; if none is found the error says "
         "which to install for this machine."
     ),
     parameters={
         "type": "object",
         "properties": {
-            "prompt": {
-                "type": "string",
-                "description": "What to find out. Omit to save the frames without describing them.",
-            },
             "region": {"type": "string", "description": "'x,y,w,h' to capture part of the screen"},
             "count": {"type": "integer", "description": "Number of frames, 1-24 (default 1)"},
             "interval_ms": {"type": "integer", "description": "Gap between frames (default 400)"},
@@ -359,7 +343,6 @@ register(Tool(
     },
     handler=capture,
     parallel_safe=True,
-    vision_only=True,
 ))
 
 register(Tool(
@@ -390,9 +373,9 @@ register(Tool(
         "last -- the tab that says whether a click actually hit the endpoint. Narrow "
         "with `filter` (a substring, or /regex/) and `count`.\n"
         "\n"
-        "`shoot` saves a screenshot and returns its path; add `ask` to have it "
-        "described in the same call. `record` takes a burst of frames, which is how "
-        "you inspect an animation or a loading state. Console errors, page exceptions "
+        "`shoot` saves a screenshot and returns its path. `record` takes a burst of "
+        "frames, which is how you inspect an animation or a loading state. Console "
+        "errors, page exceptions "
         "and failed requests are always captured and reported against the step that "
         "caused them -- check them before concluding a click did nothing.\n"
         "\n"
@@ -405,7 +388,7 @@ register(Tool(
         "{\"action\":\"click\",\"at\":\"text=Sign in\"},"
         "{\"action\":\"expect\",\"visible\":\"text=Dashboard\"},"
         "{\"action\":\"expect\",\"console_clean\":true},"
-        "{\"action\":\"shoot\",\"ask\":\"is the sidebar aligned with the header?\"}]\n"
+        "{\"action\":\"shoot\"}]\n"
         "\n"
         "For a permanent regression test, write a Playwright spec file and run it with "
         "`bash`. This tool is for exploring and verifying as you work."
@@ -437,18 +420,6 @@ register(Tool(
                         "key": {"type": "string", "description": "For press, e.g. Enter"},
                         "value": {"type": "string", "description": "For select"},
                         "js": {"type": "string", "description": "For eval"},
-                        "ask": {
-                            "type": "string",
-                            "description": "On shoot/record: have the frames described, "
-                                           "answering this question.",
-                        },
-                        "compare": {
-                            "type": "array", "items": {"type": "string"},
-                            "description": "On shoot/record with `ask`: image files to put "
-                                           "beside the new frames, so one question spans "
-                                           "both. This is how you check a page against a "
-                                           "mockup, or against an earlier capture.",
-                        },
                         "visible": {"type": "string", "description": "expect: must be visible"},
                         "hidden": {"type": "string", "description": "expect: must be gone"},
                         "count": {
@@ -498,7 +469,6 @@ register(Tool(
         "required": ["steps"],
     },
     handler=browser_tool,
-    vision_only=True,
 ))
 
 
@@ -509,7 +479,6 @@ BUILT_IN_NAMES = frozenset(TOOLS)
 
 def tool_schemas(
     names: Iterable[str] | None = None,
-    include_vision: bool = True,
     exclude: set[str] | None = None,
     descriptions: dict[str, str] | None = None,
 ) -> list[dict]:
@@ -522,8 +491,6 @@ def tool_schemas(
     result = []
     for n in selected:
         if n not in TOOLS:
-            continue
-        if not (include_vision or not TOOLS[n].vision_only):
             continue
         if exclude is not None and n in exclude:
             continue

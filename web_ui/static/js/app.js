@@ -3033,6 +3033,24 @@ function copyProjectPath(button) {
   closeMenus();
 }
 
+/* Take the edited tools into this session. Confirmed, because it re-sends the
+ * whole conversation at the miss rate -- the cheap moment is compaction, which
+ * does it anyway. */
+async function adoptToolChanges() {
+  closeMenus();
+  const ok = await ui.confirm(
+    'The tools have changed since this session started. Using them now re-sends '
+    + 'the whole conversation at full price, because the tools sit at the very '
+    + 'front of every request. Compacting adopts them for free, since it rewrites '
+    + 'that part regardless.',
+    { title: 'Use the updated tools?', confirmLabel: 'Use them now', danger: false },
+  );
+  if (!ok) return;
+  await fetch(`/api/sessions/${App.sessionId}/tools/adopt`, { method: 'POST' })
+    .catch(() => null);
+  refreshMeta();
+}
+
 function closeMenus() {
   document.querySelectorAll('.dropdown-menu').forEach((m) => { m.hidden = true; });
 }

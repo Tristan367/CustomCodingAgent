@@ -6,6 +6,7 @@ compacts, because the tool schemas sit in front of the conversation and a
 changed description re-bills the whole cached prefix.
 """
 
+import dataclasses
 import json
 
 import pytest
@@ -46,28 +47,65 @@ async def test_effective_description_and_revert(clean):
     assert registry.effective_description("read") == default
 
 
-async def test_session_freeze_survives_a_later_override(clean, tmp_path):
+async def test_a_session_freezes_the_whole_tool_array(clean, tmp_path):
+    """Not just the descriptions. Tools sit at the very front of the request, so
+    anything about them that changes moves the first byte of the prefix and
+    re-bills the whole conversation."""
     session = await _session(tmp_path)
-    frozen = await sp.session_tool_descriptions(session)
-    assert frozen["read"] == registry.TOOLS["read"].description
+    frozen = await sp.session_tool_schemas(session)
+    read = next(s for s in frozen if s["function"]["name"] == "read")
+    assert read["function"]["description"] == registry.TOOLS["read"].description
 
     # A later global edit must not change what this session sends.
     registry.set_description_overrides({"read": "a new description"})
-    again = await sp.session_tool_descriptions(await db.get_session(session["id"]))
-    assert again["read"] == registry.TOOLS["read"].description
+    again = await sp.session_tool_schemas(await db.get_session(session["id"]))
+    assert again == frozen
 
     # Clearing the freeze (what compaction does) lets the new text through.
-    await db.update_session(session["id"], tool_descriptions=None)
-    refreshed = await sp.session_tool_descriptions(await db.get_session(session["id"]))
-    assert refreshed["read"] == "a new description"
+    await db.update_session(session["id"], tool_schemas=None)
+    refreshed = await sp.session_tool_schemas(await db.get_session(session["id"]))
+    read = next(s for s in refreshed if s["function"]["name"] == "read")
+    assert read["function"]["description"] == "a new description"
 
 
-async def test_frozen_descriptions_reach_the_schema_list(clean, tmp_path):
+async def test_a_parameter_change_is_frozen_too(clean, tmp_path):
+    """The half-measure this replaced. Freezing descriptions alone left the
+    parameters free to move underneath, so a session could send a tool whose
+    frozen description told the model to pass arguments its own live schema no
+    longer accepted -- and every call it made was rejected."""
     session = await _session(tmp_path)
-    frozen = await sp.session_tool_descriptions(session)
-    registry.set_description_overrides({"read": "changed"})
-    schemas = {s["function"]["name"]: s for s in registry.tool_schemas(descriptions=frozen)}
-    assert schemas["read"]["function"]["description"] == registry.TOOLS["read"].description
+    await sp.session_tool_schemas(session)
+
+    original = registry.TOOLS["read"]
+    changed = dataclasses.replace(
+        original,
+        parameters={"type": "object", "properties": {"totallyNew": {"type": "string"}}},
+    )
+    registry.TOOLS["read"] = changed
+    try:
+        again = await sp.session_tool_schemas(await db.get_session(session["id"]))
+        read = next(s for s in again if s["function"]["name"] == "read")
+        assert "filePath" in read["function"]["parameters"]["properties"]
+        assert "totallyNew" not in read["function"]["parameters"]["properties"]
+    finally:
+        registry.TOOLS["read"] = original
+
+
+async def test_a_changed_tool_is_reported_as_pending(clean, tmp_path):
+    """So "I edited my tool and the agent is still using the old one" is visible
+    rather than puzzling. Adopting costs a full-context pass, so it is a
+    decision rather than something that happens the instant you hit save."""
+    session = await _session(tmp_path)
+    await sp.session_tool_schemas(session)
+    session = await db.get_session(session["id"])
+    assert not await sp.tool_changes_pending(session)
+
+    registry.set_description_overrides({"read": "edited while a session was open"})
+    assert await sp.tool_changes_pending(session)
+
+    await db.update_session(session["id"], tool_schemas=None)
+    session = await db.get_session(session["id"])
+    assert not await sp.tool_changes_pending(session), "nothing frozen, nothing pending"
 
 
 async def test_load_overrides_round_trips_through_settings(clean):

@@ -12,7 +12,11 @@ from agent_server.config import model_info
 from agent_server.conversation import build_messages, normalize_tool_calls
 from agent_server.providers import get_provider
 from agent_server.providers.base import completion_with_retry
-from agent_server.system_prompt import get_compact_prompt, session_system_prompt
+from agent_server.system_prompt import (
+    get_compact_prompt,
+    session_system_prompt,
+    session_tool_schemas,
+)
 
 # Work kept verbatim at the tail so recent context survives compaction. A
 # summary alone loses the concrete detail the model is actively working with --
@@ -105,7 +109,7 @@ def split_for_compaction(
 
 async def _summariser_messages(
     session: dict, to_compact: list[dict], instructions: str
-) -> list[dict]:
+) -> tuple[list[dict], list[dict]]:
     """Ask for the summary as a continuation of the part being summarised.
 
     Two things have to be true at once, and they look like they conflict.
@@ -127,6 +131,13 @@ async def _summariser_messages(
     as a user message describes messages the model believes it authored itself,
     which is a strange thing to hand it.
 
+    The same tools go with it, and that is not incidental. Tool definitions sit
+    at the very front of a request, before the system message, so a request that
+    omits them shares no prefix at all with one that includes them -- and this
+    call used to pass `tools=[]`, which the providers drop from the payload
+    entirely. The saving it exists for was going out of the window at the first
+    token. The summariser will not call anything; it is asked for prose.
+
     The flattened fallback stays only for a head too large to send at all.
     """
     provider = get_provider(session["provider"])
@@ -137,13 +148,14 @@ async def _summariser_messages(
         await db.get_compactions(session["id"]),
         to_compact,
     )
+    tools = await session_tool_schemas(session)
     ask = {"role": "user", "content": instructions}
     if provider.count_tokens(live + [ask]) > _context_limit(session) * 0.9:
         return [
             {"role": "system", "content": instructions},
             {"role": "user", "content": render_transcript(to_compact)},
-        ]
-    return live + [ask]
+        ], []
+    return live + [ask], tools
 
 
 def _context_limit(session: dict) -> int:
@@ -255,12 +267,12 @@ async def compact_session_events(
         if extra_instructions.strip():
             instructions += f"\n\nAdditional instructions for this summary:\n{extra_instructions.strip()}"
 
-        messages = await _summariser_messages(session, to_compact, instructions)
+        messages, tools = await _summariser_messages(session, to_compact, instructions)
         summary = ""
         async for event in completion_with_retry(
             provider,
             messages=messages,
-            tools=[],
+            tools=tools,
             model=session["model"],
             thinking_effort="low",
         ):
@@ -305,10 +317,10 @@ async def compact_session_events(
             session_id, system_prompt=pending, pending_system_prompt=None
         )
 
-    # Tool descriptions are frozen per session like the prompt; drop the
-    # snapshot so the next turn re-freezes from the current overrides. Same
-    # cheap moment as the prompt swap: the prefix is being rewritten anyway.
-    await db.update_session(session_id, tool_descriptions=None)
+    # The tool array is frozen per session like the prompt; drop it so the next
+    # turn re-freezes from what the tools are now. Same cheap moment as the
+    # prompt swap: the prefix is being rewritten anyway.
+    await db.update_session(session_id, tool_schemas=None, tool_descriptions=None)
 
     yield {
         "type": "compact_done",

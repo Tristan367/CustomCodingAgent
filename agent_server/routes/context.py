@@ -42,7 +42,7 @@ from agent_server.providers import (
     list_providers,
 )
 from agent_server.stt import availability as stt_availability
-from agent_server.system_prompt import list_prompt_names
+from agent_server.system_prompt import list_prompt_names, tool_changes_pending
 from agent_server.tools.registry import get_tool
 
 _SOUND_DIR = Path.home() / ".config" / "codeagent" / "sounds"
@@ -305,6 +305,7 @@ async def _session_context(session: dict) -> dict:
         "threshold_steps": THRESHOLD_STEPS,
         "allowed_dirs": await permissions.list_allowed(session["id"]),
         "expand_tools": await _expand_tools(),
+        "tools_pending": await tool_changes_pending(session),
     }
 
 

@@ -282,6 +282,17 @@ Two independent gates (`agent_server/permissions.py`):
   paths.
 - **Prompt edits are queued**, adopted at each session's next compaction (when the
   prefix is rewritten anyway), so a shared edit never disturbs a running session.
+- **The whole tool array is frozen per session** the same way, in
+  `sessions.tool_schemas`. Tools sit at the very front of a request, so anything
+  about them that changes -- a description, a parameter, a custom tool being
+  edited, a tool being enabled -- moves the first byte of the prefix and re-bills
+  the entire conversation. Only the descriptions used to be frozen, which was
+  worse than freezing nothing: the parameters went on changing underneath, so a
+  session could send a tool whose frozen description told the model to pass
+  arguments its own live schema no longer accepted, and every call it made was
+  rejected. A session whose tools have moved on shows "Use the updated tools" in
+  its menu; adopting is a confirmed action, because it costs a full-context pass,
+  and compaction does it for free.
 - The page lists every tool with its token cost (schemas are sent every request).
 
 ## Custom tools, scripts, secrets

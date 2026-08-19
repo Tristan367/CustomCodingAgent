@@ -499,27 +499,58 @@ async def load_tool_description_overrides() -> dict[str, str]:
     return overrides
 
 
-async def session_tool_descriptions(session: dict) -> dict[str, str]:
-    """The built-in tool descriptions frozen for this session, like the prompt.
+async def live_tool_schemas(session: dict) -> list[dict]:
+    """The tool array this session *would* send if it froze right now."""
+    from agent_server.tools.registry import tool_schemas
 
-    The tool schemas are sent on every request, so a description edited while a
-    conversation is running would otherwise change the cached prefix and re-bill
-    it. Frozen the first time they are needed; re-frozen at compaction, where
-    the prefix is being rewritten regardless.
+    return tool_schemas(exclude=await disabled_tools(session))
+
+
+async def session_tool_schemas(session: dict) -> list[dict]:
+    """The whole tool array frozen for this session, like the system prompt.
+
+    Tools are sent at the very front of every request, so anything about them
+    that changes -- a description, a parameter, a custom tool being edited,
+    a tool being enabled -- moves the first byte of the prefix and re-bills the
+    entire conversation at the miss rate. Frozen on first use; re-frozen at
+    compaction, where the prefix is being rewritten regardless.
+
+    Only the descriptions used to be frozen. That half-measure was worse than
+    freezing nothing: the parameters went on changing underneath, so a session
+    could end up sending a tool whose frozen description told the model to pass
+    arguments its own live schema no longer accepted. Every call the model made
+    was then rejected, and re-reading the description did not help, because the
+    description was the thing that was wrong.
     """
-    stored = session.get("tool_descriptions")
+    stored = session.get("tool_schemas")
     if stored:
         try:
             data = json.loads(stored)
-            if isinstance(data, dict) and data:
+            if isinstance(data, list) and data:
                 return data
         except (json.JSONDecodeError, TypeError):
             pass
-    from agent_server.tools.registry import snapshot_descriptions
+    schemas = await live_tool_schemas(session)
+    await db.update_session(session["id"], tool_schemas=json.dumps(schemas))
+    return schemas
 
-    snapshot = snapshot_descriptions()
-    await db.update_session(session["id"], tool_descriptions=json.dumps(snapshot))
-    return snapshot
+
+async def tool_changes_pending(session: dict) -> bool:
+    """Whether the tools have changed since this session froze them.
+
+    Shown in the session menu the way a queued system prompt is, so "I edited my
+    tool and the agent is still using the old one" is visible rather than
+    puzzling -- and so adopting it is a decision, since adopting costs a
+    full-context pass.
+    """
+    stored = session.get("tool_schemas")
+    if not stored:
+        return False
+    try:
+        frozen = json.loads(stored)
+    except (json.JSONDecodeError, TypeError):
+        return False
+    return frozen != await live_tool_schemas(session)
 
 
 # session_id -> rendered environment block. Frozen for the life of the process

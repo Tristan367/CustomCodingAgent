@@ -131,6 +131,21 @@ async def get_system_prompt(session_id: str):
     }
 
 
+@router.post("/{session_id}/tools/adopt")
+async def adopt_tool_changes(session_id: str):
+    """Take the current tools into this session now, rather than at compaction.
+
+    Dropping the frozen copy is the whole operation: the next turn re-freezes
+    from whatever the tools are then. It is a deliberate action because it moves
+    the front of the request, so the entire conversation is re-sent at the
+    cache-miss rate -- which is exactly why the normal moment to do it is
+    compaction, where that is being paid anyway.
+    """
+    await _require(session_id)
+    await db.update_session(session_id, tool_schemas=None)
+    return {"ok": True}
+
+
 @router.delete("/{session_id}/system-prompt/pending")
 async def discard_pending_prompt(session_id: str):
     """Drop a queued change and stay on the prompt already in use."""

@@ -581,6 +581,13 @@
     "name": "discard_pending_prompt"
   },
   {
+    "path": "/api/sessions/{session_id}/tools/adopt",
+    "methods": [
+      "POST"
+    ],
+    "name": "adopt_tool_changes"
+  },
+  {
     "path": "/api/sessions/{session_id}/write-dirs",
     "methods": [
       "DELETE"

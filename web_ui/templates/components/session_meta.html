@@ -48,6 +48,14 @@
                 <button type="button" onclick="openThresholdModal()">Compaction threshold&hellip;</button>
                 <button type="button" onclick="copyProjectPath(this)"
                         data-dir="{{ session.project_dir }}">Copy project path</button>
+                {% if tools_pending %}
+                {# The tools changed after this session froze them. Adopting is a
+                   decision, not automatic: it re-sends the whole conversation at
+                   the miss rate, which is why compaction is the usual moment. #}
+                <button type="button" onclick="adoptToolChanges()">
+                    Use the updated tools<span class="menu-badge"> &bull; changed</span>
+                </button>
+                {% endif %}
                 <hr>
                 <details class="menu-settings">
                     <summary>Writable directories ({{ allowed_dirs | length }})</summary>

@@ -32,13 +32,9 @@ from agent_server.conversation import (
 )
 from agent_server.providers import Provider, get_provider
 from agent_server.providers.base import completion_with_retry, message_chars, observe_usage
-from agent_server.system_prompt import (
-    disabled_tools,
-    session_system_prompt,
-    session_tool_descriptions,
-)
+from agent_server.system_prompt import session_system_prompt, session_tool_schemas
 from agent_server.tools.base import ToolContext, ToolResult, clear_spills, truncate
-from agent_server.tools.registry import execute_tool, get_tool, tool_schemas
+from agent_server.tools.registry import execute_tool, get_tool
 
 log = logging.getLogger(__name__)
 
@@ -534,10 +530,11 @@ async def _loop(
     abort: asyncio.Event,
 ) -> AsyncIterator[dict]:
     session_id = session["id"]
-    tools = tool_schemas(
-        exclude=await disabled_tools(session),
-        descriptions=await session_tool_descriptions(session),
-    )
+    # Frozen for this session. Tools sit at the very front of the request, so
+    # anything about them that changes moves the first byte of the prefix and
+    # re-bills the whole conversation; the frozen copy is adopted at compaction,
+    # where the prefix is being rewritten anyway.
+    tools = await session_tool_schemas(session)
 
     # Finish any tool calls left outstanding by a previous pause before asking
     # the model for more. Without this the next request would carry an assistant
@@ -595,17 +592,14 @@ async def _loop(
                 if not result.get("ok"):
                     yield {"type": "error", "message": result.get("reason", "Compaction failed")}
                     return
-                # Compaction adopts `pending_system_prompt` and clears the tool
-                # descriptions, so the copies frozen above are now stale. Rebuild
-                # them before the next request, otherwise that request still sends
-                # the old prompt and only the turn after it gets the new one -- an
+                # Compaction adopts `pending_system_prompt` and clears the
+                # frozen tools, so the copies above are now stale. Rebuild them
+                # before the next request, otherwise that request still sends the
+                # old ones and only the turn after it gets the new -- an
                 # avoidable full-context cache miss.
                 session = await db.get_session(session_id) or session
                 system_prompt = await session_system_prompt(session)
-                tools = tool_schemas(
-                    exclude=await disabled_tools(session),
-                    descriptions=await session_tool_descriptions(session),
-                )
+                tools = await session_tool_schemas(session)
                 continue
 
         rows = await db.get_messages(session_id)

@@ -5,6 +5,11 @@
  */
 
 :root {
+  /* Without this the browser draws its own controls in light mode whatever the
+     page looks like: an unchecked checkbox is a bright white square on a dark
+     panel, and the scrollbars and focus rings match it. `accent-color` only
+     covers the checked fill, which is why this was not obvious. */
+  color-scheme: dark;
   /* Near-black with a faint green cast rather than the usual blue-grey, so the
      greens and teals below sit on it without looking pasted on. Accents are
      desaturated on purpose: a bright accent on a dark background is what makes
@@ -1256,7 +1261,16 @@ input[type="checkbox"] { accent-color: var(--accent); }
 .browser-entry.is-dir:hover { background: var(--bg-hover); }
 .browser-entry.is-file { color: var(--text-faint); }
 .entry-icon { flex: 0 0 auto; font-size: 14px; }
-.entry-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+/* `overflow: hidden` is needed for the ellipsis and clips at the content box,
+   which inherited a line-height of exactly 1.0 -- so at 13px the box was 13px
+   and the bottom 2px of every g, y, p and j went with it. Same fault as the
+   file manager's rows, a different class. */
+.entry-name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  line-height: 1.4;
+}
 
 /* ── Prompts page ────────────────────────────────────────────────────────── */
 

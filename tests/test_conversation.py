@@ -289,3 +289,60 @@ def test_an_answered_call_is_not_handed_back_as_pending():
     ]
     _assistant, pending = pending_tool_calls(rows)
     assert pending == []
+
+
+def test_no_damaged_history_can_produce_an_invalid_request():
+    """The failure this guards against is not a bad turn but a dead session: a
+    conversation the API rejects rejects every later request the same way, and
+    nothing the user does from the UI can fix it.
+
+    So anything the database can hold -- a run killed between an assistant turn
+    and its results, a result whose call was compacted away, a row written
+    without an id -- has to come out of `build_messages` as a valid sequence.
+    Random histories rather than hand-picked ones, because the interesting
+    damage is the combination nobody thought of.
+    """
+    import random
+
+    from agent_server.compaction import split_for_compaction
+
+    def check(msgs):
+        open_ids = []
+        for i, m in enumerate(msgs):
+            if m["role"] == "assistant":
+                assert not open_ids, f"{i}: {open_ids} left unanswered"
+                open_ids = [c["id"] for c in (m.get("tool_calls") or [])]
+            elif m["role"] == "tool":
+                assert m.get("tool_call_id") in open_ids, f"{i}: orphaned result"
+                open_ids.remove(m["tool_call_id"])
+            else:
+                assert not open_ids, f"{i}: {open_ids} left unanswered"
+        assert not open_ids, "trailing unanswered tool calls"
+
+    rng = random.Random(20260819)
+    for _ in range(400):
+        rows, live = [], []
+        for step in range(rng.randint(1, 14)):
+            i = step + 1
+            kind = rng.random()
+            if kind < 0.25:
+                rows.append(row(i, "user", f"u{i}"))
+                live = []
+            elif kind < 0.55:
+                ids = [f"c{i}_{k}" for k in range(rng.randint(1, 3))]
+                rows.append(row(i, "assistant", tool_calls=[call(c) for c in ids]))
+                live = list(ids)
+            elif kind < 0.85:
+                pick = rng.random()
+                cid = (rng.choice(live) if live and pick < 0.6
+                       else ("c_ghost" if pick < 0.8 else None))
+                rows.append(row(i, "tool", "r", tool_call_id=cid))
+                if cid in live:
+                    live.remove(cid)
+            else:
+                rows.append(row(i, "assistant", f"a{i}"))
+                live = []
+
+        head, tail = split_for_compaction(rows)
+        for slice_ in (rows, head, tail):
+            check(build_messages("S", [], slice_))

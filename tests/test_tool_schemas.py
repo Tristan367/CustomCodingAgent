@@ -171,3 +171,99 @@ def test_nothing_in_the_tool_surface_depends_on_a_tool_that_is_not_shipped():
     assert "ask" not in step_props()
     assert "compare" not in step_props()
     assert "prompt" not in props("capture")
+
+
+# ── what a model gets told when it sends the wrong shape ────────────────────
+
+async def test_a_wrong_argument_type_is_explained_in_the_model_s_terms():
+    """The mistake used to reach the handler and come back as whatever Python
+    said about it -- "data must be str, not int" for a `write` whose content was
+    an unquoted number. True, and no help: it does not say which argument or
+    what to send instead, so the model guesses and a turn is spent."""
+    import asyncio
+    import tempfile
+    from pathlib import Path
+
+    from agent_server.tools.base import ToolContext
+    from agent_server.tools.registry import execute_tool
+
+    tmp = Path(tempfile.mkdtemp())
+    ctx = ToolContext(session_id="s", project_dir=str(tmp), abort=asyncio.Event())
+
+    result = await execute_tool(
+        "write", {"filePath": str(tmp / "a.txt"), "content": ["a", "b"]}, ctx
+    )
+    assert result.is_error
+    assert "`content` must be a string" in result.output
+    assert "not a list" in result.output
+
+    result = await execute_tool("write", {"filePath": str(tmp / "b.txt")}, ctx)
+    assert result.is_error
+    assert "missing required argument: content" in result.output
+
+
+async def test_a_null_argument_means_the_argument_was_not_given():
+    """Handing None to a handler expecting a string produced an AttributeError
+    about NoneType. An explicit null is the model saying "no value", which is
+    what omitting it means."""
+    import asyncio
+    import tempfile
+    from pathlib import Path
+
+    from agent_server.tools.base import ToolContext
+    from agent_server.tools.registry import execute_tool
+
+    tmp = Path(tempfile.mkdtemp())
+    ctx = ToolContext(session_id="s", project_dir=str(tmp), abort=asyncio.Event())
+    (tmp / "a.txt").write_text("hello\n")
+
+    # `offset` is optional; a null for it must not break the read.
+    result = await execute_tool(
+        "read", {"filePath": str(tmp / "a.txt"), "offset": None}, ctx
+    )
+    assert not result.is_error, result.output
+    assert "hello" in result.output
+
+
+def test_only_the_unambiguous_conversions_happen():
+    """A number where a string belongs, or a numeric string where a number
+    belongs, is a typing slip rather than a different request. Anything less
+    obvious is refused instead of guessed at."""
+    from agent_server.tools.registry import TOOLS, check_arguments
+
+    args, problem = check_arguments(TOOLS["write"], {"filePath": "/x", "content": 123})
+    assert not problem and args["content"] == "123"
+
+    args, problem = check_arguments(TOOLS["read"], {"filePath": "/x", "offset": "12"})
+    assert not problem and args["offset"] == 12
+
+    _args, problem = check_arguments(TOOLS["read"], {"filePath": "/x", "offset": "soon"})
+    assert "`offset` must be an integer" in problem
+
+    # bool is an int in Python; a schema wanting a number does not mean a checkbox.
+    _args, problem = check_arguments(TOOLS["read"], {"filePath": "/x", "limit": True})
+    assert "`limit` must be an integer" in problem
+
+
+def test_a_custom_tools_schema_is_checked_the_same_way():
+    """This is where it matters most: those schemas are hand-written and
+    iterated on, and a mismatch there is the user's own tool misbehaving."""
+    from agent_server.tools.registry import Tool, check_arguments
+
+    tool = Tool(
+        name="deploy", description="d", handler=None,
+        parameters={
+            "type": "object",
+            "properties": {"target": {"type": "string"}, "count": {"type": "integer"}},
+            "required": ["target"],
+        },
+    )
+    _args, problem = check_arguments(tool, {"target": {"env": "prod"}})
+    assert "`target` must be a string, not an object" in problem
+
+    _args, problem = check_arguments(tool, {"count": 2})
+    assert "missing required argument: target" in problem
+
+    args, problem = check_arguments(tool, {"target": "prod", "count": "3", "extra": "kept"})
+    assert not problem
+    assert args == {"target": "prod", "count": 3, "extra": "kept"}

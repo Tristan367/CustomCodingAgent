@@ -546,6 +546,92 @@ async def _subagent_guard(name: str, args: dict, ctx: ToolContext) -> ToolResult
     return None
 
 
+# JSON Schema type -> what Python calls it. `bool` is deliberately absent from
+# the numeric entries: it is a subclass of `int`, so a schema asking for a
+# number would otherwise accept a checkbox.
+_JSON_TYPES: dict[str, tuple[type, ...]] = {
+    "string": (str,),
+    "integer": (int,),
+    "number": (int, float),
+    "boolean": (bool,),
+    "array": (list,),
+    "object": (dict,),
+}
+_PLAIN_NAMES = {
+    str: "a string", int: "a number", float: "a number", bool: "true or false",
+    list: "a list", dict: "an object", type(None): "null",
+}
+
+
+def _describe_value(value: Any) -> str:
+    return _PLAIN_NAMES.get(type(value), type(value).__name__)
+
+
+def _coerce(value: Any, expected: str) -> Any:
+    """The two conversions that cannot mean anything else.
+
+    A model writing `123` where a string belongs, or `"12"` where a number
+    belongs, has made a typing slip rather than a different request. Anything
+    less obvious -- a list where a string belongs -- is refused instead, because
+    guessing at it would write something nobody asked for.
+    """
+    if expected == "string" and isinstance(value, (int, float)) and not isinstance(value, bool):
+        return str(value)
+    if expected in ("integer", "number") and isinstance(value, str):
+        try:
+            return int(value) if expected == "integer" else float(value)
+        except ValueError:
+            return value
+    return value
+
+
+def check_arguments(tool: "Tool", args: dict[str, Any]) -> tuple[dict[str, Any], str]:
+    """Validate a call against the tool's own schema. Returns (args, problem).
+
+    Without this the model's mistake reached the handler and came back as
+    whatever Python said about it -- "data must be str, not int" for a `write`
+    whose content was an unquoted number, or "argument should be a str or an
+    os.PathLike object" for a `grep` path. Both are true and neither tells the
+    model what to send instead, so it guesses, and a turn is spent. Saying which
+    argument is wrong and what it should be gets it right on the next call.
+
+    It runs for custom tools too, which is where it matters most: those schemas
+    are written by hand and iterated on.
+    """
+    schema = tool.parameters or {}
+    properties = schema.get("properties") or {}
+    cleaned: dict[str, Any] = {}
+
+    for key, value in args.items():
+        # An explicit null is the model saying "no value", which is what leaving
+        # the argument out means. Treat them the same rather than handing None
+        # to a handler expecting a string.
+        if value is None:
+            continue
+        expected = (properties.get(key) or {}).get("type")
+        if not isinstance(expected, str) or expected not in _JSON_TYPES:
+            cleaned[key] = value
+            continue
+        value = _coerce(value, expected)
+        allowed = _JSON_TYPES[expected]
+        wrong_type = not isinstance(value, allowed)
+        # bool passes isinstance(int) in Python; a schema wanting a number does not.
+        numeric_bool = expected in ("integer", "number") and isinstance(value, bool)
+        if wrong_type or numeric_bool:
+            article = "a list" if expected == "array" else f"a{'n' if expected[0] in 'aeiou' else ''} {expected}"
+            return {}, (
+                f"`{key}` must be {article}, not {_describe_value(value)}. "
+                f"Send the argument again with the right type."
+            )
+        cleaned[key] = value
+
+    missing = [k for k in (schema.get("required") or []) if k not in cleaned]
+    if missing:
+        plural = "s" if len(missing) > 1 else ""
+        return {}, f"missing required argument{plural}: {', '.join(missing)}"
+    return cleaned, ""
+
+
 async def execute_tool(
     name: str,
     args: dict[str, Any],
@@ -558,6 +644,10 @@ async def execute_tool(
         return ToolResult.error(f"unknown tool '{name}'. Available tools: {known}", name)
     if allowed is not None and name not in allowed:
         return ToolResult.error(f"tool '{name}' is not available in this context", name)
+
+    args, problem = check_arguments(tool, args)
+    if problem:
+        return ToolResult.error(problem, name)
 
     blocked = await _subagent_guard(name, args, ctx)
     if blocked is not None:

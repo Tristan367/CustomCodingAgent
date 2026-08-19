@@ -21,10 +21,12 @@ from agent_server.system_prompt import (
     DEFAULT_SUBAGENT_PROMPT,
     PROTECTED_PROMPT,
     READONLY_PROMPTS,
+    STARTER_DISABLED_TOOLS,
     SYSTEM,
     _default_subagent_off,
     prompt_drift,
     propagate_prompt,
+    starter_limit,
 )
 from agent_server.templating import templates
 from agent_server.tools.registry import TOOLS
@@ -57,6 +59,15 @@ def _parse_tiers(p: dict) -> list[dict]:
             "effort": str(entry.get("effort", "")).strip(),
         })
     return result
+
+
+def _effective_disabled(name: str, raw: str | None) -> set[str]:
+    """The tools this profile really switches off, column or defaults."""
+    if raw is None:
+        from agent_server.tools.registry import _custom_tool_names
+
+        return set(_custom_tool_names) | STARTER_DISABLED_TOOLS.get(name, set())
+    return {n.strip() for n in raw.split(",") if n.strip()}
 
 
 def _cap_val(raw, default=0):
@@ -117,10 +128,14 @@ async def _prompts_context(
             }
             for t in sorted(TOOLS.values(), key=lambda t: t.name)
         ],
+        # What is actually in force, not the raw column. A profile that has
+        # never been configured stores NULL and switches custom tools off at
+        # read time -- reading the column showed every box ticked while the
+        # agent was being offered none of them.
         "disabled_tools": {
-            f"{SYSTEM}:{p['name']}": [
-                n.strip() for n in (p["disabled_tools"] or "").split(",") if n.strip()
-            ]
+            f"{SYSTEM}:{p['name']}": sorted(
+                _effective_disabled(p["name"], p["disabled_tools"])
+            )
             for p in sys
         },
         "subagent_body": {
@@ -128,7 +143,10 @@ async def _prompts_context(
             for p in sys
         },
         "sa_parallel_cap": {
-            f"{SYSTEM}:{p['name']}": _cap_val(p.get("subagent_parallel_cap"), 3)
+            f"{SYSTEM}:{p['name']}": _cap_val(
+                p.get("subagent_parallel_cap"),
+                starter_limit(p["name"], "subagent_parallel_cap", 3),
+            )
             for p in sys
         },
         "sa_default_model": {
@@ -145,13 +163,15 @@ async def _prompts_context(
         },
         "master_spawn": {
             f"{SYSTEM}:{p['name']}": _cap_val(
-                p.get("master_spawn_limit"), DEFAULT_MASTER_SPAWN_LIMIT
+                p.get("master_spawn_limit"),
+                starter_limit(p["name"], "master_spawn_limit", DEFAULT_MASTER_SPAWN_LIMIT),
             )
             for p in sys
         },
         "max_concurrent_subs": {
             f"{SYSTEM}:{p['name']}": _cap_val(
-                p.get("max_concurrent_subagents"), DEFAULT_SESSION_SUBAGENT_CAP
+                p.get("max_concurrent_subagents"),
+                starter_limit(p["name"], "max_concurrent_subagents", DEFAULT_SESSION_SUBAGENT_CAP),
             )
             for p in sys
         },

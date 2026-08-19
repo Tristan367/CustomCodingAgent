@@ -91,6 +91,19 @@ STARTER_DISABLED_TOOLS: dict[str, set[str]] = {
     "local": {"task"},
 }
 
+# Subagent limits a starter profile ships with, where they differ from the
+# ordinary defaults. Composed at read time for the same reason as the tool set:
+# writing them into the columns would make the profile look configured.
+STARTER_LIMITS: dict[str, dict[str, int]] = {
+    # A local model has no subagents. `task` being off is what stops it, and
+    # these say the same thing again where the numbers are read.
+    "local": {"master_spawn_limit": 0, "max_concurrent_subagents": 0},
+}
+
+
+def starter_limit(profile_name: str, column: str, fallback: int) -> int:
+    return STARTER_LIMITS.get(profile_name, {}).get(column, fallback)
+
 # Deleting this one would leave sessions pointing at nothing, and there would be
 # no prompt to fall back to.
 PROTECTED_PROMPT = "default"
@@ -162,6 +175,12 @@ async def migrate_prompts():
 
     for key in ("user_prefs", "profile_default", "profile_minimal", "profile_visual-verify"):
         await db.delete_setting(key)
+
+    # The subagent-limit columns carry a SQL default, so a freshly inserted row
+    # holds a number rather than NULL and never reaches the per-profile starter.
+    # Clearing the built-ins here puts them back in the "never configured" state
+    # the rest of this file assumes.
+    await _reset_readonly_limits()
 
 
 # Prompt bodies this app has shipped in the past. A stored prompt matching one
@@ -451,16 +470,19 @@ async def subagent_parallel_cap(profile_name: str, tier: int = 0) -> int:
         if val is not None:
             return val
         return 3
-    if row is None:
-        return DEFAULT_MASTER_SPAWN_LIMIT if tier == 0 else 3
     col = "master_spawn_limit" if tier == 0 else "subagent_parallel_cap"
+    default = starter_limit(
+        profile_name, col, DEFAULT_MASTER_SPAWN_LIMIT if tier == 0 else 3
+    )
+    if row is None:
+        return default
     val = row.get(col)
     if val is None:
-        return DEFAULT_MASTER_SPAWN_LIMIT if tier == 0 else 3
+        return default
     try:
         return int(val)
     except (TypeError, ValueError):
-        return DEFAULT_MASTER_SPAWN_LIMIT if tier == 0 else 3
+        return default
 
 
 def _tier_cap(row: dict, tier: int) -> int | None:
@@ -482,13 +504,16 @@ async def max_concurrent_subagents(profile_name: str) -> int:
     0 means unlimited. Defaults to 100 when the column is NULL.
     """
     row = await db.get_prompt(profile_name)
+    default = starter_limit(
+        profile_name, "max_concurrent_subagents", DEFAULT_SESSION_SUBAGENT_CAP
+    )
     val = (row or {}).get("max_concurrent_subagents")
     if val is None:
-        return DEFAULT_SESSION_SUBAGENT_CAP
+        return default
     try:
         return int(val)
     except (TypeError, ValueError):
-        return DEFAULT_SESSION_SUBAGENT_CAP
+        return default
 
 
 async def subagent_model_name(profile_name: str, tier: int = 0) -> str:

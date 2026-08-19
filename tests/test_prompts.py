@@ -380,3 +380,53 @@ async def test_a_new_prompt_stores_null_rather_than_empty(fresh):
     custom tools on every built-in profile."""
     await db.save_prompt("seeded", "body")
     assert (await db.get_prompt("seeded"))["disabled_tools"] is None
+
+
+async def test_the_local_profile_spawns_nothing_and_offers_no_custom_tool(fresh):
+    """Everything that says "this model works alone", in one place: `task` off,
+    both subagent limits at zero, and no custom tool it was never told about."""
+    from agent_server.system_prompt import (
+        disabled_tools,
+        max_concurrent_subagents,
+        migrate_prompts,
+        subagent_parallel_cap,
+    )
+    from agent_server.tools.registry import TOOLS, Tool, register_custom, unregister_custom
+
+    await migrate_prompts()
+    for name in ("vision", "echo-test"):
+        register_custom(
+            Tool(name=name, description="d", parameters={"type": "object"}, handler=None)
+        )
+    try:
+        off = await disabled_tools({"prompt_profile": "local"})
+        assert {"task", "vision", "echo-test"} <= off
+        assert {"read", "edit", "bash", "grep"}.isdisjoint(off), "built-ins stay on"
+        assert "task" not in {t for t in TOOLS if t not in off}
+
+        assert await subagent_parallel_cap("local", 0) == 0
+        assert await max_concurrent_subagents("local") == 0
+        # and the ordinary defaults are untouched by its existence
+        assert await subagent_parallel_cap("default", 0) == 6
+        assert await max_concurrent_subagents("default") == 6
+    finally:
+        unregister_custom({"vision", "echo-test"})
+
+
+async def test_the_prompts_page_shows_what_is_in_force(fresh):
+    """It read the raw column, so a profile storing NULL rendered every box
+    ticked while the agent was being offered none of them -- and the spawn
+    limits showed the column's absence rather than the number in use."""
+    from agent_server.routes.prompts import _effective_disabled
+    from agent_server.tools.registry import Tool, register_custom, unregister_custom
+
+    register_custom(
+        Tool(name="vision", description="d", parameters={"type": "object"}, handler=None)
+    )
+    try:
+        assert _effective_disabled("local", None) == {"task", "vision"}
+        assert _effective_disabled("default", None) == {"vision"}
+        assert _effective_disabled("mine", "read,edit") == {"read", "edit"}
+        assert _effective_disabled("mine", "") == set()
+    finally:
+        unregister_custom({"vision"})

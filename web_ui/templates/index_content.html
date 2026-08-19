@@ -132,9 +132,8 @@ async function restartMyriadCode(button) {
                 <input type="text" name="project_dir" id="project-dir-input"
                        placeholder="Project directory" required autocomplete="off" spellcheck="false"
                        value="{{ clone_defaults.get('clone_project_dir', '~/') }}">
-                <button type="button" class="btn-secondary" onclick="toggleBrowser()">Browse</button>
+                <button type="button" class="btn-secondary" onclick="browseForProjectDir()">Browse</button>
             </div>
-            <div id="file-browser-container" hidden></div>
             <div class="form-row">
                 <label>Model
                     {# The provider is a property of the model, so this is the only
@@ -342,17 +341,17 @@ async function restartMyriadCode(button) {
 </div>
 
 <script>
-function toggleBrowser() {
-    const box = document.getElementById('file-browser-container');
-    box.hidden = !box.hidden;
-    if (!box.hidden && !box.dataset.loaded) {
-        box.dataset.loaded = '1';
-        htmx.ajax('GET', '/_browse', { target: '#file-browser-container', swap: 'innerHTML' });
-    }
-}
-function selectProjectDir(path) {
-    document.getElementById('project-dir-input').value = path;
-    document.getElementById('file-browser-container').hidden = true;
+/* The same file manager the session view uses, opened as a modal.
+ *
+ * It used to be a separate inline list that could only create folders, and
+ * being inline it resized the page under the cursor on every click. Choosing a
+ * working directory is exactly the moment you want to rename, move, delete and
+ * create things, so it may as well be the real one. */
+function browseForProjectDir() {
+    const input = document.getElementById('project-dir-input');
+    FileBrowser.pickDirectory(input.value.trim() || '~/', (path) => {
+        input.value = path;
+    });
 }
 
 function saveExpandTools() {

@@ -1149,7 +1149,47 @@ option:hover {
    hand, so the sound volume rendered in the browser's blue directly above a
    column of olive ones. */
 input[type="range"] { accent-color: var(--accent); cursor: pointer; }
-input[type="checkbox"] { accent-color: var(--accent); }
+
+/* `color-scheme: dark` gets the browser to stop drawing a white box, but the
+   border it draws instead is a light grey that reads far louder than anything
+   else on the panel -- on a #0f1413 inset it is the highest-contrast edge on
+   the page, for a control that is usually unchecked and unimportant. There is
+   no property for that border, so the control is drawn here: same box, same
+   accent fill when checked, but an edge that sits at the same weight as every
+   other border in the app. */
+input[type="checkbox"] {
+  appearance: none;
+  -webkit-appearance: none;
+  width: 13px;
+  height: 13px;
+  flex: 0 0 auto;
+  margin: 0;
+  border: 1px solid var(--border-strong);
+  border-radius: 3px;
+  background: var(--bg-inset);
+  cursor: pointer;
+  display: inline-grid;
+  place-content: center;
+  vertical-align: -2px;
+}
+input[type="checkbox"]:hover:not(:disabled) { border-color: var(--accent-dim); }
+input[type="checkbox"]:checked {
+  background: var(--accent-btn);
+  border-color: var(--accent-btn);
+}
+/* A drawn tick rather than a glyph: no font dependency, and it stays crisp at
+   13px where a character would sit a pixel off centre. */
+input[type="checkbox"]:checked::after {
+  content: "";
+  width: 3px;
+  height: 7px;
+  margin-top: -2px;
+  border: solid #0c0f0e;
+  border-width: 0 2px 2px 0;
+  transform: rotate(45deg);
+}
+input[type="checkbox"]:focus-visible { outline: 2px solid var(--accent-dim); outline-offset: 1px; }
+input[type="checkbox"]:disabled { cursor: not-allowed; opacity: 0.55; }
 
 .hint { font-size: 11.5px; color: var(--text-faint); margin: 6px 0 0; }
 .hint code { color: var(--text-dim); }
@@ -1193,84 +1233,7 @@ input[type="checkbox"] { accent-color: var(--accent); }
 .session-card .icon-btn { grid-area: action; opacity: 0; }
 .session-card:hover .icon-btn { opacity: 1; }
 
-/* ── File browser ────────────────────────────────────────────────────────── */
-
-.file-browser {
-  margin: 4px 0;
-  border: 1px solid var(--border);
-  border-radius: var(--radius);
-  background: var(--bg-inset);
-  overflow: hidden;
-}
-.browser-crumbs {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  gap: 1px;
-  padding: 6px 10px;
-  background: var(--bg-raised);
-  border-bottom: 1px solid var(--border);
-  font-family: var(--mono);
-  font-size: 11.5px;
-}
-.browser-crumbs button {
-  background: none;
-  border: 0;
-  color: var(--accent);
-  cursor: pointer;
-  font: inherit;
-  padding: 1px 3px;
-  border-radius: 3px;
-}
-.browser-crumbs button:hover { background: var(--bg-hover); }
-.crumb-sep { color: var(--text-faint); }
-
-.browser-actions {
-  display: flex;
-  gap: 8px;
-  align-items: center;
-  padding: 8px 10px;
-  border-bottom: 1px solid var(--border);
-  flex-wrap: wrap;
-}
-.mkdir-form { display: flex; gap: 6px; }
-.mkdir-form input { width: 150px; }
 .checkbox-label { display: flex; align-items: center; gap: 5px; font-size: 11.5px; color: var(--text-dim); cursor: pointer; }
-
-.browser-entries { max-height: 600px; overflow-y: auto; padding: 4px; }
-/* On a tall (portrait) screen the browse list was a tiny scroll box. Let it use
-   the height that is there; the panel stays the same width as every other one
-   on the home page. */
-#new-session .browser-entries { max-height: min(1200px, 72vh); }
-.browser-entry {
-  display: flex;
-  align-items: center;
-  justify-content: flex-start;
-  gap: 8px;
-  width: 100%;
-  padding: 3px 8px;
-  background: none;
-  border: 0;
-  border-radius: 3px;
-  color: var(--text);
-  font-family: var(--mono);
-  font-size: 13px;
-  text-align: left;
-}
-.browser-entry.is-dir { cursor: pointer; }
-.browser-entry.is-dir:hover { background: var(--bg-hover); }
-.browser-entry.is-file { color: var(--text-faint); }
-.entry-icon { flex: 0 0 auto; font-size: 14px; }
-/* `overflow: hidden` is needed for the ellipsis and clips at the content box,
-   which inherited a line-height of exactly 1.0 -- so at 13px the box was 13px
-   and the bottom 2px of every g, y, p and j went with it. Same fault as the
-   file manager's rows, a different class. */
-.entry-name {
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-  line-height: 1.4;
-}
 
 /* ── Prompts page ────────────────────────────────────────────────────────── */
 
@@ -2352,6 +2315,28 @@ dialog.file-browser::backdrop { background: transparent; }
   color: var(--text-dim);
   font-family: var(--mono);
   font-size: 11.5px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* Directory picker. The confirm bar is always present in this mode, so the
+   answer to "how do I choose this folder?" never depends on having selected
+   something first. It sits below the item actions, which come and go. */
+.fb-pick {
+  display: flex;
+  align-items: center;
+  gap: var(--s2);
+  padding: 6px 10px;
+  border-top: 1px solid var(--border);
+  background: var(--bg-raised);
+  flex: 0 0 auto;
+}
+.fb-pick-info {
+  margin-right: auto;
+  color: var(--text);
+  font-family: var(--mono);
+  font-size: 12px;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;

@@ -19,7 +19,6 @@ from agent_server.routes import (
     endpoints,
     files,
     pages,
-    projects,
     prompts,
     scripts,
     sessions,
@@ -206,7 +205,6 @@ app.include_router(pages.router)
 app.include_router(tabs.router)
 app.include_router(settings.router)
 app.include_router(sounds.router)
-app.include_router(projects.router)
 app.include_router(prompts.router)
 app.include_router(custom_tools.router)
 app.include_router(endpoints.router)

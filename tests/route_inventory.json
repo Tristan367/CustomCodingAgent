@@ -7,20 +7,6 @@
     "name": "index"
   },
   {
-    "path": "/_browse",
-    "methods": [
-      "GET"
-    ],
-    "name": "browse"
-  },
-  {
-    "path": "/_browse/mkdir",
-    "methods": [
-      "POST"
-    ],
-    "name": "browse_mkdir"
-  },
-  {
     "path": "/_create_session",
     "methods": [
       "POST"

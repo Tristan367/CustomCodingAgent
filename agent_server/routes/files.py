@@ -42,51 +42,65 @@ MAX_READ_BYTES = 2 * 1024 * 1024
 _BINARY_SNIFF = 8000
 
 
+# Every route here takes an optional session id. Empty means the directory
+# picker on the home page, which runs before any session exists -- see
+# `_session` for what that changes.
 class SaveRequest(BaseModel):
-    session_id: str
+    session_id: str = ""
     path: str
     content: str
 
 
 class PathRequest(BaseModel):
-    session_id: str
+    session_id: str = ""
     path: str
 
 
 class RenameRequest(BaseModel):
-    session_id: str
+    session_id: str = ""
     path: str
     name: str
 
 
 class MoveRequest(BaseModel):
-    session_id: str
+    session_id: str = ""
     paths: list[str]
     dest: str
 
 
 class FormatRequest(BaseModel):
-    session_id: str
+    session_id: str = ""
     path: str
     content: str
 
 
-async def _session(session_id: str) -> dict:
+async def _session(session_id: str) -> dict | None:
+    """The session this request is scoped to, or None for the directory picker.
+
+    An empty id is not an error: the home page's file manager is open before
+    any session exists, so it has no project directory to resolve against and
+    no write grants to consult. It is gated by `human_write_allowed` instead.
+    A non-empty id that does not exist is still a 404 -- that is a bug, not a
+    picker.
+    """
+    if not session_id:
+        return None
     session = await db.get_session(session_id)
     if session is None:
         raise HTTPException(404, "Session not found")
     return session
 
 
-def _resolve(session: dict, path: str) -> Path:
+def _resolve(session: dict | None, path: str) -> Path:
     p = Path(path).expanduser()
     if not p.is_absolute():
-        p = Path(session["project_dir"]) / p
+        base = Path(session["project_dir"]) if session else Path.home()
+        p = base / p
     return p
 
 
 @router.get("/stat")
-async def stat_path(session_id: str, path: str):
+async def stat_path(session_id: str = "", path: str = ""):
     """Whether a path exists and is a file or directory, so a clicked reference
     can open the right surface (editor for files, file manager for folders)."""
     session = await _session(session_id)
@@ -133,7 +147,7 @@ async def serve_image(path: str, session_id: str = ""):
 
 
 @router.get("/list")
-async def list_dir(session_id: str, path: str = ""):
+async def list_dir(session_id: str = "", path: str = ""):
     """One level of a directory: folders first, then files, each with a size."""
     session = await _session(session_id)
     d = _resolve(session, path)
@@ -162,13 +176,7 @@ async def make_directory(body: PathRequest):
     """Create a directory (and parents), gated like a file write."""
     session = await _session(body.session_id)
     p = _resolve(session, body.path)
-    if permissions.is_denied(p):
-        raise HTTPException(403, f"{p} is a protected path.")
-    if not await permissions.write_allowed(body.session_id, p, session["project_dir"]):
-        raise HTTPException(
-            403,
-            f"{p} is outside the project and no directory grant covers it.",
-        )
+    await _require_write(session, p, must_exist=False)
     try:
         p.mkdir(parents=True, exist_ok=True)
     except OSError as e:
@@ -176,12 +184,22 @@ async def make_directory(body: PathRequest):
     return {"ok": True, "path": str(p)}
 
 
-async def _require_write(session_id: str, path: Path, project_dir: str):
-    """Raise unless the path exists and may be written."""
-    if not path.exists():
+async def _require_write(session: dict | None, path: Path, *, must_exist: bool = True):
+    """Raise unless this path may be written.
+
+    One gate for every mutating route, so a route added later cannot quietly
+    miss a check the others make. Which gate applies depends on whether there
+    is a session: an agent's writes are bounded by the project directory and
+    its grants, a human's picker writes only by the protected-path rules.
+    """
+    if must_exist and not path.exists():
         raise HTTPException(404, f"Not found: {path}")
+    if session is None:
+        if not permissions.human_write_allowed(path):
+            raise HTTPException(403, f"{path} is a protected path.")
+        return
     if permissions.is_denied(path) or not await permissions.write_allowed(
-        session_id, path, project_dir
+        session["id"], path, session["project_dir"]
     ):
         raise HTTPException(
             403, f"{path} is outside the project and no directory grant covers it."
@@ -196,10 +214,9 @@ async def rename_entry(body: RenameRequest):
     name = Path(body.name).name
     if not name or name in (".", ".."):
         raise HTTPException(400, "Invalid name")
-    await _require_write(body.session_id, p, session["project_dir"])
+    await _require_write(session, p)
     target = p.parent / name
-    if not await permissions.write_allowed(body.session_id, target, session["project_dir"]):
-        raise HTTPException(403, f"{target} is outside the project.")
+    await _require_write(session, target, must_exist=False)
     if target.exists():
         raise HTTPException(409, f"{target} already exists")
     try:
@@ -214,7 +231,7 @@ async def delete_entry(body: PathRequest):
     """Delete a file or folder (recursively)."""
     session = await _session(body.session_id)
     p = _resolve(session, body.path)
-    await _require_write(body.session_id, p, session["project_dir"])
+    await _require_write(session, p)
     try:
         shutil.rmtree(p) if p.is_dir() else p.unlink()
     except OSError as e:
@@ -229,11 +246,11 @@ async def move_entries(body: MoveRequest):
     dest = _resolve(session, body.dest)
     if not dest.is_dir():
         raise HTTPException(404, f"Not a directory: {dest}")
-    await _require_write(body.session_id, dest, session["project_dir"])
+    await _require_write(session, dest)
     moved = []
     for src in body.paths:
         p = _resolve(session, src)
-        await _require_write(body.session_id, p, session["project_dir"])
+        await _require_write(session, p)
         target = dest / p.name
         if target.exists():
             raise HTTPException(409, f"{target} already exists")
@@ -250,10 +267,9 @@ async def copy_entry(body: PathRequest):
     """Duplicate a file or folder in place as 'name (copy).ext'."""
     session = await _session(body.session_id)
     p = _resolve(session, body.path)
-    await _require_write(body.session_id, p, session["project_dir"])
+    await _require_write(session, p)
     target = _copy_name(p)
-    if not await permissions.write_allowed(body.session_id, target, session["project_dir"]):
-        raise HTTPException(403, f"{target} is outside the project.")
+    await _require_write(session, target, must_exist=False)
     try:
         shutil.copytree(p, target) if p.is_dir() else shutil.copy2(p, target)
     except OSError as e:
@@ -290,7 +306,7 @@ async def format_file(body: FormatRequest):
 
 
 @router.get("/read")
-async def read_file(session_id: str, path: str):
+async def read_file(session_id: str = "", path: str = ""):
     """File contents as UTF-8 text, with the metadata needed to preserve its
     BOM and line-ending style if the user saves it back."""
     session = await _session(session_id)
@@ -345,14 +361,7 @@ async def save_file(body: SaveRequest):
     p = _resolve(session, body.path)
     if len(body.content) > MAX_READ_BYTES * 4:
         raise HTTPException(400, "File content too large to save.")
-    if permissions.is_denied(p):
-        raise HTTPException(403, f"{p} is a protected path.")
-    if not await permissions.write_allowed(body.session_id, p, session["project_dir"]):
-        raise HTTPException(
-            403,
-            f"{p} is outside the project and no directory grant covers it. "
-            "Grant write access first.",
-        )
+    await _require_write(session, p, must_exist=False)
     try:
         has_bom, line_ending = False, "\n"
         if p.is_file():

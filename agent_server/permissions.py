@@ -73,6 +73,35 @@ def is_denied(path: Path) -> bool:
     return text.startswith(DENIED_PREFIXES)
 
 
+def human_write_allowed(path: Path) -> bool:
+    """True when a human at the keyboard may write here with no session.
+
+    The directory picker runs before a session exists, so there is no project
+    directory to resolve against and no grant to check -- the whole point is
+    that the user is choosing a directory anywhere on the disk. That makes the
+    session gate meaningless here, not merely inconvenient.
+
+    What still has to hold is that a mis-click cannot take out something
+    wholesale. Deleting `~/old-project` is ordinary housekeeping and is allowed;
+    deleting `/`, `$HOME` itself, or a top-level system directory like `/usr` is
+    never what someone meant by picking a working directory.
+    """
+    if is_denied(path):
+        return False
+    try:
+        resolved = path.resolve()
+    except OSError:
+        return False
+    if resolved == Path(resolved.anchor) or resolved.parent == resolved:
+        return False
+    if resolved.parent == Path(resolved.anchor):
+        return False
+    try:
+        return resolved != Path.home().resolve()
+    except OSError:
+        return True
+
+
 async def write_allowed(session_id: str, path: Path, project_dir: str) -> bool:
     """True when this path may be written without asking."""
     if is_denied(path):

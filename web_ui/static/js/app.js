@@ -4733,6 +4733,7 @@ const FileEditor = (() => {
 const FileBrowser = (() => {
   let dlg = null;
   let listEl, pathEl, upBtn, backBtn, fwdBtn, actionsEl, moveEl, selEl, moveInfoEl;
+  let pickEl, pickInfoEl;
   // Each session remembers its own last directory and its navigation history,
   // so switching away and back reopens where that session left off. The home
   // button jumps to the working directory.
@@ -4748,8 +4749,21 @@ const FileBrowser = (() => {
   let ctxPath = null;
   let attachMode = false;      // when true, selecting attaches instead of opening
   let overlay = null;          // dims everything above the chat input
+  /* Directory-picker mode, used by the home page to choose a project directory
+   * before any session exists. The manager is the same in every other respect:
+   * the point of the mode is that picking a working directory is exactly when
+   * you want to rename, move and tidy things, and the old inline dropdown could
+   * only create a folder. */
+  let pickMode = false;
+  let pickCallback = null;
+  let pickStart = '';
 
-  function here() { return lastDirs[App.sessionId] || workingDir(); }
+  /* The API scopes writes to a session; the picker has none, and the server
+   * gates it on protected paths instead. Everything else here is shared. */
+  function sid() { return App.sessionId || ''; }
+  function memKey() { return App.sessionId || ' picker'; }
+
+  function here() { return lastDirs[memKey()] || workingDir(); }
 
   function ensure() {
     if (dlg) return;
@@ -4768,6 +4782,10 @@ const FileBrowser = (() => {
         '<button type="button" class="fe-btn" data-fb="close" title="Close">&times;</button>' +
       '</div>' +
       '<div class="fb-list"></div>' +
+      '<div class="fb-pick" hidden>' +
+        '<span class="fb-pick-info"></span>' +
+        '<button type="button" class="fe-btn fe-save" data-fb="usedir">Use this directory</button>' +
+      '</div>' +
       '<div class="fb-actions" hidden>' +
         '<span class="fb-sel"></span>' +
         '<button type="button" class="fe-btn fe-save" data-fb="attach" hidden>Attach</button>' +
@@ -4802,6 +4820,9 @@ const FileBrowser = (() => {
     moveEl = dlg.querySelector('.fb-move');
     selEl = dlg.querySelector('.fb-sel');
     moveInfoEl = dlg.querySelector('.fb-move-info');
+    pickEl = dlg.querySelector('.fb-pick');
+    pickInfoEl = dlg.querySelector('.fb-pick-info');
+    dlg.querySelector('[data-fb=usedir]').addEventListener('click', usePickedDir);
 
     // Type a raw path and Enter to jump straight there.
     pathEl.addEventListener('keydown', (e) => {
@@ -4841,12 +4862,12 @@ const FileBrowser = (() => {
     return String(base).replace(/\/+$/, '') + '/' + name;
   }
   function fmtSize(n) { return formatFileSize(n); }
-  function workingDir() { return App.projectDir || '/'; }
+  function workingDir() { return pickMode ? (pickStart || '~/') : (App.projectDir || '/'); }
   function fullPath(name) { return join(basePath, name); }
 
   function navFor() {
-    if (!nav[App.sessionId]) nav[App.sessionId] = { stack: [], i: -1 };
-    return nav[App.sessionId];
+    if (!nav[memKey()]) nav[memKey()] = { stack: [], i: -1 };
+    return nav[memKey()];
   }
   function record(dir) {
     const n = navFor();
@@ -4882,7 +4903,7 @@ const FileBrowser = (() => {
   }
 
   async function open(path, opts = {}) {
-    if (!App.sessionId) return;
+    if (!App.sessionId && !pickMode) return;
     ensure();
     // Only an explicit `attach` opts switches modes; navigation keeps whichever
     // mode the dialog opened in.
@@ -4900,7 +4921,7 @@ const FileBrowser = (() => {
     let data;
     try {
       const resp = await fetch(
-        `/api/files/list?session_id=${encodeURIComponent(App.sessionId)}&path=${encodeURIComponent(path)}`);
+        `/api/files/list?session_id=${encodeURIComponent(sid())}&path=${encodeURIComponent(path)}`);
       if (!resp.ok) {
         let msg = 'Could not list';
         try { const j = await resp.json(); msg = j.detail || msg; } catch (_) {}
@@ -4916,7 +4937,7 @@ const FileBrowser = (() => {
     }
 
     basePath = data.path;
-    lastDirs[App.sessionId] = data.path;
+    lastDirs[memKey()] = data.path;
     if (recordIt) record(data.path);
     entries = data.entries;
     selected.clear();
@@ -4973,7 +4994,47 @@ const FileBrowser = (() => {
     if (entry.is_dir) open(child);
     else if (attachMode) attachPath(child);
     else if (isImagePath(child)) ImagePreview.open(child);
+    // The editor belongs to a session -- it saves through one, and remembers
+    // its tabs per session. From the picker a file has nowhere to open into,
+    // so double-clicking one does nothing beyond leaving it selected.
+    else if (pickMode) { /* selection only */ }
     else { dlg.close(); FileEditor.open(child, {}); }
+  }
+
+  /* The directory this would hand back: a single selected folder if there is
+   * one, otherwise the folder being looked at. */
+  function pickTarget() {
+    if (selected.size === 1) {
+      const only = [...selected][0];
+      const row = entries.find((e) => fullPath(e.name) === only);
+      if (row && row.is_dir) return only;
+    }
+    return basePath;
+  }
+
+  function usePickedDir() {
+    const chosen = pickTarget();
+    const cb = pickCallback;
+    dlg.close();
+    if (cb) cb(chosen);
+  }
+
+  /* Entry point for the home page. `start` seeds the first listing and the home
+   * button; `onPick` receives the chosen absolute path. */
+  function pickDirectory(start, onPick) {
+    pickMode = true;
+    attachMode = false;
+    moving = null;
+    pickStart = start || '~/';
+    pickCallback = onPick || null;
+    ensure();
+    dlg.addEventListener('close', () => {
+      pickMode = false;
+      pickCallback = null;
+      if (pickEl) pickEl.hidden = true;
+      dlg.classList.remove('fb-picking');
+    }, { once: true });
+    open(here());
   }
 
   /* Attach mode: the footer's single action attaches the selection, or the
@@ -4992,6 +5053,10 @@ const FileBrowser = (() => {
     for (const fb of ['open', 'rename', 'copy', 'delete', 'move']) {
       dlg.querySelector(`[data-fb=${fb}]`).hidden = attachMode;
     }
+    // In picker mode there is no session, so 'Open' would have no editor to
+    // open into. Everything that only touches the disk stays.
+    dlg.querySelector('[data-fb=open]').hidden = attachMode || pickMode;
+    dlg.classList.toggle('fb-picking', pickMode);
   }
 
   /* Keep the dialog's bottom edge above the chat input. The composer grows with
@@ -4999,8 +5064,10 @@ const FileBrowser = (() => {
    * dialog is open, so this is re-run on each attachment rather than once. */
   function reposition() {
     if (!dlg || !dlg.open) return;
+    // There is no composer on the home page, so the picker takes the full
+    // height it can rather than leaving a gap where the chat input would be.
     const input = document.getElementById('chat-input-area');
-    dlg.style.bottom = input ? `${input.offsetHeight + 24}px` : '160px';
+    dlg.style.bottom = input ? `${input.offsetHeight + 24}px` : '5vh';
     if (overlay) {
       overlay.hidden = false;
       overlay.style.bottom = input ? `${input.offsetHeight}px` : '0px';
@@ -5022,6 +5089,13 @@ const FileBrowser = (() => {
     selEl.textContent = n === 1 ? '1 selected' : `${n} selected`;
     actionsEl.querySelector('[data-fb=open]').disabled = n !== 1;
     actionsEl.querySelector('[data-fb=rename]').disabled = n !== 1;
+    if (pickMode) {
+      // The bar is always there, so the answer to "how do I choose this one?"
+      // never depends on having selected something first. A single selected
+      // folder is the more specific intent, so it wins when there is one.
+      pickEl.hidden = moving != null;
+      pickInfoEl.textContent = pickTarget();
+    }
     moveEl.hidden = moving == null;
     if (moving != null) {
       const paths = [...moving];
@@ -5059,7 +5133,7 @@ const FileBrowser = (() => {
     });
     if (!name) return;
     const resp = await apiPost('/api/files/rename',
-      { session_id: App.sessionId, path, name });
+      { session_id: sid(), path, name });
     if (!(await checkOk(resp, 'Could not rename'))) return;
     let newPath = null;
     if (resp) { try { newPath = (await resp.json()).path; } catch (_) {} }
@@ -5069,7 +5143,7 @@ const FileBrowser = (() => {
 
   async function doCopy(paths) {
     for (const path of paths) {
-      const resp = await apiPost('/api/files/copy', { session_id: App.sessionId, path });
+      const resp = await apiPost('/api/files/copy', { session_id: sid(), path });
       if (!(await checkOk(resp, 'Could not duplicate'))) return;
     }
     open(basePath);
@@ -5083,7 +5157,7 @@ const FileBrowser = (() => {
     );
     if (!ok) return;
     for (const path of paths) {
-      const resp = await apiPost('/api/files/delete', { session_id: App.sessionId, path });
+      const resp = await apiPost('/api/files/delete', { session_id: sid(), path });
       if (!(await checkOk(resp, 'Could not delete'))) return;
     }
     FileEditor.onDeleted(paths);
@@ -5107,7 +5181,7 @@ const FileBrowser = (() => {
 
   async function confirmMove() {
     const resp = await apiPost('/api/files/move',
-      { session_id: App.sessionId, paths: [...moving], dest: basePath });
+      { session_id: sid(), paths: [...moving], dest: basePath });
     if (!(await checkOk(resp, 'Could not move'))) return;
     const oldPaths = [...moving];
     const movedPaths = [];
@@ -5133,8 +5207,9 @@ const FileBrowser = (() => {
     if (!name) return;
     const path = join(here(), name);
     const resp = await apiPost('/api/files/save',
-      { session_id: App.sessionId, path, content: '' });
+      { session_id: sid(), path, content: '' });
     if (!(await checkOk(resp, 'Could not create the file'))) return;
+    if (pickMode) { open(here()); return; }   // no session, so no editor to open
     dlg.close();
     FileEditor.open(path);
   }
@@ -5145,7 +5220,7 @@ const FileBrowser = (() => {
     });
     if (!name) return;
     const path = join(here(), name);
-    const resp = await apiPost('/api/files/mkdir', { session_id: App.sessionId, path });
+    const resp = await apiPost('/api/files/mkdir', { session_id: sid(), path });
     if (!(await checkOk(resp, 'Could not create the folder'))) return;
     open(here());
   }
@@ -5194,7 +5269,7 @@ const FileBrowser = (() => {
     if (!e.target.closest('.ctx-menu')) hideCtx();
   });
 
-  return { open, openMove, reposition };
+  return { open, openMove, reposition, pickDirectory };
 })();
 
 /* Session bar button: open the shared file manager at its last directory. */

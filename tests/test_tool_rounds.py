@@ -207,7 +207,13 @@ async def test_a_message_compacts_first_when_the_session_is_over_threshold(sessi
 
     async def fake_compact(sid, manual_summary="", extra_instructions="", prompt_override=""):
         order.append("compact")
-        return {"ok": True, "compacted": 1, "kept": 1, "summary": "summarised"}
+        # Actually compact (mark the older turns) so the live context drops below
+        # threshold and the loop proceeds to the model call instead of asking to
+        # compact again.
+        rows = await db.get_messages(sid)
+        if len(rows) > 1:
+            await db.mark_messages_compacted(sid, [r["id"] for r in rows[:-1]])
+        return {"ok": True, "compacted": len(rows) - 1, "kept": 1, "summary": "summarised"}
 
     monkeypatch.setattr(compaction_mod, "compact_session", fake_compact)
     provider = AnswerProvider(order)
@@ -218,3 +224,36 @@ async def test_a_message_compacts_first_when_the_session_is_over_threshold(sessi
     assert order == ["compact", "model"], f"compaction did not precede the model call: {order}"
     assert any(e["type"] == "compacted" for e in events)
     assert events[-1]["type"] == "done"
+
+
+async def test_auto_compaction_fires_again_in_the_same_run(session, monkeypatch):
+    """A long turn that refills the window must compact again, not just once.
+
+    The auto-compaction snooze only made sense when compaction asked the user
+    for permission; with automatic, no-opt-out compaction it just left a long
+    run drifting over the threshold after its single summary.
+    """
+    from agent_server import compaction as compaction_mod
+
+    await db.update_session(session["id"], compact_threshold=100)
+    await db.add_message(session["id"], "assistant", "did some work", token_count=500)
+    await db.add_message(session["id"], "user", "continue")
+
+    calls = []
+
+    async def fake_compact(sid, manual_summary="", extra_instructions="", prompt_override=""):
+        calls.append(sid)
+        if len(calls) == 1:
+            # "Succeeds" but does not actually compact, so the context is still
+            # over threshold. The loop must ask to compact again.
+            return {"ok": True, "compacted": 1, "kept": 1, "summary": "summarised"}
+        return {"ok": False, "reason": "stop after the second attempt"}
+
+    monkeypatch.setattr(compaction_mod, "compact_session", fake_compact)
+    provider = AnswerProvider([])
+    monkeypatch.setattr(agent, "get_provider", lambda _p: provider)
+
+    events = [e async for e in agent.run(session["id"])]
+
+    assert len(calls) == 2, f"auto-compaction should fire again, got {len(calls)} call(s)"
+    assert any(e["type"] == "error" for e in events)

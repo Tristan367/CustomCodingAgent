@@ -580,7 +580,11 @@ async def _loop(
         # Compact at a clean turn boundary, before spending another full-context
         # request. Automatic, with no opt-out: a long-horizon task must not be
         # interrupted mid-flight to ask. Raise the threshold to compact by hand
-        # instead. Snoozed for the rest of the run once a compaction happens.
+        # instead. Fires every time the live context crosses the threshold, not
+        # just once per run -- a long autonomous turn can refill the window after
+        # a summary and must compact again rather than run on over the limit.
+        # `_compaction_snoozed` is only set by a *manual* compaction or a
+        # threshold change, and is cleared when the run ends.
         if session_id not in _compaction_snoozed:
             usage = await db.get_session_usage(session_id)
             if usage["threshold"] and usage["context"] >= usage["threshold"]:
@@ -588,7 +592,6 @@ async def _loop(
 
                 yield {"type": "compacting"}
                 result = await compact_session(session_id)
-                _compaction_snoozed.add(session_id)
                 yield {"type": "compacted", **result}
                 if not result.get("ok"):
                     yield {"type": "error", "message": result.get("reason", "Compaction failed")}

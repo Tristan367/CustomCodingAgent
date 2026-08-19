@@ -156,18 +156,37 @@ Two independent gates (`agent_server/permissions.py`):
 
 ## Dictation (STT) — streaming
 
-- Toggle via the mic button or **Ctrl+M**; hold to talk, release to transcribe.
+- Toggle via the mic button or **Ctrl+M**; talk, and pauses become sentences.
 - Browser captures 16 kHz mono float32 via an AudioWorklet (`stt-worklet.js`) and
   streams it over a WebSocket (`/api/stt/stream`).
-- Backend `whisper_streaming.py` drives a persistent `whisper-server` subprocess
-  and re-transcribes on a sliding window: audio older than `COMMIT_DELAY_SEC` is
-  committed using whisper's segment timestamps, so latency stays flat. A long pause
-  commits a sentence and adds a period.
+- **The engine** (`whisper_engine.py`) is faster-whisper, in-process. It replaced
+  a `whisper-server` subprocess from whisper.cpp spoken to over HTTP on a local
+  port, which meant nothing could be transcribed until you had installed
+  whisper.cpp system-wide and downloaded a GGML file by hand. `pip install` and a
+  model that fetches itself is a better deal for anyone not already set up.
+- **The device is found, not configured.** ctranslate2 links against CUDA 12,
+  which is usually not what a current distribution ships, so the libraries come
+  from the `nvidia-*-cu12` wheels and are `dlopen`'d with `RTLD_GLOBAL` at
+  startup. The documented alternative is exporting `LD_LIBRARY_PATH` before
+  starting Python — which a program cannot do for itself, and is the most common
+  reason a GPU install silently runs on the CPU. Without a usable GPU it falls
+  back to CPU int8, which is fine for a small model.
+- **Streaming is still ours** (`whisper_streaming.py`). Whisper has no streaming
+  mode in any implementation, so live dictation is a sliding re-transcription:
+  audio older than `COMMIT_DELAY_SEC` is committed using the segment timestamps
+  and trimmed out of the buffer, so latency stays flat however long you talk.
+  Swapping the engine changed none of that — only what runs the inference.
+- Model is runtime-selectable from the home page and is a *name* (`base.en`,
+  `small.en`, `large-v3-turbo`) or a local CTranslate2 directory, not a file you
+  had to fetch. Downloaded once on first use.
 - A manual edit of the composer while recording tears the session down cleanly.
-- Model is runtime-selectable from the home page (`whisper_model` setting); a
-  non-bundled `ggml-*.bin` is picked from `~/opt/whisper.cpp/models`.
-- Batch STT (`stt.py`, `whisper-cli`) is the older non-streaming path used for
-  one-shot transcription.
+- Noise cleanup: whisper's `[BLANK_AUDIO]`-style event tokens, lowercase sound
+  descriptions, `--` em-dashes, space-before-punctuation, missing space after
+  `.?!`. Whisper's own VAD filter is on, without which a pause reliably produces
+  "Thank you." or a subtitle credit.
+- One-shot transcription (`stt.py`) uses the same engine, and lets it decode the
+  browser's WebM/Opus directly — the ffmpeg transcode and the second subprocess
+  are gone.
 
 ## Attachments, capture, browser
 

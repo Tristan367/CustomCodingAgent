@@ -18,7 +18,7 @@ from fastapi import (
 )
 from fastapi.responses import JSONResponse, StreamingResponse
 
-from agent_server import agent, permissions, whisper_streaming
+from agent_server import agent, permissions, whisper_engine, whisper_streaming
 from agent_server import database as db
 from agent_server import stt as stt_service
 from agent_server.compaction import compact_session_events, should_offer_compaction
@@ -490,14 +490,16 @@ async def stt_stream(websocket: WebSocket):
     partial hypotheses as the speech is decoded, then a final result when it
     sends a text message (or disconnects)."""
     await websocket.accept()
+    from agent_server.config import whisper_model
+
     try:
-        server = await whisper_streaming.get_server()
-    except whisper_streaming.WhisperStreamingError as e:
-        await websocket.send_json({"error": str(e)})
+        engine = await whisper_engine.get_engine(whisper_model())
+    except Exception as e:
+        await websocket.send_json({"error": f"speech model unavailable: {e}"})
         await websocket.close()
         return
 
-    session = whisper_streaming.WhisperSession(server)
+    session = whisper_streaming.WhisperSession(engine)
     try:
         should_finalize = True
         while True:

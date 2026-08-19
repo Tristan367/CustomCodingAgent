@@ -230,10 +230,12 @@ async function restartMyriadCode(button) {
         <p class="hint" style="margin-top:6px">
             Dictation:
             {% if stt.available %}
-            ready &mdash; click the mic or press <kbd>Ctrl+M</kbd> to toggle
+            ready &mdash; click the mic or press <kbd>Ctrl+M</kbd> to toggle{%
+            if stt.device %} &middot; running on <code>{{ stt.device }}</code>
+            ({{ stt.compute_type }}){% endif %}. A model is downloaded the first
+            time it is used.
             {% else %}
-            unavailable. Install <code>whisper-cli</code> and <code>ffmpeg</code>, or set
-            <code>WHISPER_BIN</code> / <code>WHISPER_MODEL</code>.
+            unavailable. Install it with <code>pip install faster-whisper</code>.
             {% endif %}
         </p>
         <div class="tool-grid" style="margin-top:12px">

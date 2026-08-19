@@ -106,20 +106,23 @@ async def _discover_deepseek_models():
 
 
 async def _warm_whisper():
-    """Preload whisper-server so the first dictation doesn't wait on the model.
+    """Load the speech model in the background so the first dictation is instant.
 
-    whisper-server loads the model when it starts, which takes a few seconds;
-    doing it here, in the background, means the first toggle is instant.
+    It is a few seconds of loading, and on the very first run a download as
+    well, which is a long time to hold the mic button waiting.
     """
-    from agent_server import whisper_streaming
+    from agent_server import config, whisper_engine
 
-    if not whisper_streaming.whisper_streaming_available():
+    if not whisper_engine.available():
         return
     try:
-        await whisper_streaming.get_server()
-        log.info("whisper-server ready for streaming dictation")
+        engine = await whisper_engine.get_engine(config.whisper_model())
+        log.info(
+            "whisper ready: %s on %s (%s)",
+            engine.model_name, engine.device, engine.compute_type,
+        )
     except Exception:
-        log.warning("whisper-server warm-up failed; streaming dictation will retry", exc_info=True)
+        log.warning("whisper warm-up failed; dictation will retry", exc_info=True)
 
 
 @asynccontextmanager
@@ -166,7 +169,7 @@ async def lifespan(app: FastAPI):
     # Await the cancellation so the warm-up task is actually done before the
     # whisper-server (and DB) are shut down, rather than racing them.
     await asyncio.gather(reaper, whisper_warmup, return_exceptions=True)
-    from agent_server import whisper_streaming
+    from agent_server import whisper_engine
     from agent_server.tools import browser
 
     # Stop in-flight turns before closing the database underneath them. A run
@@ -174,7 +177,7 @@ async def lifespan(app: FastAPI):
     # connection that had just been closed, losing the assistant message and
     # raising into a background task nobody was watching.
     await agent.shutdown()
-    await whisper_streaming.shutdown()
+    await whisper_engine.shutdown()
     await browser.close_browser()
     await close_db()
 

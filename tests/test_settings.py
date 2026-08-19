@@ -61,18 +61,22 @@ async def test_whisper_model_roundtrip(monkeypatch):
 
     original = config._whisper_model
     try:
-        config.set_whisper_model("/tmp/ggml-test.bin")
-        assert config.whisper_model() == "/tmp/ggml-test.bin"
-        monkeypatch.setattr(config, "_find_whisper_model", lambda: "/fallback.bin")
+        config.set_whisper_model("small.en")
+        assert config.whisper_model() == "small.en"
+        monkeypatch.setattr(config, "_default_whisper_model", lambda: "base.en")
         config.set_whisper_model("")
-        assert config.whisper_model() == "/fallback.bin"
+        assert config.whisper_model() == "base.en", "empty falls back to the default"
     finally:
         config._whisper_model = original
 
 
-async def test_save_stt_model_requires_existing_file(tmp_path, monkeypatch):
+async def test_save_stt_model_stores_a_name_and_drops_the_loaded_one(monkeypatch):
+    """The model is a name now, not the path of a file the user downloaded by
+    hand, so there is nothing on disk to check for -- faster-whisper resolves it
+    and fetches it once. Dropping the loaded engine is what makes the next
+    dictation pick the new one up."""
     import agent_server.config as config_mod
-    import agent_server.whisper_streaming as ws_mod
+    import agent_server.whisper_engine as engine_mod
 
     calls = {}
 
@@ -85,13 +89,12 @@ async def test_save_stt_model_requires_existing_file(tmp_path, monkeypatch):
     async def fake_restart():
         calls["restarted"] = True
 
-    monkeypatch.setattr(ws_mod, "restart", fake_restart)
+    monkeypatch.setattr(engine_mod, "restart", fake_restart)
 
-    assert (await settings_mod.save_stt_model(_request({"model": "/nope/missing.bin"})))["ok"] is False
+    assert (await settings_mod.save_stt_model(_request({"model": "   "})))["ok"] is False
     assert "whisper_model" not in calls
 
-    good = tmp_path / "ggml-small.en.bin"
-    good.write_bytes(b"x")
-    assert await settings_mod.save_stt_model(_request({"model": str(good)})) == {"ok": True}
-    assert calls["whisper_model"] == str(good)
+    assert await settings_mod.save_stt_model(_request({"model": "small.en"})) == {"ok": True}
+    assert calls["whisper_model"] == "small.en"
+    assert calls["seen"] == "small.en"
     assert calls["restarted"] is True

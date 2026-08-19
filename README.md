@@ -140,9 +140,10 @@ this cheap rather than expensive:
 - **A file path in the transcript is clickable** — prose or tool block. Text
   opens the editor, a directory opens the file manager, an image opens a preview
   you can zoom and pan.
-- **Dictation.** Hold-to-talk streaming speech-to-text via whisper.cpp, with a
-  sliding window and time-based commit so latency stays flat however long you
-  talk.
+- **Dictation.** Streaming speech-to-text with a sliding window and time-based
+  commit, so latency stays flat however long you talk. faster-whisper in-process:
+  `pip install`, no system binary, no model to download by hand, and the GPU is
+  detected rather than configured.
 - **A browser it can actually test with.** `browser` drives a real Chromium from
   a list of steps with accessibility-tree snapshots and `expect` assertions that
   *fail the call* — so "it works" has to be proven, not claimed.

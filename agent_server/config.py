@@ -268,71 +268,59 @@ WEBFETCH_ALLOW_PRIVATE = os.getenv("WEBFETCH_ALLOW_PRIVATE", "0") == "1"
 
 
 
-WHISPER_BIN = os.getenv("WHISPER_BIN") or shutil.which("whisper-cli") or shutil.which("whisper")
+def _default_whisper_model() -> str:
+    """The model to load when nothing has been chosen.
+
+    A name, not a path: faster-whisper resolves it against its cache and
+    downloads it once. The old setting was the path of a GGML file the user had
+    to fetch by hand, which is why dictation used to be off until you had.
+    """
+    return os.getenv("WHISPER_MODEL") or whisper_engine_default()
 
 
-def _find_whisper_model() -> str:
-    if os.getenv("WHISPER_MODEL"):
-        return os.getenv("WHISPER_MODEL", "")
-    candidates = [
-        Path.home() / "opt/whisper.cpp/models/ggml-base.en.bin",
-        Path.home() / "models/stt/ggml-base.en.bin",
-        Path.home() / "opt/whisper.cpp/models/ggml-tiny.en.bin",
-        Path.home() / "models/stt/ggml-tiny.en-q8_0.bin",
-        Path.home() / "models/stt/ggml-tiny.en-q4_1.bin",
-    ]
-    for c in candidates:
-        if c.exists():
-            return str(c)
-    return ""
+def whisper_engine_default() -> str:
+    from agent_server.whisper_engine import DEFAULT_MODEL
+
+    return DEFAULT_MODEL
 
 
-_whisper_model = _find_whisper_model()
+_whisper_model = _default_whisper_model()
 
 
 def whisper_model() -> str:
-    """The active whisper model path: env/settings, seeded at startup."""
+    """The active model: env/settings, seeded at startup."""
     return _whisper_model
 
 
 def set_whisper_model(value: str) -> None:
-    """Switch the active model; empty falls back to env/auto-detection."""
+    """Switch the active model; empty falls back to env/the default."""
     global _whisper_model
-    _whisper_model = (value or "").strip() or _find_whisper_model()
+    _whisper_model = (value or "").strip() or _default_whisper_model()
 
 
 def list_whisper_models() -> list[str]:
-    """GGML models in the usual locations, for the settings dropdown."""
-    dirs = [
-        Path.home() / "opt/whisper.cpp/models",
-        Path.home() / "models/stt",
-    ]
-    found: list[str] = []
-    seen: set[str] = set()
-    for d in dirs:
-        if not d.is_dir():
-            continue
-        for p in sorted(d.glob("*.bin")):
-            s = str(p)
-            if s not in seen:
-                seen.add(s)
-                found.append(s)
+    """What the settings dropdown offers.
+
+    The standard sizes, plus whatever is already chosen -- a local CTranslate2
+    directory or a Hugging Face repo id is equally valid, and someone who has
+    typed one in should not have it vanish from the list.
+    """
+    from agent_server.whisper_engine import MODEL_SIZES
+
+    found = list(MODEL_SIZES)
     current = whisper_model()
-    if current and current not in seen:
+    if current and current not in found:
         found.insert(0, current)
     return found
 
 
-FFMPEG_BIN = os.getenv("FFMPEG_BIN") or shutil.which("ffmpeg")
-WHISPER_SERVER_BIN = os.getenv("WHISPER_SERVER_BIN") or shutil.which("whisper-server")
-WHISPER_SERVER_PORT = int(os.getenv("WHISPER_SERVER_PORT", "8177"))
-
-
 def stt_available() -> bool:
-    return bool(WHISPER_BIN and whisper_model() and FFMPEG_BIN)
+    from agent_server.whisper_engine import available
+
+    return available()
 
 
 def whisper_streaming_available() -> bool:
-    """whisper-server (whisper.cpp) for accurate streaming dictation."""
-    return bool(WHISPER_SERVER_BIN and whisper_model())
+    """Same engine as one-shot transcription; the difference is the caller."""
+    return stt_available()
 

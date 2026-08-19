@@ -359,7 +359,7 @@ async def _home_context(
         "sound_enabled": await _sound_enabled(),
         "uploaded_sounds": _list_uploaded_sounds(),
         "stt": stt_availability(),
-        "stt_models": [{"path": p, "name": Path(p).name} for p in list_whisper_models()],
+        "stt_models": [{"path": m, "name": m} for m in list_whisper_models()],
         "settings": settings,
         "provider_settings": provider_settings,
         "custom_endpoints": custom_endpoints,

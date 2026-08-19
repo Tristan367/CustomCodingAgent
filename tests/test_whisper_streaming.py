@@ -1,26 +1,28 @@
-"""Streaming dictation via whisper-server (whisper.cpp)."""
+"""Streaming dictation: the sliding window that makes a non-streaming model live.
 
-import io
-import wave
+Whisper has no streaming mode in any implementation, so what turns it into live
+dictation is here rather than in the engine -- re-transcribe the recent tail,
+commit what is old enough to be stable, and trim it out of the buffer so the
+next pass stays the same size.
+"""
 
 import numpy as np
 
 from agent_server import whisper_streaming
 
 
-def test_whisper_session_encodes_a_valid_wav():
-    session = whisper_streaming.WhisperSession(server=None)
-    session.append(np.array([0.0, 0.5, -0.5, 1.0], dtype=np.float32))
-    wav = session._to_wav()
-    with wave.open(io.BytesIO(wav), "rb") as w:
-        assert w.getframerate() == 16000
-        assert w.getnchannels() == 1
-        assert w.getsampwidth() == 2
-        assert w.getnframes() == 4
+def test_the_buffer_reads_back_as_the_samples_that_went_in():
+    """It is handed to the engine as-is now. The whisper-server backend needed a
+    WAV encode here on every step -- header, int16 conversion, a fresh BytesIO --
+    purely to cross an HTTP boundary that no longer exists."""
+    session = whisper_streaming.WhisperSession(engine=None)
+    samples = np.array([0.0, 0.5, -0.5, 1.0], dtype=np.float32)
+    session.append(samples)
+    assert np.array_equal(session._samples(), samples)
 
 
 def test_new_seconds_tracks_untrancribed_audio():
-    session = whisper_streaming.WhisperSession(server=None)
+    session = whisper_streaming.WhisperSession(engine=None)
     session.append(np.zeros(16000, dtype=np.float32))  # one second
     assert session.new_seconds == 1.0
     session._last_transcribed = 16000
@@ -62,27 +64,27 @@ def test_ensure_period():
 
 
 def test_pause_finalization_requires_long_silence():
-    session = whisper_streaming.WhisperSession(server=None)
+    session = whisper_streaming.WhisperSession(engine=None)
     session.append(np.full(16000, 0.5, dtype=np.float32))  # 1s of loud speech
     assert not session.should_finalize
     session.append(np.zeros(int((whisper_streaming.PAUSE_SECONDS + 1) * 16000), dtype=np.float32))
     assert session.should_finalize
 
 
-class _FakeServer:
-    """Returns canned segments instead of calling whisper."""
+class _FakeEngine:
+    """Returns canned segments instead of running a model."""
 
     def __init__(self, segments):
         self._segments = segments
 
-    async def transcribe(self, wav_bytes):
+    async def transcribe(self, samples):
         text = " ".join(s["text"] for s in self._segments)
-        return text, self._segments
+        return text, [dict(s) for s in self._segments]
 
 
 def _session_with(segments, seconds):
-    session = whisper_streaming.WhisperSession(server=None)
-    session.server = _FakeServer(segments)
+    session = whisper_streaming.WhisperSession(engine=None)
+    session.engine = _FakeEngine(segments)
     session.append(np.full(int(16000 * seconds), 0.5, dtype=np.float32))
     return session
 

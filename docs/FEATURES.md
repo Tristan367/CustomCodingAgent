@@ -306,8 +306,14 @@ Two independent gates (`agent_server/permissions.py`):
 ## Custom tools, scripts, secrets
 
 - **Custom tools** — user-defined shell scripts with a JSON Schema, called by the
-  model; arguments arrive as `$TOOL_ARG_NAME`. Callable per prompt profile. Loaded
-  from the DB at startup.
+  model; arguments arrive as `$TOOL_ARG_NAME`, JSON-encoded. Callable per prompt
+  profile. Loaded from the DB at startup.
+- `examples/echo-tool.sh` is the minimal one. `examples/claude-code-tool.sh` is a
+  real one: it shells out to the `claude` CLI so a session driven by a cheap
+  model can hand a hard question to Claude Code and get an answer back. That is
+  also the only legitimate way to reach a Claude subscription from here — the
+  model picker needs an API key, because subscription auth belongs to Anthropic's
+  own clients and is not an API.
 - **Built-in tool descriptions** — the `/tools` page rewrites what the model is
   told a built-in tool does (edit + revert to default). Frozen per session like
   the system prompt, so an edit is adopted at the next compaction.

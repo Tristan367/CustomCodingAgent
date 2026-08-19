@@ -4466,11 +4466,14 @@ const FileEditor = (() => {
   }
 
   // Reopen the last file this session had open (the session-bar button).
+  // Reports whether there was one, so a caller can offer something else.
   function reopen() {
-    if (!App.sessionId) return;
-    if (dlg && dlg.classList.contains('open')) return;
+    if (!App.sessionId) return false;
+    if (dlg && dlg.classList.contains('open')) return true;
     const m = mem(App.sessionId);
-    if (m.path) open(m.path, {});
+    if (!m.path) return false;
+    open(m.path, {});
+    return true;
   }
 
   /* The file manager mutates files out from under us; keep the open buffer's
@@ -5187,12 +5190,12 @@ const Keys = (() => {
       combo: 'Alt+BracketRight', run: () => cycleSession(1) },
     { id: 'session.prev', group: 'Sessions', label: 'Previous session',
       combo: 'Alt+BracketLeft', run: () => cycleSession(-1) },
-    { id: 'session.new', group: 'Sessions', label: 'New session',
+    { id: 'session.jump', group: 'Sessions', label: 'Jump to session 1-9',
+      combo: 'Alt+Shift', digits: true, run: (n) => jumpToSession(n - 1) },
+    { id: 'session.new', group: 'Sessions', label: 'Home / new session',
       combo: 'Alt+KeyN', run: () => { window.location.href = '/'; } },
     { id: 'session.close', group: 'Sessions', label: 'Close this session tab',
       combo: 'Alt+KeyW', run: () => closeCurrentTab() },
-    { id: 'session.home', group: 'Sessions', label: 'Home',
-      combo: 'Alt+KeyH', run: () => { window.location.href = '/'; } },
 
     { id: 'compose.focus', group: 'Writing', label: 'Focus the message box',
       combo: 'Alt+KeyI', run: () => focusComposer() },
@@ -5209,9 +5212,9 @@ const Keys = (() => {
     { id: 'files.manager', group: 'Files', label: 'Open the file manager',
       combo: 'Alt+KeyO', run: () => openFileManager() },
     { id: 'files.editor', group: 'Files', label: 'Open / close the editor',
-      combo: 'Ctrl+KeyE', run: () => toggleEditor() },
+      combo: 'Alt+KeyC', run: () => toggleEditor() },
     { id: 'files.split', group: 'Files', label: 'Half-height editor split',
-      combo: 'Alt+KeyS', run: () => FileEditor.toggleSplit() },
+      combo: 'Alt+Backslash', run: () => FileEditor.toggleSplit() },
 
     { id: 'run.stop', group: 'Running', label: 'Stop this session',
       combo: 'Escape', whileTyping: true, run: () => stopStreaming(),
@@ -5229,8 +5232,36 @@ const Keys = (() => {
     { group: 'Writing', label: 'Send the message', combo: 'Enter' },
     { group: 'Writing', label: 'New line', combo: 'Shift+Enter' },
     { group: 'Files', label: 'Save the open file', combo: 'Ctrl+KeyS' },
-    { group: 'Sessions', label: 'Jump to session 1-9', combo: 'Alt+1 … Alt+9' },
   ];
+
+  /* Combinations a browser or desktop keeps for itself, so a rebind onto one
+   * can be flagged rather than silently doing nothing. Not a blocklist: which
+   * of these actually bite depends on the browser, and the user may well know
+   * their own machine better than this table does.
+   *
+   * The defaults above were chosen against it. Firefox on Linux takes Alt+1-8
+   * for its own tabs, and Alt+F/E/V/S/B/T/H open its menus, which is why
+   * neither Alt+digit nor those letters appear as a default here. */
+  const RESERVED = {
+    'Alt+KeyD': 'the address bar', 'Ctrl+KeyL': 'the address bar',
+    'Ctrl+KeyE': 'search from the address bar',
+    'Alt+KeyF': 'the File menu', 'Alt+KeyE': 'the Edit menu',
+    'Alt+KeyV': 'the View menu', 'Alt+KeyS': 'the History menu',
+    'Alt+KeyB': 'the Bookmarks menu', 'Alt+KeyT': 'the Tools menu',
+    'Alt+KeyH': 'the Help menu',
+    'Alt+ArrowLeft': 'going back', 'Alt+ArrowRight': 'going forward',
+    'Alt+Home': 'the browser home page',
+    'Ctrl+Tab': 'browser tabs', 'Ctrl+Shift+Tab': 'browser tabs',
+    'Ctrl+KeyW': 'closing the browser tab', 'Ctrl+KeyT': 'a new browser tab',
+    'Ctrl+KeyN': 'a new browser window', 'Ctrl+Shift+KeyN': 'a private window',
+    'Alt+Tab': 'the window switcher', 'Alt+F4': 'closing the window',
+  };
+
+  function reservedNote(combo) {
+    // Alt+1 … Alt+8 is how Firefox switches its own tabs on Linux.
+    if (/^Alt\+Digit[1-8]$/.test(combo)) return 'browser tabs on Linux';
+    return RESERVED[combo] || null;
+  }
 
   const byId = new Map(ACTIONS.map((a) => [a.id, a]));
 
@@ -5316,21 +5347,41 @@ const Keys = (() => {
       e.stopPropagation();
       if (combo === 'Escape') { capturing = null; renderAll(); return; }
       if (combo === 'Backspace') { rebind(capturing, ''); capturing = null; return; }
-      const clash = conflict(combo, capturing);
-      if (clash) { renderAll(`${pretty(combo)} is already ${clash.label.toLowerCase()}`); return; }
+      const target = byId.get(capturing);
+      // A digit action binds the modifiers only; the 1-9 is the argument.
+      const wanted = target?.digits ? combo.replace(/\+Digit[0-9]$/, '') : combo;
+      if (target?.digits && wanted === combo) {
+        renderAll('Hold the modifiers and press a number, e.g. Alt+Shift+1');
+        return;
+      }
+      const clash = conflict(wanted, capturing);
+      if (clash) { renderAll(`${pretty(wanted)} is already ${clash.label.toLowerCase()}`); return; }
       const id = capturing;
       capturing = null;
-      rebind(id, combo);
+      rebind(id, wanted);
+      const claimed = reservedNote(target?.digits ? wanted + '+Digit1' : wanted);
+      if (claimed) renderAll(`Careful: ${pretty(wanted)} is usually ${claimed}.`);
       return;
     }
 
     const typing = isTyping(e.target);
     for (const action of ACTIONS) {
-      if (bindingFor(action) !== combo) continue;
+      const bound = bindingFor(action);
+      if (!bound) continue;
+      // A `digits` action binds a modifier prefix and answers to prefix+1..9,
+      // so nine shortcuts cost one row instead of nine.
+      let argument;
+      if (action.digits) {
+        const digit = /^Digit([1-9])$/.exec(combo.slice(bound.length + 1) || '');
+        if (!combo.startsWith(bound + '+') || !digit) continue;
+        argument = Number(digit[1]);
+      } else if (bound !== combo) {
+        continue;
+      }
       if (typing && !action.whileTyping) continue;
       if (action.when && !action.when()) continue;
       e.preventDefault();
-      if (!e.repeat) action.run();
+      if (!e.repeat) action.run(argument);
       return;
     }
   }, true);
@@ -5354,9 +5405,10 @@ const Keys = (() => {
     const line = el('div', 'key-row');
     line.appendChild(el('span', 'key-label', action.label));
     const combo = bindingFor(action);
+    const shown = action.digits ? `${pretty(combo)} + 1 … 9` : pretty(combo);
     const button = el('button', 'key-combo' + (capturing === action.id ? ' capturing' : ''));
     button.type = 'button';
-    button.textContent = capturing === action.id ? 'press keys…' : pretty(combo);
+    button.textContent = capturing === action.id ? 'press keys…' : shown;
     button.title = 'Click, then press the keys you want. Esc cancels, Backspace unbinds.';
     button.addEventListener('click', () => {
       capturing = capturing === action.id ? null : action.id;
@@ -5369,6 +5421,12 @@ const Keys = (() => {
       undo.title = `Back to ${pretty(action.combo)}`;
       undo.addEventListener('click', () => reset(action.id));
       line.appendChild(undo);
+    }
+    const claimed = reservedNote(action.digits ? combo + '+Digit1' : combo);
+    if (claimed) {
+      const flag = el('span', 'key-note key-clash', `browser: ${claimed}`);
+      flag.title = 'The browser usually keeps this one, so it may never reach the page.';
+      line.appendChild(flag);
     }
     if (note) line.appendChild(el('span', 'key-note', note));
     return line;
@@ -5405,7 +5463,9 @@ const Keys = (() => {
     }
     host.appendChild(el('div', 'key-hint',
       'Click a shortcut and press the keys you want. Esc cancels, Backspace unbinds. '
-      + 'Some combinations are reserved by the browser and never reach the page.'));
+      + 'Combinations the browser keeps for itself are flagged, and never reach '
+      + 'the page: Firefox on Linux takes Alt+1-8 for its own tabs, and '
+      + 'Alt+F/E/V/S/B/T/H open its menus.'));
   }
 
   function renderAll(note) {
@@ -5489,18 +5549,11 @@ function blurComposer() {
 }
 
 function toggleEditor() {
-  if (document.body.classList.contains('editor-open')) FileEditor.close();
-  else FileEditor.reopen();
+  if (document.body.classList.contains('editor-open')) { FileEditor.close(); return; }
+  // `reopen` needs a file this session has opened before, so on a fresh session
+  // the key would do nothing at all. Offer the file manager instead: the intent
+  // is "I want to look at a file", and there is not one to go back to yet.
+  if (!FileEditor.reopen()) openFileManager();
 }
-
-/* Alt+1 … Alt+9 jump straight to a tab. One handler rather than nine entries in
- * the table: they are a range, and rebinding them individually is noise. */
-document.addEventListener('keydown', (e) => {
-  if (!e.altKey || e.ctrlKey || e.metaKey || isTyping(e.target)) return;
-  const match = /^Digit([1-9])$/.exec(e.code || '');
-  if (!match) return;
-  e.preventDefault();
-  jumpToSession(Number(match[1]) - 1);
-}, true);
 
 Keys.load();

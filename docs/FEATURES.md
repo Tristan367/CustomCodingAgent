@@ -231,6 +231,13 @@ Two independent gates (`agent_server/permissions.py`):
   Backspace unbinds.
 - Combos are normalised from `event.code` (`Alt+BracketRight`), so a binding
   follows the physical key and survives a non-US layout.
+- Defaults are chosen against what browsers keep for themselves. Firefox on
+  Linux takes Alt+1-8 for its own tabs, and Alt+F/E/V/S/B/T/H open its menus, so
+  neither appears as a default; Alt+D and Ctrl+E/Ctrl+L are the address bar.
+  Rebinding onto a known-reserved combo is flagged rather than blocked -- which
+  of them actually bite depends on the browser.
+- "Jump to session 1-9" binds a *prefix* (Alt+Shift by default) and answers to
+  prefix+1 through prefix+9, so nine shortcuts cost one rebindable row.
 - Defaults live in the JS, not the database: only deliberate overrides are
   stored (`GET`/`POST /_settings/keybinds`), so a better default in a later
   version still reaches everyone who never rebound it.

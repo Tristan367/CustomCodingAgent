@@ -2356,6 +2356,9 @@ dialog.file-browser::backdrop { background: transparent; }
   font-size: var(--fs-small);
   color: var(--text-dim);
 }
+/* A binding the browser will probably eat. Flagged, not blocked: which of them
+   actually bite depends on the browser, and the user knows their own machine. */
+.key-clash { color: var(--warn); }
 .key-hint { padding-top: var(--s3); }
 .key-warning {
   font-size: var(--fs-small);

@@ -16,7 +16,7 @@ from fastapi import (
     WebSocket,
     WebSocketDisconnect,
 )
-from fastapi.responses import FileResponse, JSONResponse, StreamingResponse
+from fastapi.responses import JSONResponse, StreamingResponse
 
 from agent_server import agent, permissions, whisper_streaming
 from agent_server import database as db
@@ -85,7 +85,7 @@ def _attachment_content(session: dict, text: str, attachments: list[str]) -> str
     """The user message, with each attached path recorded for the model.
 
     Attachments are just filesystem paths: no bytes are uploaded, and the model
-    decides what to do with each one (read, glob, vision, ...). Relative paths
+    decides what to do with each one (read, glob, ...). Relative paths
     resolve against the session's project directory.
     """
     lines: list[str] = []
@@ -541,28 +541,3 @@ async def stt_stream(websocket: WebSocket):
             await websocket.close()
         except Exception:
             pass
-
-
-@router.get("/files/image")
-async def serve_image(path: str):
-    """Serve an image by absolute path, for thumbnails and captures.
-
-    This is a local, single-user app and the model already reads arbitrary files
-    with the `read`/`vision` tools, so serving an image file is no wider a
-    surface than the app itself. Non-image extensions are refused so this cannot
-    become a general file read.
-    """
-    try:
-        resolved = Path(path).expanduser().resolve()
-    except OSError:
-        raise HTTPException(400, "Bad path") from None
-    if resolved.suffix.lower() not in ALLOWED_IMAGE_TYPES:
-        raise HTTPException(403, "Not an image path")
-    if not resolved.is_file():
-        raise HTTPException(404, "Not found")
-    return FileResponse(resolved)
-
-
-# ── Images ──────────────────────────────────────────────────────────────────
-
-ALLOWED_IMAGE_TYPES = {".png", ".jpg", ".jpeg", ".gif", ".webp", ".bmp", ".tif", ".tiff", ".avif", ".heic"}

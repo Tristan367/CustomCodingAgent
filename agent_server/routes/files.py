@@ -11,6 +11,7 @@ import shutil
 from pathlib import Path
 
 from fastapi import APIRouter, HTTPException
+from fastapi.responses import FileResponse
 from pydantic import BaseModel
 
 from agent_server import database as db
@@ -25,6 +26,12 @@ from agent_server.tools.file_ops import (
 )
 
 router = APIRouter(prefix="/api/files", tags=["files"])
+
+# Extensions the browser will render. `.svg` is deliberately absent: it is text,
+# so it belongs in the editor, and serving it inline would run any script in it.
+IMAGE_SUFFIXES = {
+    ".png", ".jpg", ".jpeg", ".gif", ".webp", ".bmp", ".tif", ".tiff", ".avif", ".heic",
+}
 
 # The editor refuses to load a file past this many bytes; a 40MB minified bundle
 # is not something anyone edits by hand, and it would freeze the page.
@@ -97,6 +104,32 @@ async def stat_path(session_id: str, path: str):
         "is_file": p.is_file(),
         "size": size,
     }
+
+
+@router.get("/image")
+async def serve_image(path: str, session_id: str = ""):
+    """Serve an image file, for thumbnails, captures, and the click-to-preview.
+
+    This is a local, single-user app and the agent already reads arbitrary files,
+    so serving an image is no wider a surface than the app itself. Non-image
+    extensions are refused so this cannot become a general file read.
+
+    A relative path is resolved against the session's project directory, the
+    same as everywhere else -- the model writes `docs/shot.png` far more often
+    than it writes the absolute path.
+    """
+    try:
+        if session_id and not Path(path).expanduser().is_absolute():
+            resolved = _resolve(await _session(session_id), path).resolve()
+        else:
+            resolved = Path(path).expanduser().resolve()
+    except OSError:
+        raise HTTPException(400, "Bad path") from None
+    if resolved.suffix.lower() not in IMAGE_SUFFIXES:
+        raise HTTPException(403, "Not an image path")
+    if not resolved.is_file():
+        raise HTTPException(404, "Not found")
+    return FileResponse(resolved)
 
 
 @router.get("/list")

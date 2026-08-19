@@ -27,8 +27,11 @@
     {% for m in messages %}
     {% if not m._hidden %}
     {% if m.role == 'tool' %}
+    {# data-path is what makes the block open in the editor when clicked. It is
+       the tool's own resolved path, not the (possibly truncated) title. #}
     <div class="message tool {% if m.is_error %}tool-error{% endif %}" id="msg-{{ m.id }}"
-         data-tool-call-id="{{ m.tool_call_id or '' }}">
+         data-tool-call-id="{{ m.tool_call_id or '' }}"
+         {%- if m.file_path %} data-path="{{ m.file_path }}"{% endif %}>
         <div class="msg-role" title="{{ m.tool_name or 'result' }}">{{ m.tool_name or 'result' }}</div>
         <div class="msg-content">
             {% set input_text = tool_inputs.get(m.tool_call_id) %}

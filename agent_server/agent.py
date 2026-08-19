@@ -535,7 +535,6 @@ async def _loop(
 ) -> AsyncIterator[dict]:
     session_id = session["id"]
     tools = tool_schemas(
-        include_vision=not provider.supports_vision(),
         exclude=await disabled_tools(session),
         descriptions=await session_tool_descriptions(session),
     )
@@ -604,7 +603,6 @@ async def _loop(
                 session = await db.get_session(session_id) or session
                 system_prompt = await session_system_prompt(session)
                 tools = tool_schemas(
-                    include_vision=not provider.supports_vision(),
                     exclude=await disabled_tools(session),
                     descriptions=await session_tool_descriptions(session),
                 )
@@ -1053,6 +1051,7 @@ def _tool_end_event(call: dict, name: str, result: ToolResult, elapsed_ms: int) 
         "lang": result.lang,
         "code": code,
         "code_start": result.code_start,
+        "file_path": result.file_path,
         "duration_ms": elapsed_ms,
     }
 
@@ -1131,9 +1130,11 @@ async def _record(session_id: str, call: dict, result: ToolResult, duration_ms: 
     from agent_server.providers.base import estimate_tokens
 
     output = truncate(result.output, MAX_TOOL_RESULT_CHARS, spill=True, session_id=session_id)
-    # Taken from the call rather than the diff: unified_diff drops its header.
+    # The tool's own resolved path where it has one, so the change summary groups
+    # by the real file. Falling back to the raw argument grouped the same file
+    # twice whenever the model spelled it relative one call and absolute the next.
     args = parse_arguments(call)
-    path = args.get("filePath") or args.get("path") or ""
+    path = result.file_path or args.get("filePath") or ""
     return await db.add_message(
         session_id,
         "tool",
@@ -1147,7 +1148,7 @@ async def _record(session_id: str, call: dict, result: ToolResult, duration_ms: 
         diff=result.diff,
         tool_title=result.title,
         duration_ms=duration_ms,
-        file_path=path if result.diff else "",
+        file_path=path,
         lang=result.lang,
         code=result.code,
         code_start=result.code_start,

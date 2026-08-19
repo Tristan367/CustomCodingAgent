@@ -256,3 +256,66 @@ async def test_changes_endpoint_404s_for_unknown_session(session):
         await session_changes("nope")
     assert e.value.status_code == 404
 
+
+
+# ── Image serving ────────────────────────────────────────────────────────────
+
+# A 1x1 PNG, so the endpoint has a real file to hand back.
+_PNG = bytes.fromhex(
+    "89504e470d0a1a0a0000000d49484452000000010000000108060000001f15c489"
+    "0000000a49444154789c6360000002000100ffff03000006000557bfabd4000000"
+    "0049454e44ae426082"
+)
+
+
+async def test_an_image_is_served_by_absolute_path(session):
+    from agent_server.routes.files import serve_image
+
+    shot = Path(session["project_dir"]) / "shot.png"
+    shot.write_bytes(_PNG)
+    response = await serve_image(str(shot))
+    assert Path(response.path) == shot
+
+
+async def test_a_relative_image_path_resolves_against_the_project(session):
+    """The model writes `docs/shot.png` far more often than the absolute path."""
+    from agent_server.routes.files import serve_image
+
+    docs = Path(session["project_dir"]) / "docs"
+    docs.mkdir()
+    (docs / "shot.png").write_bytes(_PNG)
+
+    response = await serve_image("docs/shot.png", session_id=session["id"])
+    assert Path(response.path) == docs / "shot.png"
+
+
+async def test_a_non_image_is_refused_so_this_is_not_a_general_file_read(session):
+    from agent_server.routes.files import serve_image
+
+    secret = Path(session["project_dir"]) / "secret.env"
+    secret.write_text("KEY=1\n")
+
+    with pytest.raises(HTTPException) as e:
+        await serve_image(str(secret))
+    assert e.value.status_code == 403
+
+
+async def test_svg_is_not_served_as_an_image(session):
+    """It is text, so it belongs in the editor, and serving it inline would run
+    whatever script it contains."""
+    from agent_server.routes.files import serve_image
+
+    art = Path(session["project_dir"]) / "art.svg"
+    art.write_text("<svg/>")
+
+    with pytest.raises(HTTPException) as e:
+        await serve_image(str(art))
+    assert e.value.status_code == 403
+
+
+async def test_a_missing_image_is_a_404(session):
+    from agent_server.routes.files import serve_image
+
+    with pytest.raises(HTTPException) as e:
+        await serve_image(str(Path(session["project_dir"]) / "gone.png"))
+    assert e.value.status_code == 404

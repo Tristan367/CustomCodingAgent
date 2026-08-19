@@ -213,3 +213,49 @@ async def test_system_and_compaction_are_tied_to_profile(fresh, tmp_path):
     row = await db.get_session(s["id"])
     assert (await build_system_prompt(row["prompt_profile"], str(tmp_path))).startswith("You are the boss.")
     assert await get_compact_prompt(row) == "Summarise like a boss."
+
+
+# ── the local profile ───────────────────────────────────────────────────────
+
+async def test_the_local_profile_cannot_spawn_subagents(fresh):
+    """For a model with no subagents to delegate to. Telling one to "fan the
+    work out to `task` subagents" when `task` is not in its tool list is an
+    instruction it cannot follow, and it will either try anyway or narrate doing
+    it -- so the delegation section comes out of the prompt as well as the tool
+    coming out of the schema."""
+    from agent_server.system_prompt import disabled_tools, migrate_prompts
+    from agent_server.tools.registry import tool_schemas
+
+    await migrate_prompts()
+
+    off = await disabled_tools({"prompt_profile": "local"})
+    assert off == {"task"}
+    offered = {s["function"]["name"] for s in tool_schemas(exclude=off)}
+    assert "task" not in offered
+    assert "read" in offered and "bash" in offered
+
+    body = (await db.get_prompt("local"))["body"]
+    assert "# Delegation" not in body
+    assert "`task` subagent" not in body
+    assert "subagents" not in body
+
+
+async def test_the_local_profile_reaches_an_existing_install(fresh):
+    """A new starter profile is of no use if only fresh databases get it."""
+    from agent_server.system_prompt import disabled_tools, list_prompt_names, migrate_prompts
+
+    await db.save_prompt("default", "a prompt this user already had")
+    await migrate_prompts()
+
+    assert "local" in await list_prompt_names()
+    assert await disabled_tools({"prompt_profile": "local"}) == {"task"}
+
+
+async def test_the_default_profile_still_delegates(fresh):
+    """The local variant is a copy with a section removed; the original must be
+    untouched by its existence."""
+    from agent_server.system_prompt import disabled_tools, migrate_prompts
+
+    await migrate_prompts()
+    assert await disabled_tools({"prompt_profile": "default"}) == set()
+    assert "# Delegation" in (await db.get_prompt("default"))["body"]

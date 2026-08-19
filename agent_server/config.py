@@ -194,7 +194,27 @@ UNKNOWN_MODEL = {
 DEFAULT_MAX_OUTPUT = 8_192
 
 
+# Context windows reported by a custom endpoint's own /models listing. A rig
+# serving a 262K model would otherwise be sized by UNKNOWN_MODEL's 131K and
+# compact at half the window it actually has.
+_ENDPOINT_CONTEXT: dict[str, int] = {}
+
+
+def remember_endpoint_context(key: str, context: int) -> None:
+    _ENDPOINT_CONTEXT[key] = context
+
+
 def model_info(model_id: str) -> dict:
+    if model_id in _ENDPOINT_CONTEXT:
+        return {
+            "id": model_id,
+            "context": _ENDPOINT_CONTEXT[model_id],
+            "max_output": UNKNOWN_MODEL["max_output"],
+        }
+    return _model_info(model_id)
+
+
+def _model_info(model_id: str) -> dict:
     """Context window and output ceiling, or the unknown defaults."""
     entry = MODELS_BY_ID.get(model_id)
     if not entry:
@@ -218,15 +238,14 @@ def resolve_model_choice(choice: str, custom_model: str = "") -> tuple[str, str]
     """Turn the Model dropdown's value into a (provider, model) pair.
 
     Built-in models post their own id. A custom endpoint posts `custom:NAME`
-    and carries the model id in a free-text field beside it, because only the
-    endpoint's operator knows what it serves.
+    and is its own model: the endpoint is asked what it is serving at request
+    time, so swapping the model on the rig needs no change here. A typed id is
+    still honoured if one is given, for an endpoint that serves several at once
+    and cannot say which is live.
     """
     choice = (choice or "").strip()
     if choice.startswith("custom:"):
-        model = custom_model.strip()
-        if not model:
-            raise ValueError("Type the model id the custom endpoint expects.")
-        return choice, model
+        return choice, custom_model.strip() or choice
     if not is_known_model(choice):
         raise ValueError(f"Unknown model: {choice}")
     return provider_for_model(choice), choice

@@ -595,6 +595,34 @@ a.file-ref:hover { border-bottom-style: solid; color: var(--text); background: v
   overflow-y: auto;
 }
 
+/* While it is streaming, a thinking block renders *over* the tail padding
+   instead of inside the layout.
+
+   Thinking arrives a token at a time and runs to hundreds of lines. In the flow
+   every one of those tokens moved the conversation, and hiding the block when
+   the reply started took the whole height back in a single frame -- so the
+   transcript lurched the entire time the agent was working. Out of the flow it
+   costs exactly one line whatever it contains, and both the collapse and the
+   hide are then free.
+
+   #messages already reserves 25vh below the last message so the tail can be
+   scrolled up to a comfortable reading height; this grows into that space
+   rather than pushing anything to make room. The offsets match the message
+   grid: 50px column + 10px gap. */
+.message.thinking.live { min-height: 30px; }
+.message.thinking.live .msg-content {
+  position: absolute;
+  top: 0;
+  left: 60px;
+  right: 60px;
+  z-index: 3;
+  max-height: 22vh;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  background: var(--bg);
+  border-radius: 4px;
+}
+
 /* The thinking summary is the thinking itself: clamped to one line while
    collapsed so the first line is always visible, expanded into the full block. */
 .reasoning-summary {
@@ -2300,6 +2328,7 @@ dialog.file-browser::backdrop { background: transparent; }
 
 .home-nav {
   display: flex;
+  justify-content: flex-end;
   align-items: baseline;
   gap: var(--s4);
   padding-bottom: var(--s3);
@@ -2312,7 +2341,6 @@ dialog.file-browser::backdrop { background: transparent; }
   text-decoration: none;
 }
 .home-nav a:hover { text-decoration: underline; }
-.home-nav .hint { margin: 0; }
 
 /* ── Keyboard shortcuts ───────────────────────────────────────────────────── */
 

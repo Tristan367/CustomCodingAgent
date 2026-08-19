@@ -86,6 +86,30 @@ async def _expand_tools() -> list[str]:
     return list(DEFAULT_EXPAND_TOOLS)
 
 
+def _stt_model_choices() -> list[dict]:
+    """The speech models, labelled with whether they are actually here.
+
+    Offering all ten with no distinction read as "you have all of these", so
+    picking one that was not downloaded started a multi-gigabyte fetch with
+    nothing on screen to say so, and looked like a hang.
+    """
+    from agent_server.whisper_engine import DOWNLOAD_MB, downloaded_models
+
+    here = downloaded_models()
+    out = []
+    for m in list_whisper_models():
+        if m in here:
+            label = m
+        elif m in DOWNLOAD_MB:
+            size = DOWNLOAD_MB[m]
+            cost = f"{size / 1000:.1f} GB" if size >= 1000 else f"{size} MB"
+            label = f"{m}  (downloads ~{cost})"
+        else:
+            label = m
+        out.append({"path": m, "name": label})
+    return out
+
+
 def _expandable_tools() -> list[str]:
     """Every tool the user can choose to auto-expand, the four they are most
     likely to want first. `reasoning` is not a tool, but its block obeys the same
@@ -162,7 +186,6 @@ def _offerable_models() -> list[dict]:
                 "id": key,
                 "name": f"{provider.name} (custom endpoint)",
                 "provider": key,
-                "needs_model_id": True,
             })
 
     # Models discovered from the DeepSeek /models endpoint at startup, offered
@@ -360,7 +383,7 @@ async def _home_context(
         "sound_enabled": await _sound_enabled(),
         "uploaded_sounds": _list_uploaded_sounds(),
         "stt": stt_availability(),
-        "stt_models": [{"path": m, "name": m} for m in list_whisper_models()],
+        "stt_models": _stt_model_choices(),
         "settings": settings,
         "provider_settings": provider_settings,
         "custom_endpoints": custom_endpoints,

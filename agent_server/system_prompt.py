@@ -22,6 +22,11 @@ from agent_server import database as db
 
 _PROJECT = Path(__file__).parent.parent
 DEFAULT_PROMPT = (_PROJECT / "system_prompts" / "default.md").read_text()
+# The same prompt with the delegation removed, for a model that has no
+# subagents to delegate to. Telling a local model to "fan the work out to `task`
+# subagents" when `task` is not in its tool list is an instruction it cannot
+# follow, and it will either try anyway or talk about doing it.
+LOCAL_PROMPT = (_PROJECT / "system_prompts" / "local.md").read_text()
 DEFAULT_SUBAGENT_PROMPT = (_PROJECT / "system_prompts" / "default_subagent.md").read_text()
 
 MINIMAL_PROMPT = """
@@ -73,8 +78,16 @@ VISUAL_PROMPT = DEFAULT_PROMPT + _SEEING_SECTION
 
 STARTER_PROMPTS: dict[str, str] = {
     "default": DEFAULT_PROMPT,
+    "local": LOCAL_PROMPT,
     "minimal": MINIMAL_PROMPT,
     "visual": VISUAL_PROMPT,
+}
+
+# Tools a starter profile turns off when it is first created. Applied only at
+# creation: after that the selection is the user's, and a startup refresh must
+# not undo an edit they made on the Prompts page.
+STARTER_DISABLED_TOOLS: dict[str, str] = {
+    "local": "task",
 }
 
 # Deleting this one would leave sessions pointing at nothing, and there would be
@@ -123,7 +136,10 @@ async def migrate_prompts():
     for name, starter in STARTER_PROMPTS.items():
         stored = (settings.get(f"profile_{name}") or "").strip()
         keep = stored and not _is_shipped(stored)
-        await db.save_prompt(name, stored if keep else starter.strip())
+        await db.save_prompt(
+            name, stored if keep else starter.strip(),
+            disabled_tools=STARTER_DISABLED_TOOLS.get(name),
+        )
 
     # The old preferences text was appended to every profile, so on its own it
     # is the closest thing to the prompt the user was actually running.
@@ -175,7 +191,10 @@ async def _refresh_one(name: str, starter: str, kind: str = SYSTEM):
     marker_key = f"prompt_shipped:{kind}:{name}"
     row = await db.get_prompt(name, kind)
     if row is None:
-        await db.save_prompt(name, starter.strip(), kind)
+        await db.save_prompt(
+            name, starter.strip(), kind,
+            disabled_tools=STARTER_DISABLED_TOOLS.get(name),
+        )
         await db.set_setting(marker_key, _digest(starter))
         return
 

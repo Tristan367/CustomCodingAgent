@@ -78,11 +78,72 @@ def test_a_custom_endpoint_carries_its_own_model_id():
     assert model == "qwen3-coder:30b"
 
 
-def test_a_custom_endpoint_without_a_model_id_is_refused():
-    """The endpoint's operator is the only one who knows what it serves, so an
-    empty box has to be an error rather than a session that cannot run."""
-    with pytest.raises(ValueError, match="model id"):
-        resolve_model_choice("custom:box", "   ")
+def test_a_custom_endpoint_needs_no_model_id():
+    """It used to be refused: the operator was the only one who knew what the
+    endpoint served. But that fact goes stale the moment a different model is
+    loaded on the rig, and the endpoint can simply be asked -- so the session
+    stores the endpoint key and the real id is resolved per request."""
+    provider, model = resolve_model_choice("custom:box", "   ")
+    assert (provider, model) == ("custom:box", "custom:box")
+
+
+async def test_the_endpoint_is_asked_what_it_is_running():
+    """In order of how reliable the signal is: a `loaded` flag if the server
+    offers one, the only entry if it serves one model, otherwise the first of
+    several -- which is a guess, and why the model field stays as an override."""
+    import types
+
+    from agent_server.providers.custom_openai import CustomOpenAIProvider
+
+    def entry(name, **kw):
+        e = types.SimpleNamespace(id=name)
+        for k, v in kw.items():
+            setattr(e, k, v)
+        return e
+
+    async def resolved(entries):
+        provider = CustomOpenAIProvider(name="x", base_url="http://x/v1", api_key="k")
+
+        async def listing():
+            return types.SimpleNamespace(data=entries)
+
+        provider._get_client = lambda: types.SimpleNamespace(
+            models=types.SimpleNamespace(list=listing)
+        )
+        return await provider.resolve_model()
+
+    # A server hosting a library and keeping one in memory.
+    assert await resolved(
+        [entry("an-image-model"), entry("the-live-one", loaded=True), entry("another")]
+    ) == "the-live-one"
+    # vLLM, llama.cpp, TGI: one model, listed.
+    assert await resolved([entry("Qwen2.5-Coder-32B")]) == "Qwen2.5-Coder-32B"
+    # Nothing to go on: valid, but a guess.
+    assert await resolved([entry("llama3"), entry("qwen")]) == "llama3"
+    # An endpoint that answers with nothing must not invent an id.
+    assert await resolved([]) == ""
+
+
+async def test_a_context_window_the_endpoint_reports_is_used():
+    """A rig serving a 262K model would otherwise be sized by the unknown-model
+    default of 131K, and compact at half the window it actually has."""
+    import types
+
+    from agent_server.config import model_info
+    from agent_server.providers.custom_openai import CustomOpenAIProvider
+
+    provider = CustomOpenAIProvider(name="rig", base_url="http://x/v1", api_key="k")
+
+    async def listing():
+        return types.SimpleNamespace(
+            data=[types.SimpleNamespace(id="big", loaded=True, context_length=262144)]
+        )
+
+    provider._get_client = lambda: types.SimpleNamespace(
+        models=types.SimpleNamespace(list=listing)
+    )
+    await provider.resolve_model()
+    assert model_info("custom:rig")["context"] == 262144
 
 
 def test_an_unknown_model_is_refused():

@@ -45,6 +45,40 @@ MODEL_SIZES = (
 )
 DEFAULT_MODEL = "base.en"
 
+# Roughly what picking one costs to fetch the first time. The dropdown offers
+# every size whether or not it is here, which read as "you have all of these"
+# -- so choosing `medium` started a 1.5 GB download with nothing on screen to
+# say so, and looked like the app had hung.
+DOWNLOAD_MB = {
+    "tiny.en": 75, "tiny": 75, "base.en": 145, "base": 145,
+    "small.en": 480, "small": 480, "medium.en": 1500, "medium": 1500,
+    "large-v3": 3100, "large-v3-turbo": 1600,
+}
+
+
+def downloaded_models() -> set[str]:
+    """The sizes already in the Hugging Face cache, so the UI can say which.
+
+    Read from faster-whisper's own size-to-repo mapping rather than a guess at
+    the naming: `large-v3-turbo` does not come from the same account as the
+    rest, so a hardcoded pattern would report it missing forever.
+    """
+    try:
+        from faster_whisper.utils import _MODELS
+        from huggingface_hub.constants import HF_HUB_CACHE
+    except ImportError:
+        return set()
+    root = os.path.join(HF_HUB_CACHE)
+    if not os.path.isdir(root):
+        return set()
+    present = set(os.listdir(root))
+    here = set()
+    for size in MODEL_SIZES:
+        repo = _MODELS.get(size)
+        if repo and f"models--{repo.replace('/', '--')}" in present:
+            here.add(size)
+    return here
+
 # Which CUDA libraries to pull in, in dependency order.
 _CUDA_LIBS = (
     "*/lib/libcublas*.so.12",

@@ -522,6 +522,9 @@ function handleEvent(event, stream) {
         stream.reasoningEl = appendReasoning();
       }
       stream.reasoningEl.textContent += event.text;
+      // The overlay has its own scroll, so follow the newest thinking inside it
+      // rather than moving the page.
+      stream.reasoningEl.scrollTop = stream.reasoningEl.scrollHeight;
       autoscroll();
       break;
 
@@ -1166,7 +1169,11 @@ function appendMailMessage(fromName, text) {
 /* Same markup the server renders in chat_messages.html, so refreshing the page
    does not change how a reasoning block looks. */
 function appendReasoning() {
-  const node = el('div', 'message thinking');
+  // `live` lifts the body out of the layout while it streams -- see the CSS.
+  // Thinking arrives a token at a time and can run to hundreds of lines, and
+  // every one of them used to push the conversation around; then hiding it
+  // took the whole height back at once, which is the jump that hurt.
+  const node = el('div', 'message thinking live');
   const role = el('div', 'msg-role');
   role.title = 'reasoning';
   node.appendChild(role);
@@ -1185,6 +1192,9 @@ function appendReasoning() {
 }
 
 function collapseReasoning(textEl) {
+  // Back into the flow at its collapsed height, which is the height the row was
+  // already holding. Nothing moves.
+  textEl.closest('.message.thinking')?.classList.remove('live');
   // Auto-expand overrides the "collapse when the reply starts" behaviour.
   if (App.expandTools.includes('reasoning')) return;
   const details = textEl.closest('details');
@@ -1194,7 +1204,10 @@ function collapseReasoning(textEl) {
 /* With the transcript-decluttering options on, only the *current* thinking
  * block and tool call stay visible; once the agent moves on they are hidden. */
 function hideAllThinking() {
-  App.els.messages?.querySelectorAll('.message.thinking').forEach((n) => { n.hidden = true; });
+  App.els.messages?.querySelectorAll('.message.thinking').forEach((n) => {
+    n.classList.remove('live');
+    n.hidden = true;
+  });
 }
 function hideAllToolCalls() {
   // Only completed calls are "past"; parallel ones that are still running stay

@@ -207,7 +207,7 @@ def _is_blank(path: Path) -> bool:
     """A single flat colour, which is what a refused capture looks like.
 
     Checked because the failure is otherwise invisible: the command exits 0,
-    the file is a valid PNG, and the only symptom is a vision model being paid
+    the file is a valid PNG, and the only symptom is an image reader being paid
     to describe a black rectangle.
     """
     try:

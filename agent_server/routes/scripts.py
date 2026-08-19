@@ -132,7 +132,7 @@ async def run_script(request: Request):
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,
             cwd=str(BASE_DIR),
-            # Inherit the environment so .env values -- the vision host, keys --
+            # Inherit the environment so .env values -- hosts, keys --
             # are visible, which is most of the point for these scripts. The
             # saved secrets (set on this page or the Tools page) are added on
             # top, so a script can read $VAR_NAME without touching .env.

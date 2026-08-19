@@ -28,9 +28,6 @@ class ScriptedProvider:
     def has_credentials(self):
         return True
 
-    def supports_vision(self):
-        return True
-
     def count_tokens(self, messages):
         return 1
 
@@ -118,9 +115,6 @@ class FlakyProvider:
     def has_credentials(self):
         return True
 
-    def supports_vision(self):
-        return True
-
     def count_tokens(self, messages):
         return 1
 
@@ -174,9 +168,6 @@ class AnswerProvider:
         self.order = order
 
     def has_credentials(self):
-        return True
-
-    def supports_vision(self):
         return True
 
     def count_tokens(self, messages):

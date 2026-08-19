@@ -9,6 +9,8 @@ not a reduction: everything the old surface could do has a home below, and
 anything that does not is a capability that was quietly dropped.
 """
 
+import json
+
 from agent_server.tools.registry import TOOLS
 
 
@@ -49,17 +51,10 @@ def test_a_whole_flow_fits_in_one_call():
 
 # ── Capabilities that must survive ──────────────────────────────────────────
 
-def test_a_page_can_be_checked_against_a_local_image_in_one_call():
-    """A mockup and a live page compared in a single call. Capture moved into
-    `browser`, so `shoot` takes the reference images itself -- otherwise this
-    costs a round trip."""
-    assert "compare" in step_props()
-
-
-def test_frames_can_be_captured_without_paying_to_describe_them():
-    """Analysis is a vision model call over the network, seconds each. It is
-    opt-in per step now rather than a flag to turn off."""
-    assert "ask" in step_props()
+def test_a_frame_can_be_saved_and_re_examined_later():
+    """The old `browser-*` tools threw the bytes away, so nothing could be
+    looked at twice without redoing the whole flow."""
+    assert "shoot" in actions()
 
 
 def test_sequences_are_still_possible():
@@ -125,3 +120,54 @@ def test_the_question_tool_stays_removed():
 def test_the_browser_is_never_run_concurrently_with_itself():
     """It drives one stateful page; two steps at once would interleave."""
     assert not TOOLS["browser"].parallel_safe
+
+
+def test_every_built_in_is_offered_unless_the_session_disabled_it():
+    """`browser` and `capture` used to carry a `vision_only` flag, and the agent
+    loop passed `include_vision=not provider.supports_vision()`. Every provider
+    returned False, so the tools survived by accident; a provider that ever said
+    True would have silently lost both. The flag is gone -- what a session is
+    offered is now decided in one place, by its disabled-tools list."""
+    from agent_server.tools.registry import BUILT_IN_NAMES, tool_schemas
+
+    offered = {s["function"]["name"] for s in tool_schemas()}
+    assert offered >= BUILT_IN_NAMES
+    assert {"browser", "capture"} <= offered
+
+    without = {s["function"]["name"] for s in tool_schemas(exclude={"browser"})}
+    assert "browser" not in without
+    assert "capture" in without
+
+
+# ── What a stock install actually advertises ────────────────────────────────
+
+def test_no_shipped_tool_mentions_vision():
+    """There is no built-in `vision`: describing an image needs hardware or an
+    account no install can be assumed to have. A stock install must therefore
+    not name it anywhere in what it sends the model -- guidance for a tool that
+    is not there costs tokens on every request and invites a call that can only
+    come back "no `vision` tool is installed"."""
+    from agent_server.tools.registry import tool_schemas
+
+    for schema in tool_schemas():
+        assert "vision" not in schema["function"]["description"].lower(), schema["function"]["name"]
+
+
+def test_nothing_in_the_tool_surface_depends_on_a_tool_that_is_not_shipped():
+    """`browser` and `capture` used to carry parameters -- `ask`, `compare`,
+    capture's `prompt` -- that only worked if the user had added a custom tool
+    named exactly `vision`. On any other install they were schema sent on every
+    request for a call that could only come back "not installed", and the name
+    was hardcoded, so a user who called theirs `eyes` got nothing either way.
+
+    Saving a frame and looking at a frame are separate steps now. That costs one
+    round trip and removes a coupling from the built-in tools to something the
+    app does not ship."""
+    from agent_server.tools.registry import tool_schemas
+
+    for schema in tool_schemas():
+        assert "vision" not in json.dumps(schema).lower(), schema["function"]["name"]
+
+    assert "ask" not in step_props()
+    assert "compare" not in step_props()
+    assert "prompt" not in props("capture")

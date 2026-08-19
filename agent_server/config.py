@@ -53,7 +53,8 @@ _TMP = Path(tempfile.gettempdir())
 UPLOAD_DIR = Path(os.getenv("UPLOAD_DIR") or _TMP / "codeagent_uploads")
 UPLOAD_DIR.mkdir(parents=True, exist_ok=True)
 
-# Frames written by `browser` and `capture`, read back by `vision`.
+# Frames written by `browser` and `capture`. Their paths are what the agent
+# gets back; reading one is something a custom tool would do.
 CAPTURE_DIR = Path(os.getenv("CODEAGENT_CAPTURE_DIR") or _TMP / "codeagent_captures")
 CAPTURE_DIR.mkdir(parents=True, exist_ok=True)
 

@@ -48,6 +48,7 @@
                 <button type="button" onclick="openThresholdModal()">Compaction threshold&hellip;</button>
                 <button type="button" onclick="copyProjectPath(this)"
                         data-dir="{{ session.project_dir }}">Copy project path</button>
+                <button type="button" onclick="collapseAllBlocks()">Collapse all blocks</button>
                 {% if tools_pending %}
                 {# The tools changed after this session froze them. Adopting is a
                    decision, not automatic: it re-sends the whole conversation at

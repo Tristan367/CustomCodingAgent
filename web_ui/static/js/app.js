@@ -1212,7 +1212,30 @@ function hideAllThinking() {
 function hideAllToolCalls() {
   // Only completed calls are "past"; parallel ones that are still running stay
   // visible so the user can see every subagent that is still working.
-  App.els.messages?.querySelectorAll('.message.tool:not(.pending)').forEach((n) => { n.hidden = true; });
+  App.els.messages?.querySelectorAll('.message.tool:not(.pending)').forEach((n) => {
+    n.classList.remove('live');
+    n.hidden = true;
+  });
+}
+
+/* Hand the overlay to the newest auto-expanded result.
+ *
+ * Only one block can hold it: two overlays are both positioned from their own
+ * row's top, so they would paint over each other. The one being replaced drops
+ * back into the flow *collapsed*, which is the same single line it was already
+ * occupying out of it -- so the handover costs no movement either.
+ *
+ * This only runs when the user has asked for past tool calls to be hidden.
+ * Without that setting an expanded result is meant to stay in the scrollback at
+ * full height, and nothing later takes it away, so there is no jump to avoid. */
+function promoteLiveTool(node) {
+  App.els.messages?.querySelectorAll('.message.tool.live').forEach((n) => {
+    if (n === node) return;
+    n.classList.remove('live');
+    const open = n.querySelector('details[open]');
+    if (open) open.open = false;
+  });
+  node.classList.add('live');
 }
 
 function appendToolCall(event) {
@@ -1326,6 +1349,9 @@ function completeToolCall(event) {
 
   const details = node.querySelector('.tool-details');
   details.open = shouldExpand(node._name);
+  // A result that opens itself is the thing the user is watching right now, so
+  // it takes the overlay rather than taking height off the transcript.
+  if (details.open && App.hideToolCalls) promoteLiveTool(node);
 
   // The input the model passed, above the result, so a call reads like
   // "here is what it was asked, here is what came back".
@@ -3044,6 +3070,22 @@ function insertAtCursor(textarea, text) {
 function copyProjectPath(button) {
   navigator.clipboard.writeText(button.dataset.dir).then(showCopyToast).catch(() => {});
   closeMenus();
+}
+
+/* Shut every block in the transcript, including the one still streaming.
+ *
+ * This is an explicit instruction, so it outranks both the per-tool auto-expand
+ * settings and the live block's "stay open while it runs" rule -- if it left
+ * anything open the button would not mean what it says. Anything that streams
+ * after this re-opens on its own; the button is a broom, not a mode. */
+function collapseAllBlocks() {
+  closeMenus();
+  const box = App.els.messages;
+  if (!box) return;
+  // Out-of-flow blocks come back into the layout first, so what is left is a
+  // transcript of one-line headers with nothing overlapping it.
+  box.querySelectorAll('.message.live').forEach((n) => n.classList.remove('live'));
+  box.querySelectorAll('details[open]').forEach((d) => { d.open = false; });
 }
 
 /* Take the edited tools into this session. Confirmed, because it re-sends the

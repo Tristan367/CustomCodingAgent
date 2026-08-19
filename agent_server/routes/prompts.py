@@ -13,6 +13,7 @@ from agent_server.routes.context import (
     _slug,
 )
 from agent_server.system_prompt import (
+    COMPACT_PROMPT_DEFAULT,
     COMPACTION,
     DEFAULT_MASTER_SPAWN_LIMIT,
     DEFAULT_PROMPT,
@@ -83,7 +84,14 @@ async def _prompts_context(
     profile_names = sorted([p["name"] for p in sys], key=lambda n: (n != "default", n))
     # Compaction prompt bodies, keyed the same way (they share the name)
     compact_map = {p["name"]: p["body"] for p in prompts if p["kind"] == COMPACTION}
-    compact_bodies = {f"{SYSTEM}:{n}": compact_map.get(n, "") for n in profile_names}
+    # A profile with no compaction row of its own falls back to `default`'s at
+    # run time, so showing an empty box was a lie about what would be used --
+    # `minimal` and `visual` have looked like they had no summarising prompt
+    # since they were created.
+    inherited = compact_map.get(PROTECTED_PROMPT, COMPACT_PROMPT_DEFAULT.strip())
+    compact_bodies = {
+        f"{SYSTEM}:{n}": compact_map.get(n) or inherited for n in profile_names
+    }
 
     if selected not in bodies:
         selected = f"{SYSTEM}:{PROTECTED_PROMPT}"

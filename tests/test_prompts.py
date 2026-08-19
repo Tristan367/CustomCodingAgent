@@ -325,3 +325,58 @@ async def test_the_local_profile_is_built_in_and_keeps_its_tool_selection(fresh)
     await migrate_prompts()
 
     assert await disabled_tools({"prompt_profile": "local"}) == {"task"}
+
+
+# ── custom tools are opt-in ─────────────────────────────────────────────────
+
+async def test_a_shipped_profile_does_not_enable_someones_custom_tools(fresh):
+    """A profile that ships with the app cannot know what the user has written.
+    Enabling one by default puts a script the app has never seen in front of the
+    model -- and its schema in every request -- because somebody once saved it
+    on the Tools page. They are opt-in here exactly as they already are for
+    subagents."""
+    from agent_server.system_prompt import disabled_tools, migrate_prompts
+    from agent_server.tools.registry import Tool, register_custom, unregister_custom
+
+    await migrate_prompts()
+    for name in ("vision", "echo-test"):
+        register_custom(
+            Tool(name=name, description="d", parameters={"type": "object"}, handler=None)
+        )
+    try:
+        for profile in ("default", "local", "minimal", "visual"):
+            off = await disabled_tools({"prompt_profile": profile})
+            assert {"vision", "echo-test"} <= off, f"{profile} offers a custom tool"
+        # and the built-in exclusions still compose with it
+        assert "task" in await disabled_tools({"prompt_profile": "local"})
+        assert "task" not in await disabled_tools({"prompt_profile": "default"})
+    finally:
+        unregister_custom({"vision", "echo-test"})
+
+
+async def test_a_list_the_user_saved_is_honoured_exactly(fresh):
+    """The rule is for "never configured", not "configured to allow it". Ticking
+    a custom tool's box has to keep it on."""
+    from agent_server.system_prompt import disabled_tools
+    from agent_server.tools.registry import Tool, register_custom, unregister_custom
+
+    register_custom(
+        Tool(name="vision", description="d", parameters={"type": "object"}, handler=None)
+    )
+    try:
+        await db.save_prompt("mine", "body", disabled_tools="echo-test")
+        off = await disabled_tools({"prompt_profile": "mine"})
+        assert off == {"echo-test"}, "an explicit list is taken as given"
+
+        await db.save_prompt("all-on", "body", disabled_tools="")
+        assert await disabled_tools({"prompt_profile": "all-on"}) == set()
+    finally:
+        unregister_custom({"vision"})
+
+
+async def test_a_new_prompt_stores_null_rather_than_empty(fresh):
+    """The two are different downstream: NULL is "never configured", "" is
+    somebody having ticked every box. Inserting "" for both is what enabled the
+    custom tools on every built-in profile."""
+    await db.save_prompt("seeded", "body")
+    assert (await db.get_prompt("seeded"))["disabled_tools"] is None

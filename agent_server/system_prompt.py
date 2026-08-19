@@ -83,11 +83,12 @@ STARTER_PROMPTS: dict[str, str] = {
     "visual": VISUAL_PROMPT,
 }
 
-# Tools a starter profile turns off when it is first created. Applied only at
-# creation: after that the selection is the user's, and a startup refresh must
-# not undo an edit they made on the Prompts page.
-STARTER_DISABLED_TOOLS: dict[str, str] = {
-    "local": "task",
+# Built-ins a starter profile switches off, on top of the custom tools that are
+# always off until asked for. Composed at read time rather than written into the
+# column, so "never configured" stays a single state: writing `task` into
+# `local` made it look configured, which then meant every custom tool was on.
+STARTER_DISABLED_TOOLS: dict[str, set[str]] = {
+    "local": {"task"},
 }
 
 # Deleting this one would leave sessions pointing at nothing, and there would be
@@ -148,10 +149,7 @@ async def migrate_prompts():
     for name, starter in STARTER_PROMPTS.items():
         stored = (settings.get(f"profile_{name}") or "").strip()
         keep = stored and not _is_shipped(stored)
-        await db.save_prompt(
-            name, stored if keep else starter.strip(),
-            disabled_tools=STARTER_DISABLED_TOOLS.get(name),
-        )
+        await db.save_prompt(name, stored if keep else starter.strip())
 
     # The old preferences text was appended to every profile, so on its own it
     # is the closest thing to the prompt the user was actually running.
@@ -203,10 +201,7 @@ async def _refresh_one(name: str, starter: str, kind: str = SYSTEM):
     marker_key = f"prompt_shipped:{kind}:{name}"
     row = await db.get_prompt(name, kind)
     if row is None:
-        await db.save_prompt(
-            name, starter.strip(), kind,
-            disabled_tools=STARTER_DISABLED_TOOLS.get(name),
-        )
+        await db.save_prompt(name, starter.strip(), kind)
         await db.set_setting(marker_key, _digest(starter))
         return
 
@@ -259,9 +254,9 @@ async def _reset_readonly_limits():
             "UPDATE prompts SET master_spawn_limit = NULL, max_concurrent_subagents = NULL,"
             " subagent_parallel_cap = NULL, subagent_tiers = NULL,"
             " subagent_disabled_tools = NULL, subagent_body = NULL,"
-            " sa_tier_model = NULL, sa_tier_effort = NULL, disabled_tools = ?"
+            " sa_tier_model = NULL, sa_tier_effort = NULL, disabled_tools = NULL"
             " WHERE kind = ? AND name = ?",
-            (STARTER_DISABLED_TOOLS.get(name), SYSTEM, name),
+            (SYSTEM, name),
         )
 
 
@@ -343,7 +338,20 @@ async def disabled_tools(session: dict) -> set[str]:
     if session.get("prompt_custom"):
         return set()
     row = await db.get_prompt(session.get("prompt_profile") or PROTECTED_PROMPT)
-    raw = (row or {}).get("disabled_tools") or ""
+    raw = (row or {}).get("disabled_tools")
+    if raw is None:
+        # Never configured. Custom tools are opt-in here exactly as they already
+        # are for subagents: a profile that ships with the app cannot know what
+        # the user has written, and enabling one by default puts a script the
+        # app has never seen in front of the model -- and its schema in every
+        # request -- because somebody once saved it on the Tools page.
+        #
+        # An explicit list is different, empty string included: that is somebody
+        # having chosen the boxes on the form, and it is honoured as given.
+        from agent_server.tools.registry import _custom_tool_names
+
+        name = session.get("prompt_profile") or PROTECTED_PROMPT
+        return set(_custom_tool_names) | STARTER_DISABLED_TOOLS.get(name, set())
     return {name.strip() for name in raw.split(",") if name.strip()}
 
 

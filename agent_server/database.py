@@ -855,7 +855,11 @@ async def save_prompt(
         " subagent_disabled_tools = COALESCE(?, prompts.subagent_disabled_tools),"
         " subagent_parallel_cap = COALESCE(?, prompts.subagent_parallel_cap),"
         " updated_at = excluded.updated_at",
-        (kind, name, body, disabled_tools or "",
+        # NULL on insert, not "": they mean different things downstream. NULL is
+        # "never configured", which leaves custom tools off, because a profile
+        # created by the app cannot know what the user has written. "" is
+        # somebody having ticked every box on the form.
+        (kind, name, body, disabled_tools,
          subagent_body, subagent_disabled_tools, subagent_parallel_cap, _now(),
          disabled_tools, subagent_body, subagent_disabled_tools, subagent_parallel_cap),
     )

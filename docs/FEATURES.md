@@ -334,8 +334,15 @@ Two independent gates (`agent_server/permissions.py`):
 ## Custom tools, scripts, secrets
 
 - **Custom tools** — user-defined shell scripts with a JSON Schema, called by the
-  model; arguments arrive as `$TOOL_ARG_NAME`, JSON-encoded. Callable per prompt
-  profile. Loaded from the DB at startup.
+  model; arguments arrive as `$TOOL_ARG_NAME`, JSON-encoded. Loaded from the DB
+  at startup.
+- **Opt-in per profile.** A profile that has never had its tools configured
+  offers the built-ins and no custom tool: one that ships with the app cannot
+  know what you have written, and enabling it by default puts a script the app
+  has never seen in front of the model, with its schema in every request,
+  because you once saved it on the Tools page. Tick its box on a profile and it
+  is on there — an explicit list is taken exactly as given. Subagents have always
+  worked this way; the master profile now matches.
 - `examples/echo-tool.sh` is the minimal one. `examples/claude-code-tool.sh` is a
   real one: it shells out to the `claude` CLI so a session driven by a cheap
   model can hand a hard question to Claude Code and get an answer back. That is

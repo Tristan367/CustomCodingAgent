@@ -38,14 +38,14 @@
         {% set mspawn = master_spawn.get(selected, 0) %}
         <div style="display:flex; gap:16px; align-items:center; flex-wrap:wrap; margin-bottom:12px">
             <span style="color:var(--accent); font-weight:600; font-size:0.95em" id="concurrent-display">
-                Max possible concurrent: {{ max_conc if max_conc else 'unlimited' }}
+                Max possible concurrent: {{ 'unlimited' if max_conc < 0 else ('none' if max_conc == 0 else max_conc) }}
             </span>
             <span id="theoretical-note" style="color:var(--text-faint); font-size:0.85em">
                 (max theoretical: …)
             </span>
             <label class="hint" style="margin:0">
                 Session cap
-                <input type="number" name="max_concurrent" id="max-concurrent" value="{{ max_conc }}" min="0" max="9999"
+                <input type="number" name="max_concurrent" id="max-concurrent" value="{{ max_conc }}" min="-1" max="9999"
                        style="width:60px; margin-left:4px; text-align:center"
                        {% if selected_name in readonly %}disabled{% endif %}>
             </label>
@@ -91,10 +91,10 @@
         <div style="margin-top:8px; margin-bottom:4px; display:flex; align-items:center; justify-content:space-between">
             <div style="display:flex; align-items:center; gap:8px">
                 <span class="hint">Master spawn limit</span>
-                <input type="number" name="master_spawn" value="{{ mspawn }}" min="0" max="999"
+                <input type="number" name="master_spawn" value="{{ mspawn }}" min="-1" max="999"
                        style="width:56px; text-align:center"
                        {% if selected_name in readonly %}disabled{% endif %}>
-                <span class="hint">(0 = unlimited, per task call)</span>
+                <span class="hint">(-1 = unlimited, 0 = none)</span>
             </div>
             <div style="display:flex; align-items:center; gap:8px">
                 <span class="hint">Subagent model</span>
@@ -151,7 +151,7 @@
                                {% if t.name not in sa_off %}checked{% endif %}
                                {% if selected_name in readonly %}disabled{% endif %}>
                         <code>{{ t.name }}</code>
-                        <span class="sa-task-hint hint">{{ 'creates tier 2' if t.name == 'task' else '~' ~ t.tokens ~ 't' }}</span>
+                        <span class="sa-task-hint hint">{{ ('creates tier 2' if selected_name not in readonly else '') if t.name == 'task' else '~' ~ t.tokens ~ 't' }}</span>
                     </label>
                     {% endfor %}
                 </div>
@@ -162,10 +162,10 @@
             <div style="margin-top:8px; margin-bottom:10px; display:flex; align-items:center; justify-content:space-between">
                 <div style="display:flex; align-items:center; gap:8px">
                     <span class="hint">Subagent spawn limit</span>
-                    <input type="number" name="sa_cap" value="{{ sa_cap }}" min="0" max="999"
+                    <input type="number" name="sa_cap" value="{{ sa_cap }}" min="-1" max="999"
                            style="width:56px; text-align:center"
                            {% if selected_name in readonly %}disabled{% endif %}>
-                    <span class="hint">(0 = unlimited)</span>
+                    <span class="hint">(-1 = unlimited, 0 = none)</span>
                 </div>
                 <div style="display:flex; align-items:center; gap:8px">
                     <span class="hint">Model</span>
@@ -209,9 +209,11 @@
             <div class="sa-tier" data-tier="{{ tno }}">
                 <hr style="margin:20px 0 8px; border-color:var(--border)">
                 <div class="sa-tier-label" style="font-weight:600; color:var(--accent); margin-bottom:4px">Tier {{ tno }} — sub-subagents</div>
+                {% if selected_name not in readonly %}
                 <p class="sa-tier-hint hint" style="margin-bottom:8px">
                     Enable task and Tier {{ tno + 1 }} will appear.
                 </p>
+                {% endif %}
 
                 <details class="tool-toggles" {% if tier.off %}open{% endif %}>
                     <summary>
@@ -239,10 +241,10 @@
                 <div style="margin-top:8px; margin-bottom:10px; display:flex; align-items:center; justify-content:space-between">
                     <div style="display:flex; align-items:center; gap:8px">
                         <span class="hint">Subagent spawn limit</span>
-                        <input type="number" name="sa_cap_{{ tno }}" value="{{ tier.parallel_cap }}" min="0" max="99"
+                        <input type="number" name="sa_cap_{{ tno }}" value="{{ tier.parallel_cap }}" min="-1" max="99"
                                style="width:56px; text-align:center"
                                {% if selected_name in readonly %}disabled{% endif %}>
-                        <span class="hint">(0 = unlimited)</span>
+                        <span class="hint">(-1 = unlimited, 0 = none)</span>
                     </div>
                     <div style="display:flex; align-items:center; gap:8px">
                         <span class="hint">Model</span>

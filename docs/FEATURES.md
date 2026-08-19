@@ -112,7 +112,18 @@ thing worth keeping, and it was kept.
   configured (`sa_tool`, `sa_tool_2`, … on the Prompts page).
 - Each tier has its own system prompt, model, thinking effort, disabled-tool set
   and concurrency cap (`agent_server/system_prompt.py` reads the
-  `subagent_tiers` JSON column).
+  `subagent_tiers` JSON column). A cap of **-1 is unlimited and 0 is none** --
+  0 used to mean unlimited, which left no way to say "none" and read as a limit
+  of zero to anyone who had not been told. A profile set to 0 refuses the call
+  and says so rather than queueing against a gate that never opens.
+- The master spawns at most 6 at once and a session runs at most 6 anywhere, by
+  default. Both shipped effectively unlimited (0 and 100), which is a number
+  nobody chose and one that only shows up as a bill.
+- Subagents are offered neither `task` nor `browser`. `browser` was already
+  refused by `_subagent_guard` -- clicking and evaluating are as side-effecting
+  as a write, and a subagent cannot stop to ask -- but the schema was still sent
+  every request: the largest tool in the app, ~1,400 tokens, for a call that
+  could only come back refused.
 - **No timeouts and no round cap.** A subagent runs until it answers or the user
   stops it. Killing one at ten minutes throws away ten minutes of paid work and
   returns nothing.

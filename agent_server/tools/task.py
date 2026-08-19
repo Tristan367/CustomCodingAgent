@@ -56,7 +56,9 @@ class _Limiter:
     such window: the newest capacity always wins, and lowering it simply means
     nothing new starts until enough finishes.
 
-    `capacity` of 0 means unlimited.
+    A negative `capacity` means unlimited. Zero means none, which is a real
+    setting -- "this profile does not spawn subagents" -- and is refused up in
+    `run_task` rather than left to block here forever.
     """
 
     __slots__ = ("_free", "capacity", "in_flight")
@@ -70,7 +72,7 @@ class _Limiter:
         async with self._free:
             self.capacity = capacity
             if wait:
-                while self.capacity > 0 and self.in_flight >= self.capacity:
+                while self.capacity >= 0 and self.in_flight >= self.capacity:
                     await self._free.wait()
             self.in_flight += 1
 
@@ -187,6 +189,12 @@ async def run_task(ctx: ToolContext, *, description: str, prompt: str, count: in
     # spawns queue rather than failing: the work still happens, just staggered,
     # which beats handing the model an error it has to plan around.
     spawn_cap = await agent_server.system_prompt.subagent_parallel_cap(profile, ctx.subagent_tier)
+    if spawn_cap == 0:
+        return ToolResult.error(
+            "subagents are turned off for this prompt profile (its spawn limit is "
+            "0). Do the work yourself, or raise the limit on the Prompts page.",
+            title,
+        )
     session_cap = await agent_server.system_prompt.max_concurrent_subagents(profile)
     spawn_gate = _spawn_gate.get() or _master_gates.setdefault(session_id, _Limiter())
     session_gate = _session_gates.setdefault(session_id, _Limiter())

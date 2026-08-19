@@ -195,11 +195,11 @@ MIGRATIONS: list[tuple[str, str, str]] = [
     ("prompts", "subagent_body", "TEXT"),
     # Tools to exclude when this profile's subagent is launched (comma-separated).
     ("prompts", "subagent_disabled_tools", "TEXT"),
-    # Maximum parallel subagents this tier can spawn (0 = unlimited).
+    # Maximum parallel subagents this tier can spawn (-1 = unlimited, 0 = none).
     ("prompts", "subagent_parallel_cap", "INTEGER DEFAULT 3"),
     # Master agent's spawn limit — how many subagents the main AI can launch
-    # in one task call (0 = unlimited). Separate from the subagent tiers.
-    ("prompts", "master_spawn_limit", "INTEGER DEFAULT 0"),
+    # at once (-1 = unlimited, 0 = none). Separate from the subagent tiers.
+    ("prompts", "master_spawn_limit", "INTEGER DEFAULT 6"),
     # Default model for subagents launched under this profile.
     # Empty / NULL means "same model as the parent session".
     ("prompts", "subagent_model", "TEXT"),
@@ -208,8 +208,8 @@ MIGRATIONS: list[tuple[str, str, str]] = [
     # Tier-1 subagent thinking-effort override. NULL/"" means inherit the parent.
     ("prompts", "sa_tier_effort", "TEXT"),
     # Maximum total subagents running concurrently in a session using this
-    # profile (0 = unlimited). Acts as a global safety valve across all tiers.
-    ("prompts", "max_concurrent_subagents", "INTEGER DEFAULT 100"),
+    # profile (-1 = unlimited, 0 = none). A safety valve across all tiers.
+    ("prompts", "max_concurrent_subagents", "INTEGER DEFAULT 6"),
     # Higher subagent tiers (subsubagents and beyond), stored as a JSON array of
     # {body, disabled_tools}. Tier 0 uses the two columns above; tiers 1+ live here.
     ("prompts", "subagent_tiers", "TEXT"),

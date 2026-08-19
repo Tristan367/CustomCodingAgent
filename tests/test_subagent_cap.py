@@ -34,10 +34,13 @@ async def fresh(tmp_path, monkeypatch):
 # ── Cap lookups ──────────────────────────────────────────────────────────────
 
 
-async def test_main_profile_cap_defaults_to_unlimited(fresh):
-    """A profile that has never set subagent_parallel_cap is unlimited (0)."""
-    cap = await subagent_parallel_cap("default", tier=0)
-    assert cap == 0
+async def test_the_master_spawn_limit_has_a_real_default(fresh):
+    """It shipped as 0-meaning-unlimited, which is a number nobody chose and one
+    that only shows up as a bill. Six fans out across a real decomposition and
+    is small enough to notice. Unlimited is spelled -1 now, so 0 can mean what
+    it looks like it means."""
+    await migrate_prompts()
+    assert await subagent_parallel_cap("default", tier=0) == 6
 
 
 async def test_main_profile_cap_can_be_set(fresh):
@@ -325,7 +328,7 @@ async def test_each_agent_gets_its_own_spawn_budget(fresh, monkeypatch):
     await _three_levels()
     await db._execute(
         "UPDATE prompts SET master_spawn_limit = 3, subagent_parallel_cap = 5, "
-        "max_concurrent_subagents = 0 WHERE kind = ? AND name = ?",
+        "max_concurrent_subagents = -1 WHERE kind = ? AND name = ?",
         (SYSTEM, "default"),
     )
     state = {"in_flight": 0, "peak": 0}
@@ -473,7 +476,7 @@ async def test_spawning_is_never_served_from_the_shared_cache(fresh, monkeypatch
     await _three_levels()
     await db._execute(
         "UPDATE prompts SET master_spawn_limit = 3, subagent_parallel_cap = 5, "
-        "max_concurrent_subagents = 0 WHERE kind = ? AND name = ?",
+        "max_concurrent_subagents = -1 WHERE kind = ? AND name = ?",
         (SYSTEM, "default"),
     )
     state = {"in_flight": 0, "peak": 0, "leaves": 0}
@@ -521,3 +524,42 @@ async def test_stopping_does_not_wait_on_a_gate_that_will_never_open(fresh, monk
     # It took the permit back rather than blocking, so the books still balance.
     assert permit.held
     await permit.close()
+
+
+async def test_unlimited_is_minus_one_and_zero_means_none(fresh, monkeypatch):
+    """0 used to mean unlimited, which left no way to say "none" and read as a
+    limit of zero to anyone who had not been told. A profile set to 0 now
+    refuses the call and says so, rather than queueing against a gate that will
+    never open."""
+    from agent_server.tools.task import _Limiter
+
+    gate = _Limiter()
+    await asyncio.wait_for(gate.acquire(-1), 1)
+    await asyncio.wait_for(gate.acquire(-1), 1)
+    assert gate.in_flight == 2, "-1 admits without limit"
+
+    await db._execute(
+        "UPDATE prompts SET master_spawn_limit = 0 WHERE kind = ? AND name = ?",
+        (SYSTEM, "default"),
+    )
+    _counting(monkeypatch)
+    result = await asyncio.wait_for(
+        run_task(_ctx(fresh), description="d", prompt="p"), timeout=5
+    )
+    assert result.is_error
+    assert "turned off for this prompt profile" in result.output
+
+
+async def test_a_row_holding_the_old_unlimited_spelling_is_moved(fresh):
+    """Leaving it would flip its meaning from "as many as you like" to "none"."""
+    from agent_server.system_prompt import max_concurrent_subagents
+
+    await db.save_prompt("default", "a prompt this user already had")
+    await db._execute(
+        "UPDATE prompts SET subagent_parallel_cap = 0 WHERE kind = ? AND name = ?",
+        (SYSTEM, "default"),
+    )
+    await migrate_prompts()
+
+    assert await subagent_parallel_cap("default", tier=1) == -1
+    assert await max_concurrent_subagents("default") == 6

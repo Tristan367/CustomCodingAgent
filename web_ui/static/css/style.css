@@ -1734,7 +1734,16 @@ body.dragging-files::after {
 .schema-details > summary:hover { color: var(--text); }
 .schema-actions { display: flex; justify-content: flex-end; }
 
-input:disabled, textarea:disabled { opacity: 0.6; background: var(--bg-inset); }
+/* `select` was missing here, so the subagent model and effort pickers on a
+   read-only profile were disabled and looked exactly like the editable ones --
+   they invited a click that could not do anything. A checkbox's label goes with
+   it, or the tool grid reads as editable while none of it responds. */
+input:disabled, textarea:disabled, select:disabled {
+  opacity: 0.6;
+  background: var(--bg-inset);
+  cursor: not-allowed;
+}
+.checkbox-label:has(input:disabled) { opacity: 0.6; cursor: not-allowed; }
 /* Only the custom rows navigate. Built-in rows were showing a pointer cursor
    and a hover highlight while doing nothing when clicked. */
 #tools-page .tools-table tr.row-link { cursor: pointer; }
@@ -1955,13 +1964,24 @@ kbd {
 }
 .tool-toggles > summary:hover { color: var(--text); }
 .tool-toggles > summary .hint { margin-left: var(--s2); }
+/* Multi-column rather than grid, so an alphabetical list reads down each column
+   and then across -- the order you scan a list of names in. A grid fills left to
+   right, which puts `bash` beside `browser` on one row and `capture` under
+   `bash`, so finding a name means reading every cell instead of one column.
+   Column count is not fixed anywhere in CSS grid without knowing the row count,
+   which changes with the number of tools; columns handle it themselves. */
 .tool-grid {
-  display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(200px, 1fr));
-  gap: var(--s1) var(--s3);
+  columns: 200px 4;
+  column-gap: var(--s3);
   margin-top: var(--s2);
 }
-.tool-grid .checkbox-label { display: flex; align-items: center; gap: var(--s2); }
+.tool-grid .checkbox-label {
+  display: flex;
+  align-items: center;
+  gap: var(--s2);
+  break-inside: avoid;
+  margin-bottom: var(--s1);
+}
 .tool-grid code { color: var(--accent); }
 .tool-grid .hint { margin: 0; }
 

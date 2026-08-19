@@ -101,6 +101,18 @@ READONLY_PROMPTS = {"default"}
 SYSTEM = "system"
 COMPACTION = "compaction"
 
+# How many subagents the master may have at once, and how many may be working
+# anywhere in a session. Both shipped effectively unlimited -- 0 and 100 -- which
+# is a number nobody chose and one that only shows up as a bill. Six is enough to
+# fan out across a real decomposition and small enough to notice.
+DEFAULT_MASTER_SPAWN_LIMIT = 6
+DEFAULT_SESSION_SUBAGENT_CAP = 6
+
+# What those two settings shipped as before. A row still holding one of these is
+# holding a default rather than a decision, so it moves; anything else is the
+# user's own number and is left alone.
+_SUPERSEDED_LIMITS = {"master_spawn_limit": 0, "max_concurrent_subagents": 100}
+
 
 async def list_prompt_names(kind: str = SYSTEM) -> list[str]:
     return [row["name"] for row in await db.list_prompts(kind)]
@@ -225,6 +237,37 @@ async def _refresh_untouched_builtins():
     await _refresh_one(PROTECTED_PROMPT, COMPACT_PROMPT_DEFAULT, COMPACTION)
     for name, starter in STARTER_PROMPTS.items():
         await _refresh_one(name, starter)
+    await _refresh_subagent_limits()
+
+
+async def _refresh_subagent_limits():
+    """Move rows still holding the old effectively-unlimited defaults.
+
+    Once only: a marker records that it has run, so a user who deliberately sets
+    0 afterwards keeps it. Without the marker this would quietly overwrite that
+    choice on every restart.
+    """
+    marker = "subagent_limits_defaulted"
+    if await db.get_setting(marker, ""):
+        return
+    # 0 used to mean unlimited, which left no way to say "none" and read as a
+    # limit of zero to anyone who had not been told. -1 says unlimited plainly
+    # and gives 0 back its obvious meaning; a row still holding 0 chose the old
+    # spelling, so it moves with it.
+    for column in ("master_spawn_limit", "max_concurrent_subagents", "subagent_parallel_cap"):
+        await db._execute(
+            f"UPDATE prompts SET {column} = -1 WHERE kind = ? AND {column} = 0", (SYSTEM,)
+        )
+    for column, superseded in _SUPERSEDED_LIMITS.items():
+        wanted = (
+            DEFAULT_MASTER_SPAWN_LIMIT if column == "master_spawn_limit"
+            else DEFAULT_SESSION_SUBAGENT_CAP
+        )
+        await db._execute(
+            f"UPDATE prompts SET {column} = ? WHERE kind = ? AND ({column} IS NULL OR {column} = ?)",
+            (wanted, SYSTEM, superseded),
+        )
+    await db.set_setting(marker, "1")
 
 
 def _is_shipped(body: str) -> bool:
@@ -344,19 +387,26 @@ def _tier_tools(row: dict, tier: int) -> str | None:
 
 
 def _default_subagent_off() -> set[str]:
-    """`task` and any custom tool scripts are off by default for subagents.
+    """`task`, `browser` and any custom tool scripts are off by default.
 
-    Recursive subagents would otherwise spawn unboundedly by calling `task`
-    from inside `task`.
+    `task` because recursive subagents would otherwise spawn unboundedly by
+    calling it from inside itself.
+
+    `browser` because a subagent may not drive it at all -- clicking, filling
+    and evaluating are as side-effecting as a write, and a subagent cannot stop
+    to ask. That is enforced in `_subagent_guard` regardless of this list, but
+    enforcement alone still left the schema in every subagent request: the
+    largest tool in the app, sent every turn, for a call that could only ever
+    come back refused.
     """
     from agent_server.tools.registry import _custom_tool_names
-    off = {"task"}
+    off = {"task", "browser"}
     off.update(_custom_tool_names)
     return off
 
 
 async def subagent_parallel_cap(profile_name: str, tier: int = 0) -> int:
-    """Maximum parallel subagents this tier can launch in one call (0 = unlimited).
+    """Maximum parallel subagents this tier may have running (-1 = unlimited).
 
     Tier 0 (master) reads `master_spawn_limit`.
     Tier 1 reads `subagent_parallel_cap`.
@@ -369,15 +419,15 @@ async def subagent_parallel_cap(profile_name: str, tier: int = 0) -> int:
             return val
         return 3
     if row is None:
-        return 0 if tier == 0 else 3
+        return DEFAULT_MASTER_SPAWN_LIMIT if tier == 0 else 3
     col = "master_spawn_limit" if tier == 0 else "subagent_parallel_cap"
     val = row.get(col)
     if val is None:
-        return 0 if tier == 0 else 3
+        return DEFAULT_MASTER_SPAWN_LIMIT if tier == 0 else 3
     try:
         return int(val)
     except (TypeError, ValueError):
-        return 0 if tier == 0 else 3
+        return DEFAULT_MASTER_SPAWN_LIMIT if tier == 0 else 3
 
 
 def _tier_cap(row: dict, tier: int) -> int | None:
@@ -401,11 +451,11 @@ async def max_concurrent_subagents(profile_name: str) -> int:
     row = await db.get_prompt(profile_name)
     val = (row or {}).get("max_concurrent_subagents")
     if val is None:
-        return 100
+        return DEFAULT_SESSION_SUBAGENT_CAP
     try:
         return int(val)
     except (TypeError, ValueError):
-        return 100
+        return DEFAULT_SESSION_SUBAGENT_CAP
 
 
 async def subagent_model_name(profile_name: str, tier: int = 0) -> str:

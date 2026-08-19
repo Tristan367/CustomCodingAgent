@@ -150,6 +150,10 @@ class Provider(ABC):
     name: str = "unknown"
     env_key: str = ""       # environment variable holding the key, if any
     settings_key: str = ""  # `settings` table row holding the key, if any
+    # Where the user goes to get a key. The home page used to carry this as an
+    # if/elif chain over provider *names*, so adding a provider meant editing a
+    # template in two places and a new one silently rendered a link to nowhere.
+    console_url: str = ""
 
     def api_key(self) -> str:
         return credentials.resolve(self.env_key, self.settings_key)

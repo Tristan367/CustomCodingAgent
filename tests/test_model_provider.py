@@ -281,3 +281,54 @@ def test_default_compaction_threshold_scales_with_the_model_window():
     assert default_compact_threshold(1_000_000) == 750_000
     assert default_compact_threshold(131_072) == 98_304
     assert default_compact_threshold(32_768) == 24_576
+
+
+# ── Gemini, and the console link every provider now carries ──────────────────
+
+def test_gemini_is_registered_and_reachable_by_its_models():
+    """Direct Gemini, not the OpenRouter passthrough: the Flash models have a
+    free tier on a Google key, which is what makes them worth a second route."""
+    assert "gemini" in list_providers()
+    gemini_models = [m for m in MODELS if m["provider"] == "gemini"]
+    assert gemini_models, "no model routes to the gemini provider"
+    for model in gemini_models:
+        assert provider_for_model(model["id"]) == "gemini"
+
+
+def test_gemini_keeps_the_openrouter_route_separate():
+    """`google/gemini-2.5-pro` goes through OpenRouter and must not be
+    reassigned; one key for everything is still a valid way to run this."""
+    assert provider_for_model("google/gemini-2.5-pro") == "openrouter"
+
+
+def test_gemini_drops_stream_options():
+    """Google's compatibility layer rejects it on some models rather than
+    ignoring it, which fails the whole request rather than one field."""
+    from agent_server.providers.gemini import GeminiProvider
+
+    kwargs = GeminiProvider()._build_kwargs([{"role": "user", "content": "hi"}], [], "gemini-3.7-flash")
+    assert "stream_options" not in kwargs
+
+
+def test_gemini_strips_the_models_prefix_from_discovered_ids():
+    """Ids come back as "models/gemini-3.7-flash"; the chat endpoint 404s on
+    the prefixed form."""
+    from agent_server.providers.gemini import GeminiProvider
+
+    rows = {"data": [{"id": "models/gemini-3.7-flash"}, {"id": "gemini-3.5-flash-lite"}]}
+    ids = [
+        str(r["id"]).removeprefix("models/") for r in rows["data"]
+    ]
+    assert ids == ["gemini-3.7-flash", "gemini-3.5-flash-lite"]
+    assert GeminiProvider().base_url.endswith("/"), "fetch_model_ids appends 'models' directly"
+
+
+def test_every_provider_says_where_to_get_a_key():
+    """The home page renders this link from the provider class. It used to be an
+    if/elif chain over provider names in the template, so a new provider
+    rendered `get a key @` with no destination."""
+    from agent_server.providers import get_provider_settings_fields
+
+    for entry in get_provider_settings_fields():
+        assert entry["console_url"], f"{entry['name']} has no console_url"
+        assert not entry["console_url"].startswith("http"), "the template adds the scheme"

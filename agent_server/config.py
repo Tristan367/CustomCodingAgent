@@ -147,6 +147,29 @@ MODELS = [
         "context": 200_000,
         "max_output": 64_000,
     },
+    # Gemini direct, rather than through OpenRouter: the Flash models have a
+    # free tier on a Google key, which makes them the cheap seat for subagents,
+    # compaction, and long autonomous runs where per-token cost is what decides
+    # how far you can let a run go. `google/gemini-2.5-pro` above is the same
+    # family via OpenRouter and is kept for the one-key-for-everything case.
+    {
+        "id": "gemini-3.7-flash",
+        "name": "Gemini 3.7 Flash",
+        "provider": "gemini",
+        "context": 1_000_000,
+    },
+    {
+        "id": "gemini-3.5-flash-lite",
+        "name": "Gemini 3.5 Flash Lite",
+        "provider": "gemini",
+        "context": 1_000_000,
+    },
+    {
+        "id": "gemini-3.1-pro-preview",
+        "name": "Gemini 3.1 Pro",
+        "provider": "gemini",
+        "context": 1_000_000,
+    },
 ]
 
 MODELS_BY_ID = {m["id"]: m for m in MODELS}

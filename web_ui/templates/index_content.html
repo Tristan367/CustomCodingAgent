@@ -9,7 +9,14 @@
     <div class="provider-grid">
     {% for ps in provider_settings %}
     <section class="panel">
-        <h2>{{ ps.name }} <a href="{% if ps.name == 'DeepSeek' %}https://platform.deepseek.com{% elif ps.name == 'OpenRouter' %}https://openrouter.ai{% elif ps.name == 'Anthropic' %}https://platform.claude.com{% endif %}" target="_blank" class="get-key-link">get a key @ {% if ps.name == 'DeepSeek' %}platform.deepseek.com{% elif ps.name == 'OpenRouter' %}openrouter.ai{% elif ps.name == 'Anthropic' %}platform.claude.com{% endif %}</a></h2>
+        {# The console link comes from the provider class, so adding one is a
+           single file and cannot render a link to nowhere. #}
+        <h2>{{ ps.name }}
+            {%- if ps.console_url %}
+            <a href="https://{{ ps.console_url }}" target="_blank" rel="noopener"
+               class="get-key-link">get a key @ {{ ps.console_url }}</a>
+            {%- endif %}
+        </h2>
         <form hx-post="/_settings" hx-target="#home-page" hx-swap="outerHTML" class="inline-form">
             {% set has_key = ps.fields[0].has_value %}
             {% for f in ps.fields %}

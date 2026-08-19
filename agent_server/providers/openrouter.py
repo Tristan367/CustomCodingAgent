@@ -17,6 +17,7 @@ class OpenRouterProvider(OpenAICompatibleProvider):
     base_url = "https://openrouter.ai/api/v1"
     env_key = "OPENROUTER_API_KEY"
     settings_key = "openrouter_api_key"
+    console_url = "openrouter.ai"
 
     def _get_client(self) -> AsyncOpenAI:
         key = self.api_key()

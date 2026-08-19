@@ -16,6 +16,7 @@ class DeepSeekProvider(OpenAICompatibleProvider):
     base_url = "https://api.deepseek.com"
     env_key = "DEEPSEEK_API_KEY"
     settings_key = "deepseek_api_key"
+    console_url = "platform.deepseek.com"
 
     def _build_kwargs(self, messages, tools, model, thinking_effort=None):
         kwargs = super()._build_kwargs(messages, tools, model, thinking_effort)

@@ -2,12 +2,14 @@ from agent_server.providers.anthropic import AnthropicProvider
 from agent_server.providers.base import Provider, StreamEvent
 from agent_server.providers.custom_openai import CustomOpenAIProvider
 from agent_server.providers.deepseek import DeepSeekProvider
+from agent_server.providers.gemini import GeminiProvider
 from agent_server.providers.openrouter import OpenRouterProvider
 
 _providers: dict[str, Provider] = {
     "deepseek": DeepSeekProvider(),
     "openrouter": OpenRouterProvider(),
     "anthropic": AnthropicProvider(),
+    "gemini": GeminiProvider(),
 }
 
 
@@ -34,7 +36,8 @@ def list_providers() -> list[str]:
 
 
 def get_provider_settings_fields() -> list[dict]:
-    return [{"key": key, "name": p.name, "fields": p.settings_fields()}
+    return [{"key": key, "name": p.name, "console_url": p.console_url,
+             "fields": p.settings_fields()}
             for key, p in _providers.items() if not key.startswith("custom:")]
 
 

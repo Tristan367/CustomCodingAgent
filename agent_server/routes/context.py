@@ -366,7 +366,9 @@ async def _home_context(
                 # Recognisable without leaking the key: only a sliver at each end.
                 preview = raw[:4] + "\u2026" + raw[-4:] if len(raw) > 8 else "\u2022" * len(raw)
             f_list.append(dict(f, value=("\u2022" * 12), has_value=bool(raw) and is_pw, preview=preview))
-        provider_settings.append({"name": ps["name"], "fields": f_list})
+        # `dict(ps, ...)` rather than naming the keys, so a field added to the
+        # provider description reaches the template without a second edit here.
+        provider_settings.append(dict(ps, fields=f_list))
 
     custom_endpoints = await db.list_custom_endpoints()
     filtered_models = _offerable_models()

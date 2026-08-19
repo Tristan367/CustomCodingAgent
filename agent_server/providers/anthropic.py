@@ -81,6 +81,7 @@ class AnthropicProvider(Provider):
     name = "Anthropic"
     env_key = "ANTHROPIC_API_KEY"
     settings_key = "anthropic_api_key"
+    console_url = "platform.claude.com"
 
     def __init__(self):
         self._client: AsyncAnthropic | None = None

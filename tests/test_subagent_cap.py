@@ -496,3 +496,28 @@ async def test_spawning_is_never_served_from_the_shared_cache(fresh, monkeypatch
     # Three spawning agents, each spawning five: fifteen distinct leaves, not
     # five shared between them.
     assert state["leaves"] == 15, f"expected 15 leaf agents, ran {state['leaves']}"
+
+
+async def test_stopping_does_not_wait_on_a_gate_that_will_never_open(fresh, monkeypatch):
+    """An agent resuming from a nested spawn queues for its permit like anything
+    else, so the cap holds exactly -- except while being torn down. The stop
+    button cancels mid-flight, and waiting there would hold the cancellation
+    open behind a gate a stopped session is never going to open."""
+    from agent_server.tools.task import _Limiter, _Permit
+
+    gate = _Limiter()
+    await gate.acquire(1)                    # the one permit, held by someone else
+    permit = _Permit(gate, 1)
+    permit.held = False                      # as `paused` leaves it
+
+    async def resume():
+        async with permit.paused():
+            raise asyncio.CancelledError
+
+    task = asyncio.create_task(resume())
+    with pytest.raises(asyncio.CancelledError):
+        await asyncio.wait_for(task, timeout=3)
+
+    # It took the permit back rather than blocking, so the books still balance.
+    assert permit.held
+    await permit.close()

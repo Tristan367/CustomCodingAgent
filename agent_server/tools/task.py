@@ -108,10 +108,22 @@ class _Permit:
         try:
             yield
         finally:
-            # A cancellation here leaves `held` False, so `close` below does not
-            # release a permit this agent no longer has.
-            await self.gate.acquire(self.capacity)
-            self.held = True
+            # Queue for the permit like anything else, so the cap holds exactly
+            # -- but never queue while being torn down. This also runs when the
+            # user stops everything, and waiting there would hold the
+            # cancellation open behind a gate a stopped session is never going
+            # to open. `held` ends up True on both paths, so `close` releases
+            # exactly once and the count stays exact either way.
+            resumed = False
+            try:
+                await self.gate.acquire(self.capacity)
+                resumed = True
+            except asyncio.CancelledError:
+                await self.gate.acquire(self.capacity, wait=False)
+                resumed = True
+                raise
+            finally:
+                self.held = resumed
 
     async def close(self):
         if self.held:

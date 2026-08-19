@@ -53,10 +53,6 @@ def lang_for_path(path: Path) -> str:
         return "makefile"
     return _EXT_LANG.get(path.suffix.lower(), "")
 
-# Files the model has read this session; `edit`/`write` require a prior read so
-# the model cannot blindly clobber a file it has never seen.
-_read_files: dict[str, set[str]] = {}
-
 # UTF-8 BOM as raw bytes.
 _BOM = b"\xef\xbb\xbf"
 
@@ -122,10 +118,16 @@ class Snapshot:
 
     Holding this *is* the record that the session has read the file. There used
     to be a second set tracking the same fact, and the two could disagree.
+
+    Deliberately not the file's text. The tag scheme kept a copy to compare
+    against, and once that went the copy stayed -- so a session held the full
+    body of every file it had ever read, for the life of the process, and never
+    looked at one of them again. A long session over a large tree is exactly
+    where that adds up. The fingerprint answers the only question the content
+    was still being asked.
     """
 
     fingerprint: str
-    content: str
     seen: set[int]  # 1-based line numbers displayed, not merely present
 
 
@@ -141,7 +143,7 @@ def _record_snapshot(session_id: str, path: Path, content: str, seen: set[int]) 
     # seen rather than replacing it, so a two-part read can be edited as one.
     if previous is not None and previous.fingerprint == mark:
         seen = previous.seen | seen
-    _snapshots[key] = Snapshot(fingerprint=mark, content=content, seen=seen)
+    _snapshots[key] = Snapshot(fingerprint=mark, seen=seen)
 
 
 def _snapshot(session_id: str, path: Path) -> Snapshot | None:

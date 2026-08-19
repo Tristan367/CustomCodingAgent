@@ -469,3 +469,15 @@ async def test_a_genuinely_empty_call_still_says_what_is_missing(workspace):
     result = await edit_file(ctx, filePath=str(path))
     assert result.is_error
     assert "oldString is required" in result.output
+
+
+def test_a_snapshot_does_not_keep_the_file_it_describes():
+    """One of these is kept for every file a session ever reads, for the life of
+    the process. The tag scheme kept a copy of the text to compare against, and
+    when that went the copy stayed -- so a long session over a large tree held
+    every file it had ever opened and never looked at one of them again."""
+    from dataclasses import fields
+
+    from agent_server.tools.file_ops import Snapshot
+
+    assert {f.name for f in fields(Snapshot)} == {"fingerprint", "seen"}

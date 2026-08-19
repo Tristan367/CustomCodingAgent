@@ -90,11 +90,6 @@ def effective_description(name: str) -> str:
     return _description_overrides.get(name) or tool.description
 
 
-def snapshot_descriptions() -> dict[str, str]:
-    """Every built-in's effective description, for a per-session freeze."""
-    return {name: effective_description(name) for name in BUILT_IN_NAMES}
-
-
 def register(tool: Tool):
     TOOLS[tool.name] = tool
 

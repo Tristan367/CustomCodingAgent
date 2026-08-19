@@ -424,3 +424,48 @@ def test_each_model_is_calibrated_separately():
     assert base.chars_per_token("dense") < 3.5
     assert base.chars_per_token("untouched") == 4.0
     base._ratios.clear()
+
+
+# ── conversations that predate the change ────────────────────────────────────
+
+async def test_an_old_style_call_is_answered_by_name(workspace):
+    """A transcript is the strongest few-shot prompt there is. A conversation
+    started before this change is full of `edit` calls carrying a tag and a line
+    range, and a model reading its own history will keep making them however
+    clear the schema is. "oldString is required" is true but reads as though the
+    call was malformed, and invites the same call again with a guess bolted on."""
+    ctx, path = workspace
+    await read(ctx, path)
+
+    result = await edit_file(
+        ctx, filePath=str(path), tag="a3f9", startLine=2, newText="    return 111"
+    )
+
+    assert result.is_error
+    assert "no longer takes" in result.output
+    assert "tag" in result.output and "startLine" in result.output and "newText" in result.output
+    assert "oldString" in result.output, "say what to do instead"
+    assert "ignore them" in result.output, "and that the old calls above were fine"
+    assert path.read_text() == SAMPLE, "the file must be untouched"
+
+
+async def test_a_stray_old_argument_alongside_a_real_one_is_not_hijacked(workspace):
+    """A correct call carrying a leftover `tag` should just work. The migration
+    notice is for a call that has *only* the old shape to go on."""
+    ctx, path = workspace
+    await read(ctx, path)
+
+    result = await edit_file(
+        ctx, filePath=str(path), oldString="return 1", newString="return 111", tag="a3f9"
+    )
+    assert not result.is_error, result.output
+    assert "return 111" in path.read_text()
+
+
+async def test_a_genuinely_empty_call_still_says_what_is_missing(workspace):
+    ctx, path = workspace
+    await read(ctx, path)
+
+    result = await edit_file(ctx, filePath=str(path))
+    assert result.is_error
+    assert "oldString is required" in result.output

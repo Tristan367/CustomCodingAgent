@@ -91,6 +91,14 @@ model, so without that echo an edit that landed in the wrong place stayed
 invisible until the next read. The post-edit numbers also mean the model never
 has to work out how far the lines below its own edit have shifted.
 
+A call in the old shape -- `tag` plus a line range -- is answered by name
+rather than with "oldString is required", which is true but reads as a malformed
+call and invites the same one again with a guess bolted on. A conversation
+started before the change is full of those calls, and a transcript is the
+strongest few-shot prompt there is: a model reading its own history will keep
+making them however clear the schema is. The message says what changed, what to
+send instead, and that the calls above it were correct when they were made.
+
 This replaced a scheme where `read` printed a `[path#tag]` fingerprint and
 `edit` took that tag with a line range. The tag genuinely proved the file had
 not moved, but it never proved the model was *aiming* at the right lines — and

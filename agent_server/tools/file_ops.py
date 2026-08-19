@@ -351,6 +351,14 @@ def _unseen_lines(snapshot: Snapshot, spans: list[tuple[int, int]]) -> list[int]
     return sorted(wanted - snapshot.seen)
 
 
+# Parameters `edit` used to take, when it anchored on a whole-file fingerprint
+# and a line range. A conversation that predates the change is full of calls in
+# that shape -- and a transcript is the strongest few-shot prompt there is, so a
+# model reading its own history will keep making them however clear the schema
+# is. Named here so the error can say what actually happened.
+_RETIRED_ARGS = ("tag", "startLine", "endLine", "newText")
+
+
 async def edit_file(
     ctx: ToolContext,
     *,
@@ -358,7 +366,7 @@ async def edit_file(
     oldString: str = "",
     newString: str = "",
     replaceAll: bool = False,
-    **_,
+    **legacy,
 ) -> ToolResult:
     """Replace exact text in a file.
 
@@ -372,6 +380,24 @@ async def edit_file(
     """
     path = ctx.resolve(filePath)
     title = _title_path(path)
+
+    # Answer the old shape by name rather than with "oldString is required",
+    # which is true but reads as though the call was malformed and invites the
+    # same call again with a guess bolted on.
+    used = [name for name in _RETIRED_ARGS if legacy.get(name) not in (None, "", 0)]
+    if used and not oldString:
+        return ToolResult.error(
+            f"`edit` no longer takes {', '.join(used)}. It used to anchor on a "
+            "[path#tag] fingerprint plus a line range; it now replaces exact text, "
+            "because a line number that is wrong writes to the wrong place while "
+            "text that does not match writes nothing.\n"
+            "Pass `oldString` -- copied character for character from what `read` "
+            "printed, including indentation -- and `newString`. Add a line either "
+            "side if it is not unique, or replaceAll=true.\n"
+            "Earlier calls in this conversation use the old form. They were correct "
+            "when they were made; ignore them and do not copy their shape.",
+            title,
+        )
 
     if not path.exists():
         return ToolResult.error(f"file not found: {path}. Use `write` to create it.", title)

@@ -551,15 +551,21 @@ async def test_unlimited_is_minus_one_and_zero_means_none(fresh, monkeypatch):
 
 
 async def test_a_row_holding_the_old_unlimited_spelling_is_moved(fresh):
-    """Leaving it would flip its meaning from "as many as you like" to "none"."""
+    """Leaving it would flip its meaning from "as many as you like" to "none".
+
+    On an editable profile, because that is the only place the old spelling can
+    be a decision worth carrying: a built-in resets to the shipped values, since
+    nobody could have chosen anything there.
+    """
     from agent_server.system_prompt import max_concurrent_subagents
 
-    await db.save_prompt("default", "a prompt this user already had")
+    await db.save_prompt("mine", "a profile this user already had")
     await db._execute(
-        "UPDATE prompts SET subagent_parallel_cap = 0 WHERE kind = ? AND name = ?",
-        (SYSTEM, "default"),
+        "UPDATE prompts SET subagent_parallel_cap = 0, max_concurrent_subagents = 100"
+        " WHERE kind = ? AND name = ?",
+        (SYSTEM, "mine"),
     )
     await migrate_prompts()
 
-    assert await subagent_parallel_cap("default", tier=1) == -1
-    assert await max_concurrent_subagents("default") == 6
+    assert await subagent_parallel_cap("mine", tier=1) == -1
+    assert await max_concurrent_subagents("mine") == 6

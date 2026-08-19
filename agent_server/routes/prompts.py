@@ -14,7 +14,9 @@ from agent_server.routes.context import (
 )
 from agent_server.system_prompt import (
     COMPACTION,
+    DEFAULT_MASTER_SPAWN_LIMIT,
     DEFAULT_PROMPT,
+    DEFAULT_SESSION_SUBAGENT_CAP,
     DEFAULT_SUBAGENT_PROMPT,
     PROTECTED_PROMPT,
     READONLY_PROMPTS,
@@ -57,11 +59,15 @@ def _parse_tiers(p: dict) -> list[dict]:
 
 
 def _cap_val(raw, default=0):
-    """Parse an integer column, falling back to *default*."""
+    """Parse an integer column, falling back to *default*.
+
+    Clamped at -1, not 0: -1 is how unlimited is spelled, and clamping it away
+    turned "no limit" into "none" the moment the form was saved.
+    """
     if raw is None:
         return default
     try:
-        return max(0, int(raw))
+        return max(-1, int(raw))
     except (TypeError, ValueError):
         return default
 
@@ -130,11 +136,15 @@ async def _prompts_context(
             for p in sys
         },
         "master_spawn": {
-            f"{SYSTEM}:{p['name']}": _cap_val(p.get("master_spawn_limit"), 0)
+            f"{SYSTEM}:{p['name']}": _cap_val(
+                p.get("master_spawn_limit"), DEFAULT_MASTER_SPAWN_LIMIT
+            )
             for p in sys
         },
         "max_concurrent_subs": {
-            f"{SYSTEM}:{p['name']}": _cap_val(p.get("max_concurrent_subagents"), 100)
+            f"{SYSTEM}:{p['name']}": _cap_val(
+                p.get("max_concurrent_subagents"), DEFAULT_SESSION_SUBAGENT_CAP
+            )
             for p in sys
         },
         "sa_disabled": {
@@ -178,11 +188,11 @@ async def save_prompts(request: Request):
     enabled = {str(v) for v in form.getlist("tool")}
     off = ",".join(sorted(n for n in TOOLS if n not in enabled))
 
-    master_spawn_raw = str(form.get("master_spawn", "0"))
+    master_spawn_raw = str(form.get("master_spawn", str(DEFAULT_MASTER_SPAWN_LIMIT)))
     try:
-        master_spawn = max(0, int(master_spawn_raw))
+        master_spawn = max(-1, int(master_spawn_raw))
     except (TypeError, ValueError):
-        master_spawn = 0
+        master_spawn = DEFAULT_MASTER_SPAWN_LIMIT
 
     sa_body = str(form.get("subagent_body", "")).strip()
     sa_visible = str(form.get("sa_visible", "")) == "1"
@@ -200,11 +210,11 @@ async def save_prompts(request: Request):
     tiers_json = _collect_tiers(form)
 
     # Global session-wide cap.
-    max_conc_raw = str(form.get("max_concurrent", "100"))
+    max_conc_raw = str(form.get("max_concurrent", str(DEFAULT_SESSION_SUBAGENT_CAP)))
     try:
-        max_conc = max(0, int(max_conc_raw))
+        max_conc = max(-1, int(max_conc_raw))
     except (TypeError, ValueError):
-        max_conc = 100
+        max_conc = DEFAULT_SESSION_SUBAGENT_CAP
 
     sa_model = str(form.get("sa_model", "")).strip()
     sa_tier1_model = str(form.get("sa_tier_model", "")).strip()
@@ -281,9 +291,14 @@ async def new_prompt(request: Request):
     name = _slug(str(form.get("new_name", "")))
     if not name:
         return RedirectResponse("/prompts", status_code=303)
-    # Copy everything from the default profile.
-    default = await db.get_prompt("default", SYSTEM)
-    compact_default = await db.get_prompt("default", COMPACTION)
+    # Copy the profile the user is looking at. Always copying `default` meant
+    # that building a variant of anything else -- the usual reason to make one --
+    # started by discarding the thing you were varying.
+    source = _slug(str(form.get("copy_from", ""))) or "default"
+    default = await db.get_prompt(source, SYSTEM) or await db.get_prompt("default", SYSTEM)
+    compact_default = await db.get_prompt(source, COMPACTION) or await db.get_prompt(
+        "default", COMPACTION
+    )
     sys_body = (default["body"] if default else DEFAULT_PROMPT.strip())
     cmp_body = (compact_default["body"] if compact_default else "")
     await db.save_prompt(
@@ -299,8 +314,8 @@ async def new_prompt(request: Request):
         "UPDATE prompts SET master_spawn_limit = ?, max_concurrent_subagents = ?,"
         " subagent_model = ?, sa_tier_model = ?, sa_tier_effort = ?, subagent_tiers = ?"
         " WHERE kind = ? AND name = ?",
-        (default.get("master_spawn_limit") if default else 0,
-         default.get("max_concurrent_subagents") if default else 100,
+        (default.get("master_spawn_limit") if default else None,
+         default.get("max_concurrent_subagents") if default else None,
          default.get("subagent_model") if default else None,
          default.get("sa_tier_model") if default else None,
          default.get("sa_tier_effort") if default else None,

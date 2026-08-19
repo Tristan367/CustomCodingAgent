@@ -299,8 +299,20 @@ Two independent gates (`agent_server/permissions.py`):
 
 ## Prompts and profiles
 
-- **Profiles** (`/prompts`) — three built-in prompt profiles, a shared preferences
+- **Profiles** (`/prompts`) — built-in prompt profiles, a shared preferences
   block, and compaction instructions. Clearing a field restores the default.
+- `default` and `local` are **read-only**: file-backed, refreshed on every start,
+  and their subagent settings reset to the shipped values with them. Nobody can
+  edit them through the UI, so a value there that is not the shipped one is not
+  a decision -- it is what an experiment left behind, and there was no way to
+  correct it from the app. One install had `default` holding a master spawn
+  limit of 2 and a stray tier-2 entry with an empty body, both shown as settings
+  the user could see and not change.
+- `local` is `default` with the delegation removed and `task` off, for a model
+  with no subagents to delegate to.
+- **New profile** copies the one you are looking at. Always copying `default`
+  meant that building a variant of anything else -- the usual reason to make
+  one -- started by discarding the thing you were varying.
 - **Environment grounding** — every prompt ends with an auto-generated snapshot
   (cwd, platform, date, git status, top-level contents), so the model doesn't invent
   paths.

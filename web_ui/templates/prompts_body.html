@@ -94,7 +94,7 @@
                 <input type="number" name="master_spawn" value="{{ mspawn }}" min="-1" max="999"
                        style="width:56px; text-align:center"
                        {% if selected_name in readonly %}disabled{% endif %}>
-                <span class="hint">(-1 = unlimited, 0 = none)</span>
+                <span class="hint">(-1 = unlimited)</span>
             </div>
             <div style="display:flex; align-items:center; gap:8px">
                 <span class="hint">Subagent model</span>
@@ -140,10 +140,12 @@
                         {{ tools | length - sa_off | length }} of {{ tools | length }} on
                     </span>
                 </summary>
+                {% if selected_name not in readonly %}
                 <p class="hint">
                     Enable <code>task</code> and a Tier 2 section will appear
                     below to configure what their subsubagents look like.
                 </p>
+                {% endif %}
                 <div class="tool-grid">
                     {% for t in tools %}
                     <label class="checkbox-label" title="{{ t.description[:160] }}">
@@ -165,7 +167,7 @@
                     <input type="number" name="sa_cap" value="{{ sa_cap }}" min="-1" max="999"
                            style="width:56px; text-align:center"
                            {% if selected_name in readonly %}disabled{% endif %}>
-                    <span class="hint">(-1 = unlimited, 0 = none)</span>
+                    <span class="hint">(-1 = unlimited)</span>
                 </div>
                 <div style="display:flex; align-items:center; gap:8px">
                     <span class="hint">Model</span>
@@ -244,7 +246,7 @@
                         <input type="number" name="sa_cap_{{ tno }}" value="{{ tier.parallel_cap }}" min="-1" max="99"
                                style="width:56px; text-align:center"
                                {% if selected_name in readonly %}disabled{% endif %}>
-                        <span class="hint">(-1 = unlimited, 0 = none)</span>
+                        <span class="hint">(-1 = unlimited)</span>
                     </div>
                     <div style="display:flex; align-items:center; gap:8px">
                         <span class="hint">Model</span>
@@ -286,6 +288,7 @@
     <form method="POST" action="/_new_prompt" id="new-prompt-form" hidden>
         <input name="new_name" id="new-prompt-name">
         <input name="kind" id="new-prompt-kind" value="system">
+        <input name="copy_from" id="new-prompt-copy-from">
     </form>
     <form method="POST" action="/_delete_prompt" id="delete-prompt-form" hidden>
         <input name="name" id="delete-prompt-name">
@@ -339,11 +342,13 @@
         });
 
         async function newProfile() {
+            const from = nameOf(picker.value);
             const name = await ui.prompt(
-                'It will start as a copy of the default profile.',
+                `It will start as a copy of "${from}".`,
                 { title: 'New profile', placeholder: 'terse', confirmLabel: 'Create' });
             if (!name) return;
             document.getElementById('new-prompt-name').value = name;
+            document.getElementById('new-prompt-copy-from').value = from;
             document.getElementById('new-prompt-form').submit();
         }
 

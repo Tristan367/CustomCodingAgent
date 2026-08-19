@@ -259,3 +259,69 @@ async def test_the_default_profile_still_delegates(fresh):
     await migrate_prompts()
     assert await disabled_tools({"prompt_profile": "default"}) == set()
     assert "# Delegation" in (await db.get_prompt("default"))["body"]
+
+
+async def test_a_readonly_profile_cannot_keep_a_stale_setting(fresh):
+    """Its body is already refreshed from the file on every start, for the same
+    reason: nobody can edit a read-only profile through the UI, so a value that
+    is not the shipped one is not a decision -- it is something an experiment
+    left behind, and there is no way to correct it from the app.
+
+    The real install had `default` holding a master spawn limit of 2 and a stray
+    tier-2 entry with an empty body, both rendered as settings the user could
+    see and not change.
+    """
+    import json
+
+    from agent_server.system_prompt import (
+        max_concurrent_subagents,
+        migrate_prompts,
+        subagent_parallel_cap,
+    )
+
+    await db.save_prompt("default", "a prompt this user already had")
+    await db._execute(
+        "UPDATE prompts SET master_spawn_limit = 2, subagent_parallel_cap = -1,"
+        " subagent_tiers = ? WHERE name = 'default'",
+        (json.dumps([{"body": "", "disabled_tools": "", "parallel_cap": 7}]),),
+    )
+
+    await migrate_prompts()
+
+    assert await subagent_parallel_cap("default", 0) == 6
+    assert await max_concurrent_subagents("default") == 6
+    assert await subagent_parallel_cap("default", 1) == 3
+    assert (await db.get_prompt("default"))["subagent_tiers"] is None
+
+
+async def test_an_editable_profile_keeps_the_number_the_user_chose(fresh):
+    """The reset is only safe because a read-only profile has no user choice to
+    lose. Anywhere else it would be overwriting one."""
+    from agent_server.system_prompt import migrate_prompts, subagent_parallel_cap
+
+    await db.save_prompt("mine", "my own profile")
+    await db._execute("UPDATE prompts SET master_spawn_limit = 2 WHERE name = 'mine'", ())
+
+    await migrate_prompts()
+
+    assert await subagent_parallel_cap("mine", 0) == 2
+
+
+async def test_the_local_profile_is_built_in_and_keeps_its_tool_selection(fresh):
+    """It is read-only like `default`, so it resets to the shipped values on
+    every start -- and the shipped value for `local` is `task` off, which is the
+    entire reason it exists. Blanking the selection along with the rest would
+    have quietly turned it back into a copy of `default`."""
+    from agent_server.system_prompt import (
+        READONLY_PROMPTS,
+        disabled_tools,
+        migrate_prompts,
+    )
+
+    assert "local" in READONLY_PROMPTS
+
+    await migrate_prompts()
+    await db._execute("UPDATE prompts SET disabled_tools = '' WHERE name = 'local'", ())
+    await migrate_prompts()
+
+    assert await disabled_tools({"prompt_profile": "local"}) == {"task"}

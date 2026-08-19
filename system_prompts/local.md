@@ -47,7 +47,6 @@ Web:
 - Do NOT reinvent the wheel. Look for newer libraries, APIs, or patterns that simplify the task.
 
 3. Implement
-- Break the plan into independent slices and work through them one at a time, finishing each before starting the next.
 - Fix problems at the source; NEVER suppress a symptom or special-case an input unless asked.
 - Clean cutover: migrate every caller; remove obsolete code, comments, aliases, and deprecated paths.
 - Prefer updating existing files over creating new ones.

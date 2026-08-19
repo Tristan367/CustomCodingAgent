@@ -95,7 +95,7 @@ STARTER_DISABLED_TOOLS: dict[str, str] = {
 PROTECTED_PROMPT = "default"
 
 # Built-in prompts backed by files — not editable through the UI.
-READONLY_PROMPTS = {"default"}
+READONLY_PROMPTS = {"default", "local"}
 
 
 SYSTEM = "system"
@@ -238,6 +238,31 @@ async def _refresh_untouched_builtins():
     for name, starter in STARTER_PROMPTS.items():
         await _refresh_one(name, starter)
     await _refresh_subagent_limits()
+    await _reset_readonly_limits()
+
+
+async def _reset_readonly_limits():
+    """A read-only profile's subagent settings are the shipped ones, always.
+
+    Its body is already refreshed from the file on every start, for the same
+    reason: nobody can edit it through the UI, so a value that is not the
+    shipped one is not a decision -- it is something an experiment left behind,
+    and there is no way to correct it from the app. This install had `default`
+    holding a master spawn limit of 2 and a stray tier-2 entry with an empty
+    body, both of which rendered as settings the user could see and not change.
+
+    Cleared to NULL rather than written with numbers, so the defaults live in
+    one place and moving them moves this too.
+    """
+    for name in READONLY_PROMPTS:
+        await db._execute(
+            "UPDATE prompts SET master_spawn_limit = NULL, max_concurrent_subagents = NULL,"
+            " subagent_parallel_cap = NULL, subagent_tiers = NULL,"
+            " subagent_disabled_tools = NULL, subagent_body = NULL,"
+            " sa_tier_model = NULL, sa_tier_effort = NULL, disabled_tools = ?"
+            " WHERE kind = ? AND name = ?",
+            (STARTER_DISABLED_TOOLS.get(name), SYSTEM, name),
+        )
 
 
 async def _refresh_subagent_limits():

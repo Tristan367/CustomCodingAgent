@@ -18,6 +18,7 @@ import logging
 import time
 import uuid
 from collections.abc import AsyncIterator
+from dataclasses import replace
 from datetime import UTC, datetime
 
 from agent_server import cache_guard, permissions
@@ -902,9 +903,15 @@ async def _drain_pending(session: dict, ctx: ToolContext) -> AsyncIterator[dict]
             continue
 
         began = time.monotonic()
-        task = asyncio.create_task(execute_tool(name, args, ctx))
+        progress: asyncio.Queue = asyncio.Queue(maxsize=_PROGRESS_QUEUE_MAX)
+        call_ctx = replace(ctx, call_id=call["id"], progress=progress)
+        task = asyncio.create_task(execute_tool(name, args, call_ctx))
         _track(session_id, task)
         try:
+            while not task.done():
+                await asyncio.wait({task}, timeout=_PROGRESS_POLL_SEC)
+                for event in _progress_events(progress):
+                    yield event
             result = await task
         except asyncio.CancelledError:
             result = ToolResult.error("cancelled by user", "cancelled")
@@ -1030,6 +1037,28 @@ def _last_output_for(rows: list[dict], name: str) -> str:
     return ""
 
 
+# How often the agent loop looks for output from a running tool. It only has to
+# be fast enough that the ticker inside the tool is not the slower of the two.
+_PROGRESS_POLL_SEC = 0.05
+
+# Frames waiting to be sent. Small on purpose: a backed-up queue means the
+# browser is behind, and the newest frame is the only one worth having -- the
+# tail is cumulative, so a dropped frame is not missing output, just a skipped
+# repaint. `emit` drops rather than blocks when this is full.
+_PROGRESS_QUEUE_MAX = 8
+
+
+def _progress_events(queue: asyncio.Queue) -> list[dict]:
+    """Everything queued right now, as events. Never waits."""
+    events = []
+    while True:
+        try:
+            call_id, text = queue.get_nowait()
+        except asyncio.QueueEmpty:
+            return events
+        events.append({"type": "tool_output", "tool_call_id": call_id, "text": text})
+
+
 def _tool_end_event(call: dict, name: str, result: ToolResult, elapsed_ms: int) -> dict:
     code = result.code
     if len(code) > MAX_CODE_CHARS:
@@ -1069,6 +1098,10 @@ async def _run_batch(
     """
     doomed = doomed or set()
 
+    # One queue for the batch; each call gets its own context carrying its id,
+    # so concurrent calls' output stays attributable to the right block.
+    progress: asyncio.Queue = asyncio.Queue(maxsize=_PROGRESS_QUEUE_MAX)
+
     async def run(call: dict) -> tuple[ToolResult, int]:
         began = time.monotonic()
         if ctx.abort.is_set():
@@ -1076,7 +1109,8 @@ async def _run_batch(
         name = tool_call_name(call)
         if _doom_key(call) in doomed:
             return ToolResult.error(_doom_message(name), "doom-loop"), 0
-        result = await execute_tool(name, parse_arguments(call), ctx)
+        call_ctx = replace(ctx, call_id=call["id"], progress=progress)
+        result = await execute_tool(name, parse_arguments(call), call_ctx)
         return result, int((time.monotonic() - began) * 1000)
 
     for call in batch:
@@ -1096,7 +1130,14 @@ async def _run_batch(
     interrupted = False
     waiting = set(tasks)
     while waiting:
-        done, waiting = await asyncio.wait(waiting, return_when=asyncio.FIRST_COMPLETED)
+        done, waiting = await asyncio.wait(
+            waiting, timeout=_PROGRESS_POLL_SEC, return_when=asyncio.FIRST_COMPLETED
+        )
+        # Output from calls that are still running, before the results of the
+        # ones that just finished -- otherwise a block's last frame of output
+        # would arrive after it had already been marked complete.
+        for event in _progress_events(progress):
+            yield event
         for task in done:
             call = call_of[task]
             try:

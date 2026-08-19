@@ -622,6 +622,10 @@ function handleEvent(event, stream) {
       appendToolCall(event);
       break;
 
+    case 'tool_output':
+      showToolOutput(event);
+      break;
+
     case 'tool_end':
       completeToolCall(event);
       break;
@@ -1218,6 +1222,37 @@ function hideAllToolCalls() {
   });
 }
 
+/* A running command's output, as it arrives.
+ *
+ * Each frame carries the whole tail rather than a delta, so a dropped frame is
+ * a skipped repaint and never a hole in the text -- which is what lets the
+ * server throw frames away when this page is slow to keep up.
+ *
+ * The block always takes the overlay while it streams, whatever the transcript
+ * settings say. Output that grows in the flow is the thinking-block problem
+ * exactly: every frame would shove the conversation, and the reader is trying
+ * to read the thing that is moving. */
+function showToolOutput(event) {
+  const node = App.els.messages?.querySelector(
+    `.message.tool[data-tool-call-id="${cssEscape(event.tool_call_id)}"]`);
+  if (!node) return;
+  const details = node.querySelector('.tool-details');
+  if (!details) return;
+  let pre = details.querySelector('.tool-raw.tool-stream');
+  if (!pre) {
+    pre = el('pre', 'tool-raw tool-stream');
+    details.appendChild(pre);
+    details.open = true;
+    promoteLiveTool(node);
+  }
+  pre.textContent = event.text;
+  // Follow the newest line inside the output box, not by moving the page -- the
+  // same rule the streaming thinking block follows. Only this box scrolls: the
+  // summary above it is the label for what is running and has to stay put, so
+  // the block around it is `overflow: hidden` rather than a second scroller.
+  pre.scrollTop = pre.scrollHeight;
+}
+
 /* Hand the overlay to the newest auto-expanded result.
  *
  * Only one block can hold it: two overlays are both positioned from their own
@@ -1348,10 +1383,16 @@ function completeToolCall(event) {
   if (dot) dot.remove();
 
   const details = node.querySelector('.tool-details');
+  // The live tail is replaced by the real result, which is complete rather than
+  // the last few thousand characters.
+  details.querySelector('.tool-raw.tool-stream')?.remove();
   details.open = shouldExpand(node._name);
   // A result that opens itself is the thing the user is watching right now, so
-  // it takes the overlay rather than taking height off the transcript.
+  // it takes the overlay rather than taking height off the transcript. Once the
+  // call is over, a block that streamed gives the overlay back unless that rule
+  // says to keep it.
   if (details.open && App.hideToolCalls) promoteLiveTool(node);
+  else node.classList.remove('live');
 
   // The input the model passed, above the result, so a call reads like
   // "here is what it was asked, here is what came back".

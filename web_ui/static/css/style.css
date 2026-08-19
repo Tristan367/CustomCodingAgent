@@ -623,6 +623,15 @@ a.file-ref:hover { border-bottom-style: solid; color: var(--text); background: v
    rather than pushing anything to make room. The offsets match the message
    grid: 50px column + 10px gap. */
 .message.live { min-height: 30px; }
+/* Which part of an overlaid block scrolls depends on what its summary is.
+   For a thinking block the summary *is* the content, so the whole box scrolls.
+   For a tool block the summary is the label -- which command is running, and
+   how long it has been going -- so it stays pinned and only the output moves
+   under it. Getting this wrong is visible either way: scrolling the whole box
+   takes the label off the top, and leaving both boxes scrollable strands the
+   newest line at the bottom of an inner one that is itself out of view. */
+.message.tool.live .msg-content { overflow: hidden; }
+.message.tool.live .tool-raw { max-height: calc(22vh - 28px); overflow-y: auto; }
 .message.live .msg-content {
   position: absolute;
   top: 0;

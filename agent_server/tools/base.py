@@ -1,6 +1,7 @@
 """Shared types for tool implementations."""
 
 import asyncio
+import contextlib
 import time
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -27,6 +28,30 @@ class ToolContext:
     # it. None means "provider default".
     thinking_effort: str | None = None
     abort: asyncio.Event = field(default_factory=asyncio.Event)
+
+    # Which call this context is executing, and where to push its output while
+    # it is still running. Both are per *call*, not per turn: a batch runs its
+    # calls concurrently against one context, so the agent hands each one a
+    # `dataclasses.replace` copy carrying its own id. `progress` is None
+    # wherever nobody is listening -- subagents, and the tool-schema tests.
+    call_id: str = ""
+    progress: "asyncio.Queue | None" = None
+
+    def emit(self, text: str) -> None:
+        """Offer a snapshot of in-flight output to the transcript.
+
+        Display only: the model still receives the complete output when the call
+        finishes, so anything dropped here costs the user a frame of a scrolling
+        log and costs the model nothing.
+
+        Never blocks and never raises. A full queue means the browser is behind,
+        and stalling the command that is producing the output would be a far
+        worse failure than skipping a frame of it.
+        """
+        if self.progress is None:
+            return
+        with contextlib.suppress(asyncio.QueueFull):
+            self.progress.put_nowait((self.call_id, text))
 
     def resolve(self, path: str | None) -> Path:
         """Resolve a possibly-relative path against the session's project dir."""

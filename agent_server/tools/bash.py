@@ -206,12 +206,15 @@ async def run_bash(
             proc.stdin.close()
         elif has_sudo and not sudo_password and proc.stdin is not None:
             proc.stdin.close()
+        # Only stream when someone is watching. A subagent's bash has no
+        # transcript of its own, so it pays nothing for this.
+        emit = ctx.emit if ctx.progress is not None else None
         if timeout_ms:
             stdout, stderr, detached, truncated = await asyncio.wait_for(
-                _collect(proc), timeout=timeout_ms / 1000
+                _collect(proc, emit), timeout=timeout_ms / 1000
             )
         else:
-            stdout, stderr, detached, truncated = await _collect(proc)
+            stdout, stderr, detached, truncated = await _collect(proc, emit)
     except TimeoutError:
         _kill(proc)
         return ToolResult.error(f"command timed out after {timeout_ms / 1000:g}s: {command}", title)
@@ -263,8 +266,53 @@ BACKGROUND_DRAIN_SEC = 0.25
 # are still read (so the process is not blocked on a full pipe) but discarded.
 MAX_CAPTURE_BYTES = 5_000_000
 
+# How often the running command's output is offered to the transcript. Ten
+# frames a second reads as live, and pinning the rate to a clock rather than to
+# chunk arrivals is what keeps this cheap: `yes | head -c 100M` and a quiet
+# build cost the same, because both send at most ten frames a second.
+STREAM_INTERVAL_SEC = 0.1
 
-async def _collect(proc) -> tuple[bytes, bytes, bool, bool]:
+# How much of the tail each frame carries. The transcript shows a scrolling
+# window rather than the whole log, and the model still receives the complete
+# output when the call ends, so there is nothing to gain from sending more.
+STREAM_TAIL_BYTES = 4000
+
+
+class _Tail:
+    """The last `limit` bytes of a stream, at a cost independent of its length.
+
+    Keeping the tail by re-joining the capture sink would make every frame cost
+    O(total output), so a long-running command would get quadratically more
+    expensive the longer it ran -- exactly backwards. This holds a short list of
+    recent chunks and collapses it when it grows past twice the limit, so both
+    appending and reading are bounded by `limit` no matter how much has gone
+    through.
+    """
+
+    __slots__ = ("_chunks", "_limit", "_size", "dirty")
+
+    def __init__(self, limit: int = STREAM_TAIL_BYTES):
+        self._chunks: list[bytes] = []
+        self._size = 0
+        self._limit = limit
+        self.dirty = False
+
+    def add(self, chunk: bytes) -> None:
+        self._chunks.append(chunk)
+        self._size += len(chunk)
+        self.dirty = True
+        if self._size > self._limit * 2:
+            joined = b"".join(self._chunks)[-self._limit:]
+            self._chunks = [joined]
+            self._size = len(joined)
+
+    def text(self) -> str:
+        self.dirty = False
+        raw = b"".join(self._chunks)[-self._limit:]
+        return raw.decode("utf-8", errors="replace")
+
+
+async def _collect(proc, emit=None) -> tuple[bytes, bytes, bool, bool]:
     """Read stdout/stderr, but stop waiting once the shell itself has exited.
 
     `communicate()` waits for the pipes to reach EOF, not for the process to
@@ -279,12 +327,19 @@ async def _collect(proc) -> tuple[bytes, bytes, bool, bool]:
     out: list[bytes] = []
     err: list[bytes] = []
     state = {"out": 0, "err": 0, "truncated": False}
+    # One tail across both streams, appended in arrival order, which is what a
+    # terminal shows. Kept even past MAX_CAPTURE_BYTES: once the capture stops
+    # growing the model gets a truncated result, but the user watching it run
+    # should still see the command's last words.
+    tail = _Tail() if emit else None
 
     async def drain(stream, sink, key):
         while True:
             chunk = await stream.read(65536)
             if not chunk:
                 return
+            if tail is not None:
+                tail.add(chunk)
             used = state[key]
             remaining = MAX_CAPTURE_BYTES - used
             if remaining <= 0:
@@ -298,10 +353,18 @@ async def _collect(proc) -> tuple[bytes, bytes, bool, bool]:
                 sink.append(chunk)
                 state[key] = used + len(chunk)
 
+    async def stream_tail():
+        """Offer the tail on a clock, and only when it has changed."""
+        while True:
+            await asyncio.sleep(STREAM_INTERVAL_SEC)
+            if tail.dirty:
+                emit(tail.text())
+
     readers = [
         asyncio.create_task(drain(proc.stdout, out, "out")),
         asyncio.create_task(drain(proc.stderr, err, "err")),
     ]
+    ticker = asyncio.create_task(stream_tail()) if tail is not None else None
     try:
         # NB: neither communicate() nor wait() can be used here. Both only
         # resolve once every pipe has disconnected (see _try_finish in
@@ -316,7 +379,14 @@ async def _collect(proc) -> tuple[bytes, bytes, bool, bool]:
     finally:
         for task in readers:
             task.cancel()
-        await asyncio.gather(*readers, return_exceptions=True)
+        if ticker is not None:
+            ticker.cancel()
+            # One last frame, so the transcript ends on what the command
+            # actually printed rather than on whatever the last tick caught.
+            if tail is not None and tail.dirty:
+                emit(tail.text())
+        tasks = [*readers, ticker] if ticker is not None else readers
+        await asyncio.gather(*tasks, return_exceptions=True)
 
     return b"".join(out), b"".join(err), detached, state["truncated"]
 

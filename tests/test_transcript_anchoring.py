@@ -341,6 +341,114 @@ async def test_an_auto_expanded_result_appears_and_vanishes_without_moving_anyth
     assert abs(await _page_height(page) - height_expanded) <= TOLERANCE
 
 
+async def test_streaming_command_output_does_not_move_the_page(page):
+    """A running command's output grows continuously, which is the thinking
+    block's problem exactly: in the flow, every frame would shove the
+    conversation the reader is trying to read."""
+    await page.evaluate("""
+    () => { App.expandTools = []; App.hideToolCalls = false;
+            window._s = { assistantEl: null, contentEl: null, text: '', reasoningEl: null };
+            handleEvent({ type: 'tool_start', tool_call_id: 'b9', name: 'bash',
+                          args: { command: 'pytest -q' } }, window._s); }
+    """)
+    await page.wait_for_timeout(200)
+    await _to_bottom(page)
+    before, height_before = await _tops(page), await _page_height(page)
+
+    # Frames carry the whole tail, not a delta, exactly as the server sends them.
+    for count in (10, 40, 120):
+        await page.evaluate("""
+        (n) => { let text = '';
+                 for (let i = 0; i < n; i++) text += `running check ${i}\\n`;
+                 handleEvent({ type: 'tool_output', tool_call_id: 'b9', text }, window._s); }
+        """, count)
+        await page.wait_for_timeout(120)
+
+    assert abs(await _page_height(page) - height_before) <= TOLERANCE
+    assert _worst_shift(before, await _tops(page)) <= TOLERANCE
+
+    shown = await page.evaluate("""
+    () => { const n = document.querySelector('.message.tool[data-tool-call-id="b9"]');
+            return { rowHeight: n.getBoundingClientRect().height,
+                     painted: n.querySelector('.msg-content').getBoundingClientRect().height,
+                     text: n.querySelector('.tool-stream').textContent.trim().split('\\n').pop() }; }
+    """)
+    assert shown["rowHeight"] <= 40, "streaming output should cost one line of layout"
+    assert shown["painted"] > 100, "but it should be visible while it runs"
+    assert shown["text"] == "running check 119", "the newest frame should be what is shown"
+
+    # Present in the DOM is not the same as on the screen. The overlay caps the
+    # block's height and `.tool-raw` used to cap its own as well, so the newest
+    # line sat at the bottom of an inner scroller that was itself below the
+    # bottom of the outer one -- the transcript showed the middle of the log and
+    # stayed there while the command ran.
+    visible = await page.evaluate("""
+    () => {
+      const n = document.querySelector('.message.tool[data-tool-call-id="b9"]');
+      const box = n.querySelector('.msg-content').getBoundingClientRect();
+      const pre = n.querySelector('.tool-stream');
+      // Measure the last line by putting a marker around it.
+      const text = pre.textContent;
+      const cut = text.trimEnd().lastIndexOf('\\n') + 1;
+      const span = document.createElement('span');
+      span.textContent = text.slice(cut);
+      pre.textContent = text.slice(0, cut);
+      pre.appendChild(span);
+      const last = span.getBoundingClientRect();
+      return { lastBottom: last.bottom, boxBottom: box.bottom, boxTop: box.top,
+               lastTop: last.top };
+    }
+    """)
+    assert visible["lastTop"] >= visible["boxTop"] - 2, "the newest line is above the window"
+    assert visible["lastBottom"] <= visible["boxBottom"] + 2, (
+        "the newest line is below the visible window -- the block is not following its output")
+
+    # And the label stays put while the output moves under it. Scrolling the
+    # whole overlay to follow the output took the summary -- which command is
+    # running, and for how long -- off the top of the block.
+    label = await page.evaluate("""
+    () => {
+      const n = document.querySelector('.message.tool[data-tool-call-id="b9"]');
+      const box = n.querySelector('.msg-content').getBoundingClientRect();
+      const s = n.querySelector('summary').getBoundingClientRect();
+      return { summaryTop: s.top, summaryBottom: s.bottom,
+               boxTop: box.top, boxBottom: box.bottom };
+    }
+    """)
+    assert label["summaryTop"] >= label["boxTop"] - 2, (
+        "the block's label scrolled out of view while its output streamed")
+    assert label["summaryBottom"] <= label["boxBottom"] + 2
+
+
+async def test_the_streamed_tail_is_replaced_by_the_real_result(page):
+    """The tail is the last few thousand characters; the finished result is all
+    of it, and both being present at once would show the end twice."""
+    await page.evaluate("""
+    () => { App.expandTools = ['bash']; App.hideToolCalls = false;
+            window._s = { assistantEl: null, contentEl: null, text: '', reasoningEl: null };
+            handleEvent({ type: 'tool_start', tool_call_id: 'b8', name: 'bash',
+                          args: { command: 'seq 1 5' } }, window._s);
+            handleEvent({ type: 'tool_output', tool_call_id: 'b8', text: '3\\n4\\n5\\n' }, window._s); }
+    """)
+    await page.wait_for_timeout(200)
+    assert await page.evaluate(
+        "() => !!document.querySelector('.message.tool[data-tool-call-id=\"b8\"] .tool-stream')")
+
+    await page.evaluate("""
+    () => handleEvent({ type: 'tool_end', tool_call_id: 'b8', title: 'bash seq 1 5',
+                        content: '1\\n2\\n3\\n4\\n5\\n' }, window._s)
+    """)
+    await page.wait_for_timeout(250)
+    state = await page.evaluate("""
+    () => { const n = document.querySelector('.message.tool[data-tool-call-id="b8"]');
+            return { stream: !!n.querySelector('.tool-stream'),
+                     live: n.classList.contains('live') }; }
+    """)
+    assert not state["stream"], "the live tail outlived the call"
+    # hide_tool_calls is off here, so a finished result belongs in the flow.
+    assert not state["live"], "the overlay was not handed back when the call ended"
+
+
 # ── Collapse all ─────────────────────────────────────────────────────────────
 
 async def test_collapse_all_shuts_every_block_including_the_live_one(page):

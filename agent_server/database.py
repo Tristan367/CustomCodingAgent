@@ -14,7 +14,7 @@ from datetime import UTC, datetime
 
 import aiosqlite
 
-from agent_server.config import DB_PATH
+from agent_server.config import DB_PATH, DEFAULT_MODEL
 
 _conn: aiosqlite.Connection | None = None
 _write_lock = asyncio.Lock()
@@ -356,7 +356,7 @@ async def create_session(
     name: str,
     project_dir: str,
     provider: str = "deepseek",
-    model: str = "deepseek-v4-pro",
+    model: str = DEFAULT_MODEL,
     prompt_profile: str = "default",
     compact_profile: str | None = None,
     thinking_effort: str | None = None,

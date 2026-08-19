@@ -68,7 +68,11 @@ BROWSER_STATE_DIR.mkdir(parents=True, exist_ok=True)
 # Context/limits per https://api-docs.deepseek.com/quick_start/pricing
 # (no price tracking: provider rates move and DeepSeek even varies by time of day)
 DEFAULT_PROVIDER = "deepseek"
-DEFAULT_MODEL = "deepseek-v4-pro"
+# Flash rather than Pro. A new session is usually a question, a look at a file,
+# or a small change, and Flash does those for a fraction of the cost; reaching
+# for Pro is a decision worth making per session rather than paying for by
+# default. The model picker is right there on the New session panel.
+DEFAULT_MODEL = "deepseek-v4-flash"
 DEFAULT_THINKING_EFFORT = "high"
 
 # reasoning_effort enum accepted by the DeepSeek API.

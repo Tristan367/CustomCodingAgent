@@ -51,10 +51,17 @@ def normalize_tool_calls(raw: Any) -> list[dict]:
             arguments = "{}"
         if not isinstance(arguments, str):
             arguments = json.dumps(arguments)
-        if not name:
+        call_id = tc.get("id") or ""
+        # A call with no name cannot be dispatched, and one with no id cannot be
+        # *answered*: results are matched back by id, so `pending_tool_calls`
+        # would never see a reply and would hand the same call back on every
+        # later message -- running it again, and again, for the life of the
+        # session. Dropping it here leaves an assistant turn that simply made no
+        # tool call, which the loop already knows how to finish.
+        if not name or not call_id:
             continue
         out.append({
-            "id": tc.get("id") or "",
+            "id": call_id,
             "type": "function",
             "function": {"name": name, "arguments": arguments},
         })

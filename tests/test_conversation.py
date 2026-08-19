@@ -262,3 +262,30 @@ def test_compaction_never_loses_or_reorders_messages():
     head, tail = split_for_compaction(rows)
     ids = [m["id"] for m in head] + [m["id"] for m in tail]
     assert ids == sorted(ids) == [m["id"] for m in rows]
+
+
+def test_a_tool_call_with_no_id_is_dropped_rather_than_repeated_forever():
+    """Results are matched back to calls by id. A call with no id is answered,
+    and the answer is recorded, but `pending_tool_calls` can never see it as
+    answered -- so it is handed back as outstanding work on every later message
+    and run again, and again, for the life of the session. Silent and expensive
+    in a session nobody is watching.
+
+    Dropping it leaves an assistant turn that made no tool call, which the loop
+    already knows how to finish."""
+    calls = normalize_tool_calls([
+        {"id": "", "type": "function", "function": {"name": "read", "arguments": "{}"}},
+        {"type": "function", "function": {"name": "grep", "arguments": "{}"}},
+        {"id": "c3", "type": "function", "function": {"name": "glob", "arguments": "{}"}},
+    ])
+    assert [c["id"] for c in calls] == ["c3"]
+
+
+def test_an_answered_call_is_not_handed_back_as_pending():
+    rows = [
+        row(1, "user", "go"),
+        row(2, "assistant", tool_calls=[call("c1")]),
+        row(3, "tool", "done", tool_call_id="c1"),
+    ]
+    _assistant, pending = pending_tool_calls(rows)
+    assert pending == []

@@ -141,3 +141,53 @@ def test_a_broken_spill_still_returns_truncated_text(tmp_path, monkeypatch):
     out = base.truncate("x" * 5000, 200, spill=True)
     assert len(out) <= 200
     assert "truncated" in out
+
+
+# ── quoting must not hide the target ────────────────────────────────────────
+
+def test_quoting_does_not_get_a_protected_path_past_the_guard():
+    """Splitting on whitespace left `rm -rf "/"` as the token `"/"`, which
+    matched nothing in the protected set while the shell read it as `/`. Every
+    entry was bypassable the same way, including the command name itself.
+
+    This is the last line of defence in an ordinary session, where anything
+    mutating is approved by hand first -- and the only line when shell
+    auto-approve is on, which is exactly when nobody is watching.
+    """
+    from agent_server.tools.bash import danger_reason
+
+    for command in (
+        'rm -rf "/"', "rm -rf '/'", '"rm" -rf "/"',
+        'rm -rf "$HOME"', 'rm -rf "${HOME}"', 'rm -rf "~"',
+        'rm -rf "/*"', 'rm -rf "/etc"', "rm -rf '/usr'",
+    ):
+        assert danger_reason(command), f"{command} should be refused"
+
+
+def test_the_home_directory_is_protected_by_its_real_name_too():
+    """`$HOME` and `~` are the spellings a model reaches for, but the literal
+    path is the same catastrophe."""
+    import os
+
+    from agent_server.tools.bash import danger_reason
+
+    assert danger_reason(f"rm -rf {os.path.expanduser('~')}")
+
+
+def test_a_scoped_deletion_is_still_allowed():
+    """The guard only blocks machine-destroying commands. A quoted path with a
+    space in it is an ordinary deletion, not an attack."""
+    from agent_server.tools.bash import danger_reason
+
+    for command in (
+        "rm -rf build/", "rm -rf ~/Projects/scratch", "rm -rf 'my folder'",
+        'rm -rf "dist/some build"', "git clean -fdx",
+    ):
+        assert danger_reason(command) is None, f"{command} should be allowed"
+
+
+def test_an_unbalanced_quote_does_not_crash_the_guard():
+    from agent_server.tools.bash import danger_reason
+
+    danger_reason('rm -rf "unbalanced')
+    danger_reason("rm -rf 'also unbalanced")

@@ -23,6 +23,9 @@ PROTECTED_RM_TARGETS = {
     "/", "/*", "/.", "/..", "~", "~/", "$HOME", "${HOME}", "$HOME/",
     "/home", "/etc", "/usr", "/bin", "/sbin", "/lib", "/lib64",
     "/boot", "/var", "/opt", "/root", "/srv", "/mnt", "/proc", "/sys", "/dev",
+    # The home directory by its real name too. `$HOME` and `~` are the spellings
+    # a model reaches for, but the literal path is the same catastrophe.
+    os.path.expanduser("~"),
 }
 _BLOCK_DEV_RE = re.compile(r"/dev/(sd[a-z]+|hd[a-z]+|nvme\d+n\d+|vd[a-z]+|xvd[a-z]+|mmcblk\d+|disk|mapper)")
 
@@ -41,12 +44,35 @@ def _has_flag(tokens: list[str], flag: str, long: str = "") -> bool:
     return False
 
 
+def _tokenize(command: str) -> list[str]:
+    """Split a command the way the shell will, so quoting cannot hide a target.
+
+    Splitting on whitespace left `rm -rf "/"` as the token `"/"`, which matched
+    nothing in the protected set while the shell cheerfully read it as `/`. The
+    same held for every entry: `"$HOME"`, `'/etc'`, even `"rm"` itself, which
+    hid the command as well as its argument. Quoting is not an exotic thing for
+    a model to do -- it is what you get from asking for a path with a space in
+    it once.
+    """
+    try:
+        tokens = shlex.split(command)
+    except ValueError:
+        # Unbalanced quotes: shlex refuses, so fall back and strip by hand
+        # rather than let a malformed command past unexamined.
+        tokens = command.split()
+    return [t.strip("\"'") for t in tokens]
+
+
 def danger_reason(command: str) -> str | None:
     """Why `command` must not run, or None when it is allowed.
 
     A guard against the commands that take the machine down with them, not just
     the project. Deliberately conservative: it only fires on the obvious
     catastrophes and never on an ordinary `rm -rf build/` or `git clean`.
+
+    This is the last line rather than the first: an ordinary session asks before
+    running anything that mutates. It is the only line when shell auto-approve
+    is on, which is exactly when nobody is watching.
     """
     s = command.strip()
 
@@ -56,7 +82,7 @@ def danger_reason(command: str) -> str | None:
 
     # rm with recursive+force flags targeting a protected path. Match by token
     # basename so a path-qualified `/bin/rm` is caught as well as a bare `rm`.
-    tokens = s.split()
+    tokens = _tokenize(s)
     if (
         any(os.path.basename(t) == "rm" for t in tokens)
         and _has_flag(tokens, "r", "--recursive")

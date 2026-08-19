@@ -9,11 +9,7 @@ offset and could split a group; this one only ever cuts on a group boundary.
 
 from agent_server import database as db
 from agent_server.config import model_info
-from agent_server.conversation import (
-    build_messages,
-    normalize_tool_calls,
-    pending_tool_calls,
-)
+from agent_server.conversation import build_messages, normalize_tool_calls
 from agent_server.providers import get_provider
 from agent_server.providers.base import completion_with_retry
 from agent_server.system_prompt import get_compact_prompt, session_system_prompt
@@ -108,39 +104,45 @@ def split_for_compaction(
 
 
 async def _summariser_messages(
-    session: dict, rows: list[dict], to_compact: list[dict], instructions: str
+    session: dict, to_compact: list[dict], instructions: str
 ) -> list[dict]:
-    """Ask for the summary on top of the conversation that is already cached.
+    """Ask for the summary as a continuation of the part being summarised.
 
-    Flattening the transcript into a fresh request re-buys, at the cache-miss
-    rate, tokens that were already paid for once. Continuing the real
-    conversation reuses the prefix the last turn already established: measured
-    on a 106,000-token session, the fresh call billed 24,284 uncached tokens
-    while continuing billed 58, which is 26x cheaper despite sending four times
-    as much. It is also the fuller picture, because the flattened rendering
-    truncates every message to 4,000 characters.
+    Two things have to be true at once, and they look like they conflict.
 
-    The fallback stays for the cases where continuing is not possible: an open
-    tool call that a user message cannot legally follow, or a conversation too
-    large for the window.
+    The summary must not cover the messages that are being *kept* verbatim, or
+    the same work ends up described and quoted -- which reads as it having
+    happened twice, and is paid for twice.
+
+    And the request must not be a freshly assembled transcript, because that
+    re-buys at the cache-miss rate tokens that were already paid for once:
+    measured on a 106,000-token session, a flattened call billed 24,284 uncached
+    tokens against 58 for a continuation.
+
+    Sending the head alone satisfies both. The head is a *prefix* of the
+    conversation the provider just cached, so it is still a cache hit -- prefix
+    caching does not care that the request stops early. And the model is simply
+    never shown the retained tail, so nothing has to tell it what to leave out.
+    Telling it would have been the worse answer anyway: an instruction appended
+    as a user message describes messages the model believes it authored itself,
+    which is a strange thing to hand it.
+
+    The flattened fallback stays only for a head too large to send at all.
     """
-    fallback = [
-        {"role": "system", "content": instructions},
-        {"role": "user", "content": render_transcript(to_compact)},
-    ]
-    _, open_calls = pending_tool_calls(rows)
-    if open_calls:
-        return fallback
-
     provider = get_provider(session["provider"])
+    # Cut on a unit boundary, so the head always ends with a complete tool round
+    # and a user message may legally follow it.
     live = build_messages(
         await session_system_prompt(session),
         await db.get_compactions(session["id"]),
-        rows,
+        to_compact,
     )
     ask = {"role": "user", "content": instructions}
     if provider.count_tokens(live + [ask]) > _context_limit(session) * 0.9:
-        return fallback
+        return [
+            {"role": "system", "content": instructions},
+            {"role": "user", "content": render_transcript(to_compact)},
+        ]
     return live + [ask]
 
 
@@ -253,7 +255,7 @@ async def compact_session_events(
         if extra_instructions.strip():
             instructions += f"\n\nAdditional instructions for this summary:\n{extra_instructions.strip()}"
 
-        messages = await _summariser_messages(session, rows, to_compact, instructions)
+        messages = await _summariser_messages(session, to_compact, instructions)
         summary = ""
         async for event in completion_with_retry(
             provider,

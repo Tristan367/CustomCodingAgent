@@ -52,7 +52,7 @@ concurrently; anything that mutates runs sequentially.
 |---|---|---|
 | `read` | read a file | bytes → decoded text, with a `Did you mean` hint on miss |
 | `write` | create/overwrite a file | streams args (see progress below), returns a `diff` |
-| `edit` | targeted string replace | exact-match replace, errors on multiple matches |
+| `edit` | replace exact text | exact-match replace, errors on 0 or >1 matches |
 | `bash` | run a shell command | subprocess with timeout, own process group, permission gate |
 | `grep` | search file contents | ripgrep |
 | `glob` | find files by pattern | glob |
@@ -60,20 +60,69 @@ concurrently; anything that mutates runs sequentially.
 | `websearch` | web search | provider-backed |
 | `task` | spawn a subagent | recursive agent loop (see hierarchy) |
 | `send_message` | message another session | mailbox table (see below) |
-| `capture` | screenshot the desktop | per-platform screen capture |
+| `capture` | screenshot the desktop | per-platform screen capture, returns paths |
 | `browser` | drive Chromium | Playwright steps + accessibility snapshots |
 
 Tool results can carry a `diff`, which the UI renders inline with +/- highlighting.
 `read`/`edit`/`write` operate inside the session's project directory; writes
 outside it are gated by permissions.
 
+### Anchored edits
+
+`edit` matches on exact text. That is a choice about which way it fails: a
+string that does not match produces a loud error and writes nothing, where a
+wrong line number writes to the wrong place and reports success. The first costs
+a retry; the second costs a corrupted file.
+
+Three refusals, each with its own message because each has a different fix:
+
+- **Not found** — nearly always whitespace. Nothing was written; look at the
+  text again rather than guessing a variation.
+- **Not found, and the file changed on disk** — someone else edited it. Re-read.
+- **Lines that were never displayed** — matching text proves *where* an edit
+  lands, not that anyone looked at it, so an edit whose match falls outside what
+  `read` actually showed is refused. `write` is refused likewise when it would
+  discard the unread tail of a partially-read file, which the drift check cannot
+  catch because nothing else touched the file.
+
+Every successful edit answers with the edited region of the file, numbered as it
+now stands. The `diff` a tool returns is display-only and never reaches the
+model, so without that echo an edit that landed in the wrong place stayed
+invisible until the next read. The post-edit numbers also mean the model never
+has to work out how far the lines below its own edit have shifted.
+
+This replaced a scheme where `read` printed a `[path#tag]` fingerprint and
+`edit` took that tag with a line range. The tag genuinely proved the file had
+not moved, but it never proved the model was *aiming* at the right lines — and
+it charged a running tax to use: carry the current tag, respect a window, do the
+shift arithmetic, all while writing code. The seen-lines guarantee was the one
+thing worth keeping, and it was kept.
+
 ## Subagents and hierarchy
 
-- `task` spawns a subagent that can itself spawn more (`task`) up to a
-  user-configured tier hierarchy (`sa_tool`, `sa_tool_2`, … on the Prompts page).
-- Each tier has its own system prompt, model, disabled-tool set, and parallel cap
-  (`agent_server/system_prompt.py` reads the `subagent_tiers` JSON column).
-- `send_message` is `TOP_LEVEL_ONLY` — subagents can't message other sessions.
+- `task` spawns a subagent that can itself spawn more, down as many tiers as are
+  configured (`sa_tool`, `sa_tool_2`, … on the Prompts page).
+- Each tier has its own system prompt, model, thinking effort, disabled-tool set
+  and concurrency cap (`agent_server/system_prompt.py` reads the
+  `subagent_tiers` JSON column).
+- **No timeouts and no round cap.** A subagent runs until it answers or the user
+  stops it. Killing one at ten minutes throws away ten minutes of paid work and
+  returns nothing.
+- **Two gates, in `agent_server/tools/task.py`.** The per-tier cap is a ceiling
+  across the whole session, not per call — `task` is parallel-safe, so the model
+  can issue four calls in one round and they run concurrently; capping each call
+  separately let a limit of 5 put twenty subagents in flight. The session-wide
+  cap is the total across every tier, and only the shallowest spawns ever *wait*
+  on it: a deeper one that waited would be queued behind the very agent holding
+  the permit it needs, which is a deadlock.
+- Both gates are `_Limiter`, not `asyncio.Semaphore`, because the limit can
+  change while work is in flight. Changing a semaphore's limit means building a
+  new one, and the agents already running hold permits on the old object — so
+  the replacement starts empty and briefly allows `capacity + in-flight` to run.
+- Fanned-out subagents sharing a prompt share one `(tool, arguments)` result
+  cache, so five of them asking the same question cost one call. Any tool that
+  mutates drops the cache, so a shared `read` cannot outlive a sibling's write.
+- `send_message` is top-level only — subagents can't message other sessions.
 
 ## Inter-AI messaging
 
@@ -82,6 +131,11 @@ outside it are gated by permissions.
   busy, it lands in the `mailbox` table and is injected at the next turn boundary.
 - The recipient sees a blue "mail" bubble (`mail_from`), and the prompt tells it to
   reply with `send_message`. Tests in `tests/test_send_message.py`.
+- Because both sides can start a conversation, two sessions can go back and forth
+  indefinitely. The stop button is the brake: `stop_all` aborts every run,
+  cancels every subagent, and empties the mailbox and the queues, and a send that
+  was already executing checks the abort flag before delivering — otherwise it
+  would land after the clear-out and wake the target straight back up.
 
 ## Permissions and safety
 
@@ -100,9 +154,7 @@ Two independent gates (`agent_server/permissions.py`):
   including the `/bin/rm` form), fork bombs, and raw block-device writes. Deliberately
   conservative: only the obvious catastrophes.
 
-## Speech
-
-### Dictation (STT) — streaming
+## Dictation (STT) — streaming
 
 - Toggle via the mic button or **Ctrl+M**; hold to talk, release to transcribe.
 - Browser captures 16 kHz mono float32 via an AudioWorklet (`stt-worklet.js`) and
@@ -117,31 +169,36 @@ Two independent gates (`agent_server/permissions.py`):
 - Batch STT (`stt.py`, `whisper-cli`) is the older non-streaming path used for
   one-shot transcription.
 
-### TTS
-
-- Kokoro via `onnxruntime`, deliberately on CPU so the GPU is untouched. The model
-  is loaded once and kept. Plan → speak endpoints, tone settings, per-session voice.
-  (`agent_server/tts.py`.)
-
-## Vision, capture, browser
+## Attachments, capture, browser
 
 - **Attachments** — attach files or directories with the paperclip; the agent is
   sent the absolute path and decides what to do with it. Images preview inline,
   other files and folders render as chips. Drag-drop works the same way.
 - **`browser`** — drives a real Chromium from a list of steps (click/fill/hover/
-  press/shoot/record/compare) with accessibility-tree snapshots and `expect`
-  assertions. One context per session, reaped when idle.
-- **`capture`** — desktop screenshots for anything that isn't a web page.
-- Neither `browser` nor `capture` describes images itself — there is **no built-in
-  `vision` tool** by design. They dispatch to whatever custom tool is named
-  `vision`, so image understanding is something you bring, not something that
-  ships.
+  press/shoot/record) with accessibility-tree snapshots and `expect` assertions.
+  One context per session, reaped when idle. It drives and asserts; `shoot` saves
+  a frame and returns its path, and what anything makes of that image afterwards
+  is not the tool's business.
+- **`capture`** — desktop screenshots for anything that isn't a web page: a
+  native app, a game, an emulator. Returns the paths of the frames it saved.
+- Neither describes an image. Both used to carry parameters that dispatched to a
+  custom tool named exactly `vision` — schema sent on every request for a call
+  that, on any install without one, could only come back "not installed", and
+  useless anyway to anyone who had named theirs something else. Saving a frame
+  and looking at a frame are separate steps, and looking is something you bring.
 
 ## Editor and file manager
 
-- **Editor** (right panel) — per-session memory (open file, unsaved buffer, scroll,
-  caret, split state) so it survives tab switches; back/forward history; reopen via
-  button or Ctrl+E; half/full-height split. Format via external formatters.
+- **Editor** — sits between the session bar and the chat, full height or a
+  half-height split with the transcript still visible above it. Per-session memory
+  (open file, unsaved buffer, scroll, caret, split state) so it survives tab
+  switches; back/forward history; reopen via button or Ctrl+E. Format via external
+  formatters.
+- **Click a path to open it** — in prose, and on a `read`/`edit`/`write` block in
+  the transcript. A directory opens the file manager, an image opens a preview
+  overlay (Esc or a click outside closes it), anything else opens the editor. The
+  path comes from the tool itself rather than from the block's title, which is
+  left-truncated for display and so is not a path at all for a deeply nested file.
 - **File manager** — browse/mkdir/rename/move/delete/duplicate, wired so renames
   and moves keep the open editor in sync.
 - **Formatters** — `agent_server/formatting.py` dispatches to clang-format
@@ -163,6 +220,25 @@ Two independent gates (`agent_server/permissions.py`):
 - **Tool progress** — while a large `write` streams, a `tool_progress` event shows
   the tool name + argument byte count. Full live rendering of the arguments was
   deliberately skipped.
+
+## Keyboard shortcuts
+
+- One table in `web_ui/static/js/app.js` (`Keys`), one handler, one place to look
+  them up. Groups: Sessions, Writing, Files, Running, Help.
+- Everything is rebindable, because the useful combinations are exactly the ones
+  a browser or window manager may already have claimed, and which ones those are
+  depends on the machine. Click a shortcut and press the keys; Esc cancels,
+  Backspace unbinds.
+- Combos are normalised from `event.code` (`Alt+BracketRight`), so a binding
+  follows the physical key and survives a non-US layout.
+- Defaults live in the JS, not the database: only deliberate overrides are
+  stored (`GET`/`POST /_settings/keybinds`), so a better default in a later
+  version still reaches everyone who never rebound it.
+- A shortcut does not fire while typing unless it opts in (`whileTyping`), and
+  may carry a `when` guard so two actions can share a key in different states —
+  Escape leaves the composer, or stops the run, depending on what is happening.
+- Listed at the bottom of the home page and, from any page, on `?`. Groups are
+  collapsed by default.
 
 ## Prompts and profiles
 
@@ -202,16 +278,22 @@ Two independent gates (`agent_server/permissions.py`):
 - **Compaction** (`compaction.py`) summarises long conversations, always cutting on
   a group boundary (a `tool_calls` message and its results are one atomic unit).
   Per-session threshold, adjustable with a slider or one-off instructions.
+- The summary is produced by *continuing* the head of the conversation rather
+  than rebuilding a transcript: the head is already a cached prefix, so the call
+  is nearly free (24,284 uncached tokens against 58, measured on a 106,000-token
+  session). The retained tail is simply not sent, so the summary cannot describe
+  work that is also being kept verbatim — no instruction is needed telling the
+  model to ignore messages it believes it wrote. Only a head too large to send
+  falls back to a flattened transcript.
 - **Cache guard** (`cache_guard.py`) predicts prefix-cache misses before they're
   paid for by diffing the about-to-send bytes against the last send.
-- **Usage ring** — live token/cache/spend stats from real API `usage` numbers.
+- **Usage ring** — live token and cache stats from real API `usage` numbers.
 
 ## Internals
 
 - **`dir_watcher.py`** — watchfiles/inotify to detect a project directory rename
   and re-point the session at its new location.
-- **`capture.py`/`images.py`** — screen capture backends probed per platform; image
-  decode/downscale.
+- **`capture.py`** — screen capture backends probed per platform.
 - **`formatting.py`** — external formatter dispatch (see Editor).
 - **`templating.py`** — the Jinja environment, filters, and theme derivation.
 

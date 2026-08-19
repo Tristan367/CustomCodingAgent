@@ -2608,3 +2608,28 @@ dialog.file-browser::backdrop { background: transparent; }
   white-space: nowrap;
 }
 .ctx-item:hover { background: var(--bg-hover); }
+
+/* Speech-model download progress, next to the picker. Sized to sit on the same
+   line as the select without moving it when the text changes length. */
+.stt-progress {
+  font-size: 12px;
+  color: var(--text-dim);
+  white-space: nowrap;
+  align-self: center;
+}
+.stt-progress.stt-failed { color: var(--danger); }
+/* A spinner rather than a bar: the total is an estimate, and a bar that is
+   wrong about the total is worse than one that only says "still going". */
+.stt-progress.stt-busy::before {
+  content: "";
+  display: inline-block;
+  width: 9px;
+  height: 9px;
+  margin-right: 6px;
+  border: 2px solid var(--border-strong);
+  border-top-color: var(--accent);
+  border-radius: 50%;
+  animation: stt-spin 0.8s linear infinite;
+  vertical-align: -1px;
+}
+@keyframes stt-spin { to { transform: rotate(360deg); } }

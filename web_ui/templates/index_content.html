@@ -233,9 +233,13 @@ async function restartMyriadCode(button) {
             <span class="control-row">
                 <select name="stt-model" onchange="saveSttModel(this.value)">
                     {% for m in stt_models %}
-                    <option value="{{ m.path }}" {% if m.path == stt.model_path %}selected{% endif %}>{{ m.name }}</option>
+                    <option value="{{ m.path }}" data-downloaded="{{ 1 if m.downloaded else 0 }}"
+                            {% if m.path == stt.model_path %}selected{% endif %}>{{ m.name }}</option>
                     {% endfor %}
                 </select>
+                {# Filled in by saveSttModel while a model is being fetched. A
+                   1.5 GB download with nothing on screen reads as a hang. #}
+                <span id="stt-progress" class="stt-progress" hidden></span>
             </span>
         </label>
         <p class="hint" style="margin-top:6px">
@@ -447,7 +451,72 @@ async function saveSttModel(path) {
     const resp = await fetch('/_settings/stt-model', { method: 'POST', body: form });
     if (!resp.ok) return;
     const data = await resp.json();
-    if (!data.ok) appendNotice('error', data.detail || 'Could not switch the speech model');
+    if (!data.ok) {
+        appendNotice('error', data.detail || 'Could not switch the speech model');
+        return;
+    }
+    watchSttModel();
+}
+
+/* Report a model being fetched and loaded until it is ready.
+ *
+ * The sizes on offer run to 3 GB. Downloading one silently and only finding out
+ * on the first dictation -- with the mic held down -- is the worst version of
+ * this, so the fetch starts on selection and the page says how far along it is.
+ * Progress is measured from the cache on disk, so it stays honest about a
+ * resumed or partial download. */
+let sttPoll = null;
+
+async function watchSttModel() {
+    const box = document.getElementById('stt-progress');
+    if (!box) return;
+    if (sttPoll) clearInterval(sttPoll);
+
+    const tick = async () => {
+        let s;
+        try {
+            const r = await fetch('/_settings/stt-status', { cache: 'no-store' });
+            if (!r.ok) return;
+            s = await r.json();
+        } catch (e) { return; }   // a blip; the next tick tries again
+
+        if (s.phase === 'downloading') {
+            const done = s.downloaded_mb || 0;
+            const total = s.total_mb || 0;
+            const pct = total ? ` (${Math.min(99, Math.round((done / total) * 100))}%)` : '';
+            show(box, `downloading ${s.model}… ${fmtMb(done)} of ${fmtMb(total)}${pct}`, true);
+            return;
+        }
+        if (s.phase === 'loading') {
+            show(box, `loading ${s.model}…`, true);
+            return;
+        }
+        clearInterval(sttPoll);
+        sttPoll = null;
+        if (s.phase === 'error') {
+            show(box, `could not load: ${s.detail}`, false);
+            box.classList.add('stt-failed');
+            return;
+        }
+        box.classList.remove('stt-failed');
+        const where = s.device ? ` on ${s.device}` : '';
+        show(box, s.detail ? `${s.model} ready${where} — ${s.detail}` : `${s.model} ready${where}`, false);
+        // A finished message has said its piece; the hint below covers the rest.
+        setTimeout(() => { box.hidden = true; }, 6000);
+    };
+
+    await tick();
+    if (!sttPoll) sttPoll = setInterval(tick, 1000);
+}
+
+function show(box, text, busy) {
+    box.hidden = false;
+    box.textContent = text;
+    box.classList.toggle('stt-busy', !!busy);
+}
+
+function fmtMb(mb) {
+    return mb >= 1000 ? `${(mb / 1000).toFixed(1)} GB` : `${mb} MB`;
 }
 
 </script>

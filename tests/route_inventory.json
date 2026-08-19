@@ -252,6 +252,13 @@
     "name": "save_stt_model"
   },
   {
+    "path": "/_settings/stt-status",
+    "methods": [
+      "GET"
+    ],
+    "name": "stt_status"
+  },
+  {
     "path": "/_settings/theme",
     "methods": [
       "POST"

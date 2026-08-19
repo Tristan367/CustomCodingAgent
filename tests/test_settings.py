@@ -91,10 +91,24 @@ async def test_save_stt_model_stores_a_name_and_drops_the_loaded_one(monkeypatch
 
     monkeypatch.setattr(engine_mod, "restart", fake_restart)
 
+    # Selecting a model now starts the fetch rather than leaving it to the first
+    # dictation, so this has to be stubbed as well -- otherwise the test really
+    # loads a model, which on this machine means putting it on the GPU.
+    async def fake_prepare(model):
+        calls["prepared"] = model
+
+    monkeypatch.setattr(engine_mod, "prepare", fake_prepare)
+    monkeypatch.setattr(engine_mod, "preparation_status", lambda: {"phase": "loading"})
+
     assert (await settings_mod.save_stt_model(_request({"model": "   "})))["ok"] is False
     assert "whisper_model" not in calls
 
-    assert await settings_mod.save_stt_model(_request({"model": "small.en"})) == {"ok": True}
+    result = await settings_mod.save_stt_model(_request({"model": "small.en"}))
+    assert result["ok"] is True
+    # The first status ships with the response so the page can render the
+    # spinner immediately instead of waiting a poll interval to find out.
+    assert result["status"] == {"phase": "loading"}
     assert calls["whisper_model"] == "small.en"
     assert calls["seen"] == "small.en"
     assert calls["restarted"] is True
+    assert calls["prepared"] == "small.en"

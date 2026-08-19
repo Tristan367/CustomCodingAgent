@@ -157,4 +157,16 @@ async def save_stt_model(request: Request):
     await db.set_setting("whisper_model", model)
     config.set_whisper_model(model)
     await whisper_engine.restart()
-    return {"ok": True}
+    # Start the fetch now rather than on the first dictation. `medium.en` is
+    # 1.5 GB, and downloading it with the mic held down and nothing on screen
+    # is indistinguishable from a hang.
+    await whisper_engine.prepare(model)
+    return {"ok": True, "status": whisper_engine.preparation_status()}
+
+
+@router.get("/_settings/stt-status")
+async def stt_status():
+    """How the chosen speech model is getting on, for the settings page to poll."""
+    from agent_server import whisper_engine
+
+    return whisper_engine.preparation_status()

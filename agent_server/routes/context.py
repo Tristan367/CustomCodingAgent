@@ -106,7 +106,7 @@ def _stt_model_choices() -> list[dict]:
             label = f"{m}  (downloads ~{cost})"
         else:
             label = m
-        out.append({"path": m, "name": label})
+        out.append({"path": m, "name": label, "downloaded": m in here})
     return out
 
 

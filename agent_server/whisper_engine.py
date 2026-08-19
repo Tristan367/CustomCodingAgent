@@ -56,6 +56,37 @@ DOWNLOAD_MB = {
 }
 
 
+def _repo_dir(size: str) -> str:
+    """Where the Hugging Face cache keeps this size, downloaded or not."""
+    try:
+        from faster_whisper.utils import _MODELS
+        from huggingface_hub.constants import HF_HUB_CACHE
+    except ImportError:
+        return ""
+    repo = _MODELS.get(size)
+    if not repo:
+        return ""
+    return os.path.join(HF_HUB_CACHE, f"models--{repo.replace('/', '--')}")
+
+
+def _bytes_on_disk(path: str) -> int:
+    """How much of a model is here so far. Best-effort and cheap.
+
+    Counting the cache directory is what makes a real progress figure possible
+    without reaching into huggingface_hub's download internals: it is the same
+    number whether the transfer is chunked, resumed, or parallel, and it stops
+    being right about nothing if their API changes.
+    """
+    total = 0
+    for root, _dirs, files in os.walk(path):
+        for name in files:
+            try:
+                total += os.stat(os.path.join(root, name), follow_symlinks=False).st_size
+            except OSError:
+                continue
+    return total
+
+
 def downloaded_models() -> set[str]:
     """The sizes already in the Hugging Face cache, so the UI can say which.
 
@@ -256,3 +287,72 @@ async def shutdown() -> None:
 async def restart() -> None:
     """Drop the model so the next session picks up a newly chosen one."""
     await shutdown()
+
+
+# ── Preparing a newly chosen model ──────────────────────────────────────────
+# Choosing `medium.en` is a 1.5 GB download. Left until the first dictation it
+# happens with the mic held down and nothing on screen, which reads as a hang;
+# so picking a model starts the fetch straight away and this is what the page
+# polls to show how it is going.
+
+_prepare: dict = {"model": "", "phase": "idle", "detail": ""}
+_prepare_task: asyncio.Task | None = None
+
+
+def preparation_status() -> dict:
+    """What the chosen model is doing right now, for the settings page.
+
+    `downloaded_mb` is measured from the cache directory rather than reported by
+    the downloader, so it is honest about resumed and partial transfers.
+    """
+    state = dict(_prepare)
+    model = state.get("model") or ""
+    state["total_mb"] = DOWNLOAD_MB.get(model, 0)
+    if state["phase"] == "downloading" and model:
+        directory = _repo_dir(model)
+        state["downloaded_mb"] = round(_bytes_on_disk(directory) / 1e6) if directory else 0
+    else:
+        state["downloaded_mb"] = state["total_mb"] if state["phase"] == "ready" else 0
+    engine = _engine
+    if engine is not None and engine.model_name == model:
+        state["device"] = engine.device
+        state["compute_type"] = engine.compute_type
+    return state
+
+
+async def prepare(model_name: str) -> None:
+    """Start fetching and loading `model_name` in the background.
+
+    Returns as soon as the work is scheduled. Safe to call repeatedly: a request
+    for the model already being prepared is ignored rather than starting a
+    second download of the same files.
+    """
+    global _prepare_task
+
+    wanted = model_name or DEFAULT_MODEL
+    if _prepare_task is not None and not _prepare_task.done() and _prepare.get("model") == wanted:
+        return
+    have = wanted in downloaded_models()
+    _prepare.update({
+        "model": wanted,
+        "phase": "loading" if have else "downloading",
+        "detail": "",
+    })
+
+    async def run() -> None:
+        try:
+            await get_engine(wanted)
+            loaded = _engine.model_name if _engine else wanted
+            _prepare.update({
+                "phase": "ready",
+                # get_engine falls back to the default rather than leaving
+                # dictation dead; say so instead of reporting success for a
+                # model the user did not choose.
+                "detail": "" if loaded == wanted else f"fell back to {loaded}",
+                "model": loaded,
+            })
+        except Exception as exc:  # any failure is reported to the user as text
+            log.warning("speech model %r could not be prepared", wanted, exc_info=True)
+            _prepare.update({"phase": "error", "detail": str(exc)[:200]})
+
+    _prepare_task = asyncio.create_task(run())

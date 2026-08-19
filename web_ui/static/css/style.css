@@ -2285,6 +2285,193 @@ dialog.file-browser::backdrop { background: transparent; }
 }
 
 /* Right-click "copy path" menu. */
+/* ── Keyboard shortcuts ───────────────────────────────────────────────────── */
+
+.key-group { border-bottom: 1px solid var(--border); }
+.key-group:last-of-type { border-bottom: 0; }
+.key-group > summary {
+  cursor: pointer;
+  padding: var(--s2) 0;
+  font-weight: 600;
+  list-style: none;
+  display: flex;
+  align-items: center;
+  gap: var(--s2);
+}
+.key-group > summary::-webkit-details-marker { display: none; }
+/* A disclosure arrow that turns, matching the tool blocks in the transcript. */
+.key-group > summary::before {
+  content: "\25B8";
+  color: var(--text-dim);
+  transition: transform 120ms ease;
+}
+.key-group[open] > summary::before { transform: rotate(90deg); }
+.key-count {
+  margin-left: auto;
+  font-size: var(--fs-small);
+  color: var(--text-dim);
+  font-weight: 400;
+}
+
+.key-row {
+  display: flex;
+  align-items: center;
+  gap: var(--s2);
+  padding: 3px 0 3px var(--s4);
+}
+.key-label { flex: 1; min-width: 0; }
+.key-combo {
+  font-family: var(--mono, monospace);
+  font-size: var(--fs-small);
+  color: var(--text);
+  background: var(--bg-raised);
+  border: 1px solid var(--border-strong);
+  border-radius: 4px;
+  padding: 2px 8px;
+  cursor: pointer;
+  white-space: nowrap;
+}
+.key-combo:hover { border-color: rgba(var(--accent-rgb), 0.6); }
+.key-combo.capturing {
+  border-color: var(--accent);
+  color: var(--accent);
+}
+/* Not rebindable: it is the behaviour of a control, not a shortcut. */
+.key-combo-fixed {
+  cursor: default;
+  color: var(--text-dim);
+  border-style: dashed;
+}
+.key-combo-fixed:hover { border-color: var(--border-strong); }
+.key-reset {
+  background: none;
+  border: 0;
+  color: var(--text-dim);
+  font-size: var(--fs-small);
+  cursor: pointer;
+  padding: 0 2px;
+}
+.key-reset:hover { color: var(--accent); }
+.key-hint, .key-note {
+  font-size: var(--fs-small);
+  color: var(--text-dim);
+}
+.key-hint { padding-top: var(--s3); }
+.key-warning {
+  font-size: var(--fs-small);
+  color: var(--accent);
+  padding-bottom: var(--s2);
+}
+
+/* The same list, reachable from any page. */
+.keys-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 9500;
+  display: flex;
+  align-items: flex-start;
+  justify-content: center;
+  padding: 8vh var(--s4) var(--s4);
+  background: rgba(0, 0, 0, 0.6);
+  overflow: auto;
+}
+.keys-overlay[hidden] { display: none; }
+.keys-card {
+  width: min(620px, 100%);
+  padding: var(--s4);
+  background: var(--bg-raised);
+  border: 1px solid var(--border-strong);
+  border-radius: 8px;
+  box-shadow: 0 10px 40px rgba(0, 0, 0, 0.5);
+}
+.keys-head {
+  display: flex;
+  align-items: center;
+  margin-bottom: var(--s3);
+}
+.keys-head h2 { margin: 0; flex: 1; }
+.keys-close {
+  background: none;
+  border: 0;
+  color: var(--text-dim);
+  font-size: 20px;
+  line-height: 1;
+  cursor: pointer;
+}
+.keys-close:hover { color: var(--text); }
+
+/* ── Image preview ────────────────────────────────────────────────────────── */
+/* Above everything, including the file manager's modal backdrop, because it is
+   opened *from* the file manager as well as from a path in the transcript.
+
+   The image itself is the whole surface: no frame and no padding, so it fills
+   as much of the viewport as its aspect ratio allows. The caption and hint
+   float over it rather than taking space from it, and there is no close button
+   -- a click anywhere closes, and Esc is on the hint. A button would have to
+   sit somewhere, and every somewhere is on top of the picture. */
+.image-preview {
+  position: fixed;
+  inset: 0;
+  z-index: 10000;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  overflow: hidden;
+  background: rgba(0, 0, 0, 0.88);
+  cursor: zoom-out;
+  /* A drag is a pan, never a text selection or a browser image-drag. */
+  user-select: none;
+  touch-action: none;
+}
+.image-preview[hidden] { display: none; }
+/* Laid out at natural size and scaled by transform (see ImagePreview): the
+   element's hit area is then exactly the painted picture, so a click on the
+   image and a click beside it can mean different things. */
+.image-preview img {
+  max-width: none;
+  max-height: none;
+  /* A transparent PNG is unreadable on a dark ground; give it a checkerboard. */
+  background: repeating-conic-gradient(#2a2a2a 0% 25%, #202020 0% 50%) 50% / 16px 16px;
+  transform-origin: center center;
+  -webkit-user-drag: none;
+}
+/* Once zoomed the cursor advertises panning instead of closing. */
+.image-preview.zoomed { cursor: grab; }
+.image-preview.zoomed:active { cursor: grabbing; }
+
+/* Overlaid, and out of the way of a pan: they never intercept the pointer, and
+   they fade back until the mouse is over them. */
+.image-preview-caption,
+.image-preview-hint {
+  position: fixed;
+  left: 50%;
+  transform: translateX(-50%);
+  max-width: min(90vw, 900px);
+  padding: 4px 10px;
+  font-size: var(--fs-small);
+  border-radius: 999px;
+  background: rgba(0, 0, 0, 0.6);
+  opacity: 0.5;
+  transition: opacity 120ms ease;
+}
+.image-preview-caption {
+  bottom: 12px;
+  color: var(--text-dim);
+  word-break: break-all;
+  text-align: center;
+  /* The one thing worth selecting: the path, to paste somewhere else. */
+  user-select: text;
+  cursor: text;
+  pointer-events: auto;
+}
+.image-preview-hint {
+  top: 12px;
+  color: var(--text-dim);
+  pointer-events: none;
+}
+.image-preview:hover .image-preview-caption,
+.image-preview:hover .image-preview-hint { opacity: 0.85; }
+
 .ctx-menu {
   position: fixed;
   z-index: 1000;

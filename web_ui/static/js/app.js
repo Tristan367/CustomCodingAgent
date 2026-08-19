@@ -1302,10 +1302,11 @@ function completeToolCall(event) {
   const label = node.querySelector('.tool-label');
   if (label) {
     label.textContent = event.title || event.name;
-    if (['read', 'write', 'edit'].includes(node._name)) {
-      const path = toolFilePath(event.title);
-      if (path) { node.dataset.path = path; node.classList.add('fe-openable'); }
-    }
+    // The tool reports the file it acted on; the title is a display string that
+    // may be truncated, so it is only a fallback.
+    const path = event.file_path
+      || (['read', 'write', 'edit'].includes(node._name) ? toolFilePath(event.title) : null);
+    if (path) { node.dataset.path = path; node.classList.add('fe-openable'); }
   }
   const dot = node.querySelector('.spinner-dot');
   if (dot) dot.remove();
@@ -3665,11 +3666,17 @@ function toolFilePath(title) {
   return t;
 }
 
-/* Tag read/write/edit tool blocks so their expanded body opens the editor. */
+/* Tag read/write/edit tool blocks so their expanded body opens the editor.
+ *
+ * The server renders the resolved path into data-path. The title is only a
+ * fallback for rows written before that was stored -- and a poor one, since a
+ * title longer than 60 characters is left-truncated for display, which is why
+ * most edit and write blocks used to be unclickable. */
 function markOpenableTools(root) {
   (root || document).querySelectorAll('.message.tool').forEach((node) => {
     if (node.dataset.pathSet) return;
     node.dataset.pathSet = '1';
+    if (node.dataset.path) { node.classList.add('fe-openable'); return; }
     const role = node.querySelector('.msg-role');
     const name = role ? role.textContent.trim().toLowerCase() : '';
     if (!['read', 'write', 'edit'].includes(name)) return;
@@ -3694,18 +3701,17 @@ document.addEventListener('click', (e) => {
     // Selecting text (e.g. to copy) must not open the editor.
     const sel = window.getSelection();
     if (sel && sel.toString()) return;
-    FileEditor.open(tool.dataset.path, {});
+    openAnyPath(tool.dataset.path);
   }
 });
 
-/* A prose file reference may point at a directory, in which case the file
- * manager opens on it rather than the text editor. Ask the server which one it
- * is; if the lookup fails, fall through to the editor, which reports a clear
- * "does not exist" for anything that is not a file. */
-async function openFileRef(ref) {
-  const path = ref.dataset.path;
-  const line = ref.dataset.line ? Number(ref.dataset.line) : null;
-  const lineEnd = ref.dataset.lineEnd ? Number(ref.dataset.lineEnd) : null;
+/* A path can be three things, and each has its own surface: a directory opens
+ * the file manager, an image opens the preview, anything else opens the text
+ * editor. Ask the server which it is; if the lookup fails, fall through to the
+ * editor, which reports a clear "does not exist" for anything that is not a
+ * file. */
+async function openAnyPath(path, opts = {}) {
+  if (isImagePath(path)) { ImagePreview.open(path); return; }
   try {
     const resp = await fetch(
       `/api/files/stat?session_id=${encodeURIComponent(App.sessionId)}&path=${encodeURIComponent(path)}`);
@@ -3714,8 +3720,189 @@ async function openFileRef(ref) {
       if (st.is_dir) { FileBrowser.open(st.path); return; }
     }
   } catch (_) { /* fall through to the editor */ }
-  FileEditor.open(path, { line, lineEnd });
+  FileEditor.open(path, opts);
 }
+
+function openFileRef(ref) {
+  return openAnyPath(ref.dataset.path, {
+    line: ref.dataset.line ? Number(ref.dataset.line) : null,
+    lineEnd: ref.dataset.lineEnd ? Number(ref.dataset.lineEnd) : null,
+  });
+}
+
+/* Clicking an image path shows the image rather than sending it to a text
+ * editor that would refuse it.
+ *
+ * The image gets the whole viewport: no frame, no padding, nothing to shrink it
+ * but its own aspect ratio. Scroll to zoom about the pointer, drag to pan, Esc
+ * or a click beside it to close. Deliberately a lightweight overlay and not a
+ * <dialog>, so it sits above the editor and the file manager without joining
+ * their Escape-unwinding chain. */
+const ImagePreview = (() => {
+  const MIN_SCALE = 0.05;
+  const MAX_SCALE = 40;
+  // Below this a pointer-up is a click, not the end of a pan.
+  const DRAG_SLOP_PX = 3;
+
+  let node = null;
+  let img = null;
+  let caption = null;
+  let hint = null;
+  // The image is laid out at its natural size and scaled by transform, so the
+  // element's hit area is exactly the painted picture -- which is what lets a
+  // click on the image mean "nothing" and a click beside it mean "close".
+  // `fit` scales it to the viewport (up as well as down); `scale` is the user's
+  // zoom on top of that, so 1 always means "as large as it fits".
+  let fit = 1;
+  let scale = 1;
+  let x = 0;
+  let y = 0;
+  let dragging = false;
+  let moved = false;
+  let originX = 0;
+  let originY = 0;
+  // What the pointer went down on, since pointer capture rewrites the target of
+  // everything that follows. See the click handler.
+  let downTarget = null;
+
+  function ensure() {
+    if (node) return;
+    node = el('div', 'image-preview');
+    node.hidden = true;
+    img = document.createElement('img');
+    img.alt = '';
+    img.draggable = false;
+    caption = el('div', 'image-preview-caption');
+    hint = el('div', 'image-preview-hint', 'scroll to zoom · drag to pan · esc to close');
+    node.append(img, caption, hint);
+    document.body.appendChild(node);
+
+    img.addEventListener('load', () => { measure(); reset(); });
+
+    // Clicking beside the picture closes; clicking the picture does not, or
+    // double-click-to-zoom could never land. The caption is exempt so it can be
+    // selected and copied.
+    //
+    // What was pressed, not `e.target`: capturing the pointer for the drag
+    // retargets every later event -- the click included -- to the element
+    // holding the capture, so by the time the click arrives its target is
+    // always the overlay and a click on the image read as a click beside it.
+    node.addEventListener('click', () => {
+      if (moved || downTarget === img || downTarget === caption) return;
+      hide();
+    });
+
+    node.addEventListener('wheel', (e) => {
+      e.preventDefault();
+      zoomAbout(e.clientX, e.clientY, Math.exp(-e.deltaY * 0.0015));
+    }, { passive: false });
+
+    node.addEventListener('pointerdown', (e) => {
+      downTarget = e.target;
+      if (e.button !== 0 || e.target === caption) return;
+      dragging = true;
+      moved = false;
+      originX = e.clientX - x;
+      originY = e.clientY - y;
+      node.setPointerCapture(e.pointerId);
+    });
+    node.addEventListener('pointermove', (e) => {
+      if (!dragging) return;
+      const nx = e.clientX - originX;
+      const ny = e.clientY - originY;
+      if (Math.abs(nx - x) + Math.abs(ny - y) > DRAG_SLOP_PX) moved = true;
+      x = nx;
+      y = ny;
+      apply();
+    });
+    const endDrag = (e) => {
+      if (!dragging) return;
+      dragging = false;
+      if (node.hasPointerCapture(e.pointerId)) node.releasePointerCapture(e.pointerId);
+      // The click that follows must see whether this was a drag, so the flag is
+      // cleared only after it has been dispatched.
+      setTimeout(() => { moved = false; }, 0);
+    };
+    node.addEventListener('pointerup', endDrag);
+    node.addEventListener('pointercancel', endDrag);
+
+    window.addEventListener('resize', () => {
+      if (node.hidden) return;
+      measure();
+      apply();
+    });
+  }
+
+  /* The scale at which the image exactly fills one axis of the viewport. */
+  function measure() {
+    const w = img.naturalWidth;
+    const h = img.naturalHeight;
+    fit = (w && h) ? Math.min(window.innerWidth / w, window.innerHeight / h) : 1;
+  }
+
+  /* Keep the point under the cursor fixed while the scale changes, which is
+   * what makes zooming feel like moving a lens rather than resizing a box. */
+  function zoomAbout(clientX, clientY, factor) {
+    const next = Math.min(MAX_SCALE, Math.max(MIN_SCALE, scale * factor));
+    if (next === scale) return;
+    const rect = img.getBoundingClientRect();
+    const cx = clientX - (rect.left + rect.width / 2);
+    const cy = clientY - (rect.top + rect.height / 2);
+    const ratio = next / scale;
+    x -= cx * (ratio - 1);
+    y -= cy * (ratio - 1);
+    scale = next;
+    apply();
+  }
+
+  function apply() {
+    img.style.transform = `translate(${x}px, ${y}px) scale(${scale * fit})`;
+    node.classList.toggle('zoomed', Math.abs(scale - 1) > 0.01);
+  }
+
+  function reset() {
+    scale = 1;
+    x = 0;
+    y = 0;
+    apply();
+  }
+
+  function open(path) {
+    ensure();
+    fit = 1;
+    reset();
+    // session_id lets the server resolve a relative path against the project
+    // directory. Cache-busted so re-opening after the agent overwrote the file
+    // shows the new one; a screenshot taken twice to the same path is normal.
+    img.src = `/api/files/image?path=${encodeURIComponent(path)}`
+      + `&session_id=${encodeURIComponent(App.sessionId || '')}&t=${Date.now()}`;
+    img.alt = path;
+    caption.textContent = path;
+    caption.title = path;
+    node.hidden = false;
+  }
+
+  function hide() {
+    if (!node || node.hidden) return;
+    node.hidden = true;
+    dragging = false;
+    // Drop the decoded bitmap; a full-resolution screenshot is not small.
+    img.removeAttribute('src');
+  }
+
+  function isOpen() { return !!node && !node.hidden; }
+
+  return { open, hide, isOpen };
+})();
+
+/* Esc closes the preview first, ahead of the editor and dictation. */
+document.addEventListener('keydown', (e) => {
+  if (e.key === 'Escape' && ImagePreview.isOpen()) {
+    e.preventDefault();
+    e.stopPropagation();
+    ImagePreview.hide();
+  }
+}, true);
 
 /* Right-click a file path (in prose or a tool block) to copy it to the clipboard. */
 const CopyPathMenu = (() => {
@@ -4495,7 +4682,8 @@ const FileEditor = (() => {
     if (s.sessionId) mem(s.sessionId).open = false;
   }
 
-  return { open, close, forceClose, suspend, restore, reopen, onRenamed, onMoved, onDeleted };
+  return { open, close, forceClose, suspend, restore, reopen, toggleSplit,
+           onRenamed, onMoved, onDeleted };
 })();
 
 const FileBrowser = (() => {
@@ -4740,6 +4928,7 @@ const FileBrowser = (() => {
     const child = fullPath(entry.name);
     if (entry.is_dir) open(child);
     else if (attachMode) attachPath(child);
+    else if (isImagePath(child)) ImagePreview.open(child);
     else { dlg.close(); FileEditor.open(child, {}); }
   }
 
@@ -4973,3 +5162,345 @@ function openFileManager() {
 function openEditorLast() {
   FileEditor.reopen();
 }
+
+/* ── Keyboard shortcuts ───────────────────────────────────────────────────── */
+
+/* One table, one handler, one place to look them up.
+ *
+ * Everything here is rebindable, because the useful combinations are exactly
+ * the ones a browser or a window manager may already have claimed, and which
+ * ones those are depends on the machine. Defaults live in this file rather than
+ * in the database, so only what the user deliberately changed is stored and a
+ * better default in a later version still reaches everyone else.
+ *
+ * A combo is normalised to "Ctrl+Alt+KeyE" using `event.code`, so a binding
+ * follows the physical key and does not break on a non-US layout. */
+const Keys = (() => {
+  const STORAGE = '/_settings/keybinds';
+  let overrides = {};
+  let capturing = null;   // action id currently listening for a new combo
+
+  /* `whileTyping` is the exception, not the rule: a shortcut that fires while
+   * the user is writing a message would eat their keystrokes. */
+  const ACTIONS = [
+    { id: 'session.next', group: 'Sessions', label: 'Next session',
+      combo: 'Alt+BracketRight', run: () => cycleSession(1) },
+    { id: 'session.prev', group: 'Sessions', label: 'Previous session',
+      combo: 'Alt+BracketLeft', run: () => cycleSession(-1) },
+    { id: 'session.new', group: 'Sessions', label: 'New session',
+      combo: 'Alt+KeyN', run: () => { window.location.href = '/'; } },
+    { id: 'session.close', group: 'Sessions', label: 'Close this session tab',
+      combo: 'Alt+KeyW', run: () => closeCurrentTab() },
+    { id: 'session.home', group: 'Sessions', label: 'Home',
+      combo: 'Alt+KeyH', run: () => { window.location.href = '/'; } },
+
+    { id: 'compose.focus', group: 'Writing', label: 'Focus the message box',
+      combo: 'Alt+KeyI', run: () => focusComposer() },
+    { id: 'compose.blur', group: 'Writing', label: 'Leave the message box',
+      combo: 'Escape', whileTyping: true, run: () => blurComposer(),
+      when: () => document.activeElement === App.els.textarea && !App.streaming },
+    { id: 'compose.dictate', group: 'Writing', label: 'Toggle dictation',
+      combo: 'Ctrl+KeyM', whileTyping: true, run: () => Dictation.toggle() },
+    { id: 'compose.attach', group: 'Writing', label: 'Attach a file',
+      combo: 'Alt+KeyA', run: () => openAttachBrowser() },
+    { id: 'compose.broadcast', group: 'Writing', label: 'Broadcast to every session',
+      combo: 'Ctrl+Shift+Enter', whileTyping: true, run: () => openBroadcast() },
+
+    { id: 'files.manager', group: 'Files', label: 'Open the file manager',
+      combo: 'Alt+KeyO', run: () => openFileManager() },
+    { id: 'files.editor', group: 'Files', label: 'Open / close the editor',
+      combo: 'Ctrl+KeyE', run: () => toggleEditor() },
+    { id: 'files.split', group: 'Files', label: 'Half-height editor split',
+      combo: 'Alt+KeyS', run: () => FileEditor.toggleSplit() },
+
+    { id: 'run.stop', group: 'Running', label: 'Stop this session',
+      combo: 'Escape', whileTyping: true, run: () => stopStreaming(),
+      when: () => App.streaming },
+    { id: 'run.stopAll', group: 'Running', label: 'Stop every session',
+      combo: 'Alt+Period', run: () => stopAll() },
+
+    { id: 'help.keys', group: 'Help', label: 'Keyboard shortcuts',
+      combo: 'Shift+Slash', run: () => Keys.overlay() },
+  ];
+
+  /* Documented but not rebindable: they are the behaviour of a control rather
+   * than a shortcut, and rebinding them would break the control. */
+  const FIXED = [
+    { group: 'Writing', label: 'Send the message', combo: 'Enter' },
+    { group: 'Writing', label: 'New line', combo: 'Shift+Enter' },
+    { group: 'Files', label: 'Save the open file', combo: 'Ctrl+KeyS' },
+    { group: 'Sessions', label: 'Jump to session 1-9', combo: 'Alt+1 … Alt+9' },
+  ];
+
+  const byId = new Map(ACTIONS.map((a) => [a.id, a]));
+
+  function comboOf(e) {
+    if (['Control', 'Alt', 'Shift', 'Meta'].includes(e.key)) return '';
+    const parts = [];
+    if (e.ctrlKey) parts.push('Ctrl');
+    if (e.altKey) parts.push('Alt');
+    if (e.shiftKey) parts.push('Shift');
+    if (e.metaKey) parts.push('Meta');
+    parts.push(e.code || e.key);
+    return parts.join('+');
+  }
+
+  function bindingFor(action) {
+    const override = overrides[action.id];
+    return override === undefined ? action.combo : override;
+  }
+
+  /* "Alt+BracketRight" reads as "Alt+]" to a human. */
+  const KEY_NAMES = {
+    BracketLeft: '[', BracketRight: ']', Period: '.', Comma: ',', Slash: '/',
+    Backslash: '\\', Semicolon: ';', Quote: "'", Backquote: '`',
+    Minus: '-', Equal: '=', Space: 'Space', Escape: 'Esc',
+    ArrowLeft: '←', ArrowRight: '→', ArrowUp: '↑', ArrowDown: '↓',
+  };
+
+  function pretty(combo) {
+    if (!combo) return 'unbound';
+    return combo.split('+').map((part) => {
+      if (part.startsWith('Key')) return part.slice(3);
+      if (part.startsWith('Digit')) return part.slice(5);
+      return KEY_NAMES[part] || part;
+    }).join(' + ');
+  }
+
+  function conflict(combo, exceptId) {
+    if (!combo) return null;
+    return ACTIONS.find((a) => a.id !== exceptId && bindingFor(a) === combo
+      && !(a.when || byId.get(exceptId)?.when)) || null;
+  }
+
+  async function persist() {
+    try {
+      await fetch(STORAGE, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(overrides),
+      });
+    } catch (_) { /* the binding still works for this page */ }
+  }
+
+  async function load() {
+    try {
+      const resp = await fetch(STORAGE);
+      if (resp.ok) overrides = (await resp.json()).keybinds || {};
+    } catch (_) { overrides = {}; }
+    renderAll();
+  }
+
+  function rebind(id, combo) {
+    const action = byId.get(id);
+    if (!action) return;
+    if (combo === action.combo) delete overrides[id];
+    else overrides[id] = combo;
+    persist();
+    renderAll();
+  }
+
+  function reset(id) {
+    delete overrides[id];
+    persist();
+    renderAll();
+  }
+
+  document.addEventListener('keydown', (e) => {
+    const combo = comboOf(e);
+    if (!combo) return;
+
+    // Capturing a replacement: swallow everything except the way out.
+    if (capturing) {
+      e.preventDefault();
+      e.stopPropagation();
+      if (combo === 'Escape') { capturing = null; renderAll(); return; }
+      if (combo === 'Backspace') { rebind(capturing, ''); capturing = null; return; }
+      const clash = conflict(combo, capturing);
+      if (clash) { renderAll(`${pretty(combo)} is already ${clash.label.toLowerCase()}`); return; }
+      const id = capturing;
+      capturing = null;
+      rebind(id, combo);
+      return;
+    }
+
+    const typing = isTyping(e.target);
+    for (const action of ACTIONS) {
+      if (bindingFor(action) !== combo) continue;
+      if (typing && !action.whileTyping) continue;
+      if (action.when && !action.when()) continue;
+      e.preventDefault();
+      if (!e.repeat) action.run();
+      return;
+    }
+  }, true);
+
+  /* ── The panel ─────────────────────────────────────────────────────────── */
+
+  function groups() {
+    const out = new Map();
+    for (const action of ACTIONS) {
+      if (!out.has(action.group)) out.set(action.group, { actions: [], fixed: [] });
+      out.get(action.group).actions.push(action);
+    }
+    for (const entry of FIXED) {
+      if (!out.has(entry.group)) out.set(entry.group, { actions: [], fixed: [] });
+      out.get(entry.group).fixed.push(entry);
+    }
+    return out;
+  }
+
+  function row(action, note) {
+    const line = el('div', 'key-row');
+    line.appendChild(el('span', 'key-label', action.label));
+    const combo = bindingFor(action);
+    const button = el('button', 'key-combo' + (capturing === action.id ? ' capturing' : ''));
+    button.type = 'button';
+    button.textContent = capturing === action.id ? 'press keys…' : pretty(combo);
+    button.title = 'Click, then press the keys you want. Esc cancels, Backspace unbinds.';
+    button.addEventListener('click', () => {
+      capturing = capturing === action.id ? null : action.id;
+      renderAll();
+    });
+    line.appendChild(button);
+    if (overrides[action.id] !== undefined) {
+      const undo = el('button', 'key-reset', 'reset');
+      undo.type = 'button';
+      undo.title = `Back to ${pretty(action.combo)}`;
+      undo.addEventListener('click', () => reset(action.id));
+      line.appendChild(undo);
+    }
+    if (note) line.appendChild(el('span', 'key-note', note));
+    return line;
+  }
+
+  function fixedRow(entry) {
+    const line = el('div', 'key-row key-row-fixed');
+    line.appendChild(el('span', 'key-label', entry.label));
+    line.appendChild(el('span', 'key-combo key-combo-fixed', pretty(entry.combo)));
+    return line;
+  }
+
+  /* Collapsed by default: there are enough of these that an always-open list
+   * is a wall, and the group names are what someone is scanning for. */
+  function renderInto(host, note) {
+    if (!host) return;
+    const open = new Set(
+      [...host.querySelectorAll('details[open]')].map((d) => d.dataset.group)
+    );
+    host.textContent = '';
+    if (note) host.appendChild(el('div', 'key-warning', note));
+    for (const [name, entry] of groups()) {
+      const box = document.createElement('details');
+      box.className = 'key-group';
+      box.dataset.group = name;
+      if (open.has(name)) box.open = true;
+      const head = document.createElement('summary');
+      head.textContent = name;
+      head.appendChild(el('span', 'key-count', String(entry.actions.length + entry.fixed.length)));
+      box.appendChild(head);
+      entry.actions.forEach((a) => box.appendChild(row(a)));
+      entry.fixed.forEach((f) => box.appendChild(fixedRow(f)));
+      host.appendChild(box);
+    }
+    host.appendChild(el('div', 'key-hint',
+      'Click a shortcut and press the keys you want. Esc cancels, Backspace unbinds. '
+      + 'Some combinations are reserved by the browser and never reach the page.'));
+  }
+
+  function renderAll(note) {
+    renderInto(document.getElementById('keybinds-list'), note);
+    renderInto(document.getElementById('keybinds-overlay-list'), note);
+  }
+
+  /* Reachable from any page, since that is where you want it. */
+  function overlay() {
+    let node = document.getElementById('keybinds-overlay');
+    if (node && !node.hidden) { node.hidden = true; return; }
+    if (!node) {
+      node = el('div', 'keys-overlay');
+      node.id = 'keybinds-overlay';
+      const card = el('div', 'keys-card');
+      const head = el('div', 'keys-head');
+      head.appendChild(el('h2', null, 'Keyboard shortcuts'));
+      const close = button('×', 'keys-close', () => { node.hidden = true; });
+      close.title = 'Close (Esc)';
+      head.appendChild(close);
+      card.appendChild(head);
+      const list = el('div', null);
+      list.id = 'keybinds-overlay-list';
+      card.appendChild(list);
+      node.appendChild(card);
+      node.addEventListener('click', (e) => {
+        if (!e.target.closest('.keys-card')) node.hidden = true;
+      });
+      document.body.appendChild(node);
+    }
+    node.hidden = false;
+    renderAll();
+  }
+
+  document.addEventListener('keydown', (e) => {
+    const node = document.getElementById('keybinds-overlay');
+    if (e.key === 'Escape' && node && !node.hidden && !capturing) {
+      e.preventDefault();
+      e.stopPropagation();
+      node.hidden = true;
+    }
+  }, true);
+
+  return { load, renderAll, overlay, pretty, bindingFor, ACTIONS };
+})();
+
+/* ── What the shortcuts drive ─────────────────────────────────────────────── */
+
+function sessionTabs() {
+  return Array.from(document.querySelectorAll('#tab-scroll .tab-wrap'));
+}
+
+/* Wraps around, so repeated presses walk the whole bar rather than stopping. */
+function cycleSession(step) {
+  const tabs = sessionTabs();
+  if (tabs.length < 2) return;
+  const at = tabs.findIndex((t) => t.dataset.sid === App.sessionId);
+  const next = tabs[(((at < 0 ? 0 : at) + step) % tabs.length + tabs.length) % tabs.length];
+  next?.querySelector('a.tab')?.click();
+}
+
+function jumpToSession(index) {
+  sessionTabs()[index]?.querySelector('a.tab')?.click();
+}
+
+function closeCurrentTab() {
+  if (!App.sessionId) return;
+  const tab = sessionTabs().find((t) => t.dataset.sid === App.sessionId);
+  tab?.querySelector('.tab-close')?.click();
+}
+
+function focusComposer() {
+  const box = App.els.textarea || document.getElementById('chat-textarea');
+  if (!box) return;
+  box.focus();
+  box.setSelectionRange(box.value.length, box.value.length);
+}
+
+function blurComposer() {
+  (App.els.textarea || document.getElementById('chat-textarea'))?.blur();
+}
+
+function toggleEditor() {
+  if (document.body.classList.contains('editor-open')) FileEditor.close();
+  else FileEditor.reopen();
+}
+
+/* Alt+1 … Alt+9 jump straight to a tab. One handler rather than nine entries in
+ * the table: they are a range, and rebinding them individually is noise. */
+document.addEventListener('keydown', (e) => {
+  if (!e.altKey || e.ctrlKey || e.metaKey || isTyping(e.target)) return;
+  const match = /^Digit([1-9])$/.exec(e.code || '');
+  if (!match) return;
+  e.preventDefault();
+  jumpToSession(Number(match[1]) - 1);
+}, true);
+
+Keys.load();

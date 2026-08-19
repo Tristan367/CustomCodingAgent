@@ -315,6 +315,14 @@ async function restartMyriadCode(button) {
         </div>
     </section>
 
+    {# Bottom of the home page: the reference you go looking for once, and then
+       stop needing. Groups are collapsed so it does not push the sessions list
+       off the screen for people who never touch a shortcut. #}
+    <section class="panel" id="keybinds-panel">
+        <h2>Keyboard shortcuts</h2>
+        <div id="keybinds-list"></div>
+    </section>
+
     <div class="page-footer">
         <button type="button" class="btn-secondary btn-sm" onclick="restartMyriadCode(this)">
             Restart MyriadCode

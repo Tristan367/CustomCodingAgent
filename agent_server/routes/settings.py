@@ -79,6 +79,42 @@ async def save_expand_setting(request: Request):
     return {"ok": True}
 
 
+@router.get("/_settings/keybinds")
+async def get_keybinds():
+    """Read the shortcut overrides. A GET rather than page context because the
+    shortcuts work on every page, and threading them through four separate
+    context builders is four places to forget."""
+    raw = await db.get_setting("keybinds", "")
+    try:
+        values = json.loads(raw) if raw else {}
+    except json.JSONDecodeError:
+        values = {}
+    return {"keybinds": values if isinstance(values, dict) else {}}
+
+
+@router.post("/_settings/keybinds")
+async def save_keybinds(request: Request):
+    """The user's keyboard shortcut overrides, as {action id: combo}.
+
+    Only overrides are stored, never the whole table: a default that changes in
+    a later version should reach everyone who has not deliberately rebound it.
+    An empty combo means "this action has no key", which is a real choice and
+    distinct from "not overridden".
+    """
+    try:
+        body = await request.json()
+    except Exception:
+        return {"ok": False}
+    if not isinstance(body, dict):
+        return {"ok": False}
+    binds = {
+        str(action)[:64]: str(combo)[:64]
+        for action, combo in list(body.items())[:200]
+    }
+    await db.set_setting("keybinds", json.dumps(binds))
+    return {"ok": True, "keybinds": binds}
+
+
 @router.post("/_settings/hide")
 async def save_hide_flags(request: Request):
     """Whether past thinking blocks / tool calls are hidden from the transcript."""

@@ -3025,17 +3025,27 @@ function insertAtCursor(textarea, text) {
 
 /* ── Session controls ────────────────────────────────────────────────────── */
 
+/* Copying is invisible, so the menu closing is the acknowledgement -- the same
+ * signal a native menu gives when a command has been taken. The toast is the
+ * belt; this is the braces, and the only feedback if the toast is missed. */
+function copyProjectPath(button) {
+  navigator.clipboard.writeText(button.dataset.dir).then(showCopyToast).catch(() => {});
+  closeMenus();
+}
+
+function closeMenus() {
+  document.querySelectorAll('.dropdown-menu').forEach((m) => { m.hidden = true; });
+}
+
 function toggleMenu(button) {
   const menu = button.nextElementSibling;
   const opening = menu.hidden;
-  document.querySelectorAll('.dropdown-menu').forEach((m) => { m.hidden = true; });
+  closeMenus();
   menu.hidden = !opening;
 }
 
 document.addEventListener('click', (e) => {
-  if (!e.target.closest('.dropdown')) {
-    document.querySelectorAll('.dropdown-menu').forEach((m) => { m.hidden = true; });
-  }
+  if (!e.target.closest('.dropdown')) closeMenus();
 });
 
 async function setAutoApprove(enabled, persist) {
@@ -5220,7 +5230,10 @@ const Keys = (() => {
       combo: 'Escape', whileTyping: true, run: () => stopStreaming(),
       when: () => App.streaming },
     { id: 'run.stopAll', group: 'Running', label: 'Stop every session',
-      combo: 'Alt+Period', run: () => stopAll() },
+      // Deliberately awkward. This one aborts every run and every subagent in
+      // every session at once, and the cost of fumbling it is all of that work.
+      // Alt+. was a chord you could hit reaching for a full stop.
+      combo: 'Ctrl+Alt+Shift+Escape', run: () => stopAll() },
 
     { id: 'help.keys', group: 'Help', label: 'Keyboard shortcuts',
       combo: 'Shift+Slash', run: () => Keys.overlay() },
@@ -5255,6 +5268,8 @@ const Keys = (() => {
     'Ctrl+KeyW': 'closing the browser tab', 'Ctrl+KeyT': 'a new browser tab',
     'Ctrl+KeyN': 'a new browser window', 'Ctrl+Shift+KeyN': 'a private window',
     'Alt+Tab': 'the window switcher', 'Alt+F4': 'closing the window',
+    'Ctrl+Escape': 'the start menu', 'Ctrl+Shift+Escape': 'the task manager',
+    'Ctrl+Alt+Escape': 'force-quit mode on KDE',
   };
 
   function reservedNote(combo) {
@@ -5298,10 +5313,23 @@ const Keys = (() => {
     }).join(' + ');
   }
 
+  /* Two actions may share a key when their `when` guards make them mutually
+   * exclusive -- Escape leaves the composer, or stops the run, never both at
+   * once. Anything else sharing a key is a bug, whether the user made it by
+   * rebinding or it shipped that way. */
+  function clashesWith(action) {
+    const combo = bindingFor(action);
+    if (!combo) return null;
+    return ACTIONS.find((other) => other.id !== action.id
+      && bindingFor(other) === combo
+      && !(action.when && other.when)) || null;
+  }
+
   function conflict(combo, exceptId) {
     if (!combo) return null;
+    const self = byId.get(exceptId);
     return ACTIONS.find((a) => a.id !== exceptId && bindingFor(a) === combo
-      && !(a.when || byId.get(exceptId)?.when)) || null;
+      && !(a.when && self?.when)) || null;
   }
 
   async function persist() {
@@ -5421,6 +5449,13 @@ const Keys = (() => {
       undo.title = `Back to ${pretty(action.combo)}`;
       undo.addEventListener('click', () => reset(action.id));
       line.appendChild(undo);
+    }
+    const clash = clashesWith(action);
+    if (clash) {
+      const flag = el('span', 'key-note key-clash', `also ${clash.label.toLowerCase()}`);
+      flag.title = 'Two actions on one key: whichever is listed first wins, and '
+        + 'the other never fires.';
+      line.appendChild(flag);
     }
     const claimed = reservedNote(action.digits ? combo + '+Digit1' : combo);
     if (claimed) {

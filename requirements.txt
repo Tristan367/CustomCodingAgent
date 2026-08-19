@@ -10,13 +10,9 @@ playwright>=1.45.0
 numpy>=1.26.0
 pillow>=10.0.0
 
-# dictation. faster-whisper downloads its own model on first use; the nvidia
-# wheels are what a GPU needs, and are optional -- without them it runs on the
-# CPU with int8, which is fine for a small model. ctranslate2 links against
-# CUDA 12, so these are the cu12 wheels even on a machine with a newer CUDA.
+# dictation. Downloads its own model on first use, and runs on the CPU with
+# int8 out of the box -- fine for a small model. For GPU, see requirements-gpu.txt.
 faster-whisper>=1.1.0
-nvidia-cublas-cu12; platform_system == "Linux" and platform_machine == "x86_64"
-nvidia-cudnn-cu12>=9,<10; platform_system == "Linux" and platform_machine == "x86_64"
 
 # in-app editor formatting
 black>=24.0.0

@@ -46,7 +46,7 @@
                 <hr>
                 <button type="button" onclick="openCompactModal()">Compact conversation&hellip;</button>
                 <button type="button" onclick="openThresholdModal()">Compaction threshold&hellip;</button>
-                <button type="button" onclick="navigator.clipboard.writeText(this.dataset.dir)"
+                <button type="button" onclick="copyProjectPath(this)"
                         data-dir="{{ session.project_dir }}">Copy project path</button>
                 <hr>
                 <details class="menu-settings">

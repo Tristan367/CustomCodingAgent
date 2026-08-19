@@ -166,6 +166,11 @@ ln -s "$PWD/bin/myriadcode" ~/.local/bin/myriadcode
 myriadcode                  # starts the server and opens the browser
 ```
 
+Dictation works out of the box on the CPU. For GPU dictation on an NVIDIA card,
+`uv pip install -r requirements-gpu.txt` — 2.3 GB of CUDA libraries, which is
+why they are not in the base install. Nothing else needs them, and the app finds
+them by itself if they are there.
+
 | | |
 |---|---|
 | `myriadcode` | start, and open a browser at it |

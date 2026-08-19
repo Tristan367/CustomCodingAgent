@@ -164,10 +164,11 @@ Two independent gates (`agent_server/permissions.py`):
   port, which meant nothing could be transcribed until you had installed
   whisper.cpp system-wide and downloaded a GGML file by hand. `pip install` and a
   model that fetches itself is a better deal for anyone not already set up.
-- **The device is found, not configured.** ctranslate2 links against CUDA 12,
-  which is usually not what a current distribution ships, so the libraries come
-  from the `nvidia-*-cu12` wheels and are `dlopen`'d with `RTLD_GLOBAL` at
-  startup. The documented alternative is exporting `LD_LIBRARY_PATH` before
+- **The device is found, not configured.** CPU int8 out of the box; the CUDA
+  libraries are a separate 2.3 GB opt-in (`requirements-gpu.txt`) that nothing
+  requires. ctranslate2 links against CUDA 12, which is usually not what a
+  current distribution ships, so they come from the `nvidia-*-cu12` wheels and
+  are `dlopen`'d with `RTLD_GLOBAL` at startup. The documented alternative is exporting `LD_LIBRARY_PATH` before
   starting Python — which a program cannot do for itself, and is the most common
   reason a GPU install silently runs on the CPU. Without a usable GPU it falls
   back to CPU int8, which is fine for a small model.
@@ -257,6 +258,12 @@ Two independent gates (`agent_server/permissions.py`):
   of them actually bite depends on the browser.
 - "Jump to session 1-9" binds a *prefix* (Alt+Shift by default) and answers to
   prefix+1 through prefix+9, so nine shortcuts cost one rebindable row.
+- Two actions sharing a key is flagged in the panel, defaults included -- unless
+  both carry a `when` guard that makes them mutually exclusive, which is how
+  Escape leaves the composer *or* stops the run without ambiguity.
+- Stopping every session is `Ctrl+Alt+Shift+Escape`: deliberately awkward,
+  because it aborts every run and every subagent at once and the cost of
+  fumbling it is all of that work.
 - Defaults live in the JS, not the database: only deliberate overrides are
   stored (`GET`/`POST /_settings/keybinds`), so a better default in a later
   version still reaches everyone who never rebound it.

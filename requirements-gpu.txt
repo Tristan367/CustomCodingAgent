@@ -1,0 +1,13 @@
+# Optional: GPU dictation on an NVIDIA card.
+#
+#     uv pip install -r requirements-gpu.txt      (or pip)
+#
+# 2.3 GB, which is why it is not in requirements.txt. Nothing needs it: without
+# these the speech model runs on the CPU with int8, and the app neither asks for
+# them nor complains. With them, it finds them by itself -- no LD_LIBRARY_PATH,
+# no wrapper script -- and reports the device it chose on the home page.
+#
+# cu12, not cu13: ctranslate2 links against CUDA 12 whatever your driver ships,
+# so these wheels are what it looks for even on a machine with a newer CUDA.
+nvidia-cublas-cu12
+nvidia-cudnn-cu12>=9,<10

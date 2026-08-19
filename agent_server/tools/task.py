@@ -8,6 +8,8 @@ the subagent raised.
 import asyncio
 import dataclasses
 import json
+from contextlib import asynccontextmanager
+from contextvars import ContextVar
 
 import agent_server.system_prompt  # deferred: subagent_parallel_cap in run_task
 from agent_server.config import MAX_TOOL_RESULT_CHARS
@@ -27,6 +29,15 @@ def _subagent_tools():
 # disabled list so a profile cannot accidentally re-enable it.
 TOP_LEVEL_ONLY = frozenset({"send_message"})
 
+# Never served from the shared fan-out cache, however identical the arguments.
+# The cache exists for tools whose answer is a pure function of what they were
+# asked -- `read` of a path, `grep` of a pattern. `task` is the opposite: it
+# spawns a fresh agent, and `count` exists precisely to get *independent*
+# attempts at the same question. Deduped, five subagents each asked to spawn
+# five children shared one spawn between them, and four of them were handed a
+# stranger's answer as their own.
+NEVER_SHARED = frozenset({"task"})
+
 # Final fallback — should only be used if default_subagent.md is missing AND
 # the DB has no subagent_body for any profile. Better than an empty prompt.
 SUBAGENT_FALLBACK = """You are a research subagent. Investigate and report back. \
@@ -34,96 +45,188 @@ Your tools are read-only. Work autonomously until you can fully answer the task,
 then reply with your findings. Include concrete file paths with line numbers \
 and relevant code snippets. Do not ask questions or describe your plan."""
 
-# Per-session semaphores keyed by session_id. Limits total concurrently-running
-# subagents across all tiers in a single session. Each entry is (capacity, sem).
-_session_sem: dict[str, tuple[int, asyncio.Semaphore]] = {}
+class _Limiter:
+    """A capacity gate whose limit may change while work is in flight.
+
+    A semaphore cannot do this. Changing the limit means constructing a new
+    semaphore, and the subagents already running hold permits on the old one --
+    so the replacement starts empty and briefly allows `capacity + in flight` to
+    run at once. That is how a cap of 5 comes to have a hundred agents under it.
+    Counting in-flight work explicitly and re-checking on every release has no
+    such window: the newest capacity always wins, and lowering it simply means
+    nothing new starts until enough finishes.
+
+    `capacity` of 0 means unlimited.
+    """
+
+    __slots__ = ("_free", "capacity", "in_flight")
+
+    def __init__(self):
+        self.capacity = 0
+        self.in_flight = 0
+        self._free = asyncio.Condition()
+
+    async def acquire(self, capacity: int, wait: bool = True):
+        async with self._free:
+            self.capacity = capacity
+            if wait:
+                while self.capacity > 0 and self.in_flight >= self.capacity:
+                    await self._free.wait()
+            self.in_flight += 1
+
+    async def release(self):
+        async with self._free:
+            self.in_flight -= 1
+            self._free.notify_all()
+
+
+class _Permit:
+    """One agent's claim on the session-wide gate, for as long as it is working.
+
+    The claim is dropped while the agent waits on subagents of its own. That is
+    what keeps the cap both meaningful and deadlock-free: a permit stands for
+    "actively spending a model call", not "exists". Held across a nested spawn,
+    three agents under a cap of three would each be waiting for children that
+    can never get a permit, because their parents are holding all of them --
+    a hang with no output and no error, which is the worst way for a limit to
+    fail. Released across it, the only agents holding permits are ones doing
+    work, so something is always finishing and the queue always drains.
+    """
+
+    __slots__ = ("capacity", "gate", "held")
+
+    def __init__(self, gate: _Limiter, capacity: int):
+        self.gate = gate
+        self.capacity = capacity
+        self.held = True
+
+    @asynccontextmanager
+    async def paused(self):
+        """Give the permit back for the duration of a nested spawn."""
+        await self.gate.release()
+        self.held = False
+        try:
+            yield
+        finally:
+            # A cancellation here leaves `held` False, so `close` below does not
+            # release a permit this agent no longer has.
+            await self.gate.acquire(self.capacity)
+            self.held = True
+
+    async def close(self):
+        if self.held:
+            self.held = False
+            await self.gate.release()
+
+
+@asynccontextmanager
+async def _no_permit():
+    """Stand-in for the master agent, which holds no session permit."""
+    yield
+
+
+# The gate an agent's own subagents queue on. Each agent instance gets its own,
+# so the cap is "how many children may this agent have running at once" --
+# shared across every `task` call it makes, because a model that issues four
+# calls in one round is still one agent fanning out.
+_spawn_gate: ContextVar[_Limiter | None] = ContextVar("spawn_gate", default=None)
+# The session permit this agent is holding, if it is a subagent at all.
+_permit: ContextVar[_Permit | None] = ContextVar("session_permit", default=None)
+
+# session_id -> the master agent's spawn gate and the session-wide gate. These
+# outlive a single turn, so they are keyed rather than held in a contextvar.
+_master_gates: dict[str, _Limiter] = {}
+_session_gates: dict[str, _Limiter] = {}
+
+
+def running_subagents(session_id: str) -> int:
+    """How many subagents are actively working in this session, all tiers."""
+    gate = _session_gates.get(session_id)
+    return gate.in_flight if gate else 0
 
 
 def forget_session(session_id: str) -> None:
-    """Drop the per-session semaphore when a session is deleted."""
-    _session_sem.pop(session_id, None)
+    """Drop the per-session gates when a session is deleted."""
+    _master_gates.pop(session_id, None)
+    _session_gates.pop(session_id, None)
 
 
 async def run_task(ctx: ToolContext, *, description: str, prompt: str, count: int = 1, **_) -> ToolResult:
     title = description[:70]
-    if count < 1:
-        count = 1
+    count = max(1, count)
 
-    tier = ctx.subagent_tier
-    cap = await agent_server.system_prompt.subagent_parallel_cap(ctx.prompt_profile or "default", tier)
-    gcap = await agent_server.system_prompt.max_concurrent_subagents(ctx.prompt_profile or "default")
-
+    profile = ctx.prompt_profile or "default"
+    session_id = ctx.session_id or ""
     # Subagents launched from here are one tier deeper. Passed to _run rather
     # than stored on the shared ctx, which is reused by every later tool call in
     # this turn and would otherwise remember the deeper tier forever.
-    child_tier = tier + 1
+    child_tier = ctx.subagent_tier + 1
 
-    # Ensure a session semaphore with the right capacity.
-    if gcap > 0 and ctx.session_id:
-        entry = _session_sem.get(ctx.session_id)
-        if entry is None or entry[0] != gcap:
-            sem = asyncio.Semaphore(gcap)
-            _session_sem[ctx.session_id] = (gcap, sem)
-        else:
-            sem = entry[1]
-    else:
-        sem = None
+    # ── the two limits, and what each one means ────────────────────────────
+    #
+    # The spawn cap belongs to *this agent*: how many children it may have
+    # running at once. Shared across every `task` call it makes, because a model
+    # that issues four calls in one round is one agent fanning out -- capping
+    # each call on its own let a limit of 5 put twenty subagents in flight. The
+    # cap read is the caller's own tier, so the master's limit governs its
+    # children and a tier-1 agent's limit governs its own, independently.
+    #
+    # The session gate is the ceiling across every tier at once. Over-quota
+    # spawns queue rather than failing: the work still happens, just staggered,
+    # which beats handing the model an error it has to plan around.
+    spawn_cap = await agent_server.system_prompt.subagent_parallel_cap(profile, ctx.subagent_tier)
+    session_cap = await agent_server.system_prompt.max_concurrent_subagents(profile)
+    spawn_gate = _spawn_gate.get() or _master_gates.setdefault(session_id, _Limiter())
+    session_gate = _session_gates.setdefault(session_id, _Limiter())
 
     async def _guarded(desc, prompt_text, t, tc=None):
-        if sem:
-            await sem.acquire()
+        if ctx.abort.is_set():
+            return ToolResult.error("cancelled", t)
+        await spawn_gate.acquire(spawn_cap)
         try:
-            return await _run(ctx, desc, prompt_text, t, tc, child_tier)
+            await session_gate.acquire(session_cap)
+            permit = _Permit(session_gate, session_cap)
+            # This child's own budget for grandchildren, and its own permit, so
+            # a nested `task` finds them instead of its parent's.
+            gate_token = _spawn_gate.set(_Limiter())
+            permit_token = _permit.set(permit)
+            try:
+                if ctx.abort.is_set():
+                    return ToolResult.error("cancelled", t)
+                return await _run(ctx, desc, prompt_text, t, tc, child_tier)
+            finally:
+                _spawn_gate.reset(gate_token)
+                _permit.reset(permit_token)
+                await permit.close()
         finally:
-            if sem:
-                sem.release()
+            await spawn_gate.release()
 
-    running = 0
-    if gcap > 0 and ctx.session_id:
-        entry = _session_sem.get(ctx.session_id)
-        if entry:
-            sem_obj = entry[1]
-            # _value is CPython implementation detail; guarded by hasattr.
-            if hasattr(sem_obj, '_value'):
-                running = max(0, entry[0] - sem_obj._value)
-    queued = max(0, count - running)
-    if queued > 0:
-        title = f"{description[:50]} ({running} running, {queued} queued)"
+    running = running_subagents(session_id)
+    if running:
+        title = f"{description[:50]} ({running} already running)"
 
-    if cap > 0 and count > cap:
-        return await _batched(ctx, description, prompt, title, count, cap, _guarded)
+    # A subagent spawning children is not itself working, so it stands down from
+    # the session gate until they are done. See _Permit.paused.
+    holder = _permit.get()
+    waiting = holder.paused() if holder is not None else _no_permit()
 
     try:
-        if count == 1:
-            return await _guarded(description, prompt, title)
-        tool_cache: dict = {}
-        tasks = [_guarded(description, prompt, title, tool_cache) for _ in range(count)]
-        results = await asyncio.gather(*tasks, return_exceptions=True)
-        return _combine(results, title)
+        async with waiting:
+            if count == 1:
+                return await _guarded(description, prompt, title)
+            # Every one is launched; the gates meter them. This replaced a
+            # batching loop that ran `cap` at a time and waited for all of them
+            # before starting the next group, so one slow agent idled the rest.
+            tool_cache: dict = {}
+            results = await asyncio.gather(
+                *[_guarded(description, prompt, title, tool_cache) for _ in range(count)],
+                return_exceptions=True,
+            )
+            return _combine(results, title)
     except asyncio.CancelledError:
         raise
     except Exception as e:
         return ToolResult.error(f"subagent failed: {type(e).__name__}: {e}", title)
-
-
-async def _batched(ctx, description, prompt, title, count, cap, _guarded):
-    """Run up to *cap* parallel subagents at a time, in sequence."""
-    parts = []
-    total_usage: dict = {}
-    remaining = count
-    batch_num = 0
-    while remaining > 0:
-        n = min(remaining, cap)
-        batch_num += 1
-        tool_cache: dict = {}
-        tasks = [_guarded(description, prompt, title, tool_cache) for _ in range(n)]
-        results = await asyncio.gather(*tasks, return_exceptions=True)
-        _append_results(parts, total_usage, results, (batch_num - 1) * cap)
-        remaining -= n
-        if remaining > 0 and ctx.abort.is_set():
-            parts.append(f"(cancelled after {count - remaining} of {count})")
-            break
-    return ToolResult(output="\n\n".join(parts), title=title, usage=total_usage or None)
 
 
 def _append_results(parts, total_usage, results, offset=0):
@@ -151,7 +254,7 @@ async def _run(ctx: ToolContext, description: str, prompt: str, title: str, tool
     from agent_server.providers.base import completion_with_retry
     from agent_server.system_prompt import subagent_body as _subagent_body
     from agent_server.system_prompt import subagent_disabled_tools
-    from agent_server.tools.registry import execute_tool, tool_schemas
+    from agent_server.tools.registry import execute_tool, get_tool, tool_schemas
 
     profile = ctx.prompt_profile or "default"
     # Nested tool calls (including a further `task`) must see this subagent's
@@ -264,7 +367,14 @@ async def _run(ctx: ToolContext, description: str, prompt: str, title: str, tool
             tool_name = tool_call_name(call)
             tool_args = parse_arguments(call)
             owner = True
-            if tool_cache is not None:
+            # A shared result must not outlive a change to what it describes.
+            # The cache is keyed on (tool, arguments) for the whole fan-out, so
+            # without this a `read` answered in the first round was still being
+            # handed out in the fifth -- after a sibling had edited the file.
+            tool = get_tool(tool_name)
+            if tool_cache is not None and not (tool and tool.parallel_safe):
+                tool_cache.clear()
+            if tool_cache is not None and tool_name not in NEVER_SHARED:
                 cache_key = (tool_name, json.dumps(tool_args, sort_keys=True))
                 task = tool_cache.get(cache_key)
                 if task is None:

@@ -184,3 +184,28 @@ async def test_broadcast_wakes_idle_and_queues_running(clean_db, monkeypatch):
     assert sent == 2
     assert started == [b["id"]]
     assert queued == [a["id"]]
+
+
+async def test_a_send_in_flight_when_everything_stops_does_not_wake_the_target(clean_db):
+    """Stop-all aborts every run and empties the mailbox. A send that was
+    already executing at that moment would otherwise deliver *after* the
+    clear-out and start the target up again -- so two sessions messaging each
+    other could outlive the one control meant to end everything at once."""
+    import asyncio
+
+    from agent_server.tools.base import ToolContext
+    from agent_server.tools.send_message import send_message
+
+    a = await db.create_session(name="alpha", project_dir="/tmp")
+    await db.create_session(name="beta", project_dir="/tmp")
+
+    abort = asyncio.Event()
+    abort.set()
+    ctx = ToolContext(session_id=a["id"], project_dir="/tmp", abort=abort)
+
+    result = await send_message(ctx, session="beta", message="keep going")
+
+    assert result.is_error
+    assert "cancelled" in result.output
+    rows = await db._fetchall("SELECT COUNT(*) AS n FROM mailbox", ())
+    assert rows[0]["n"] == 0

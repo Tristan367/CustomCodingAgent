@@ -29,6 +29,14 @@ async def send_message(ctx: ToolContext, *, session: str, message: str, **_) -> 
     # Wake the target if it is idle so the mail is actually picked up.
     from agent_server import agent
 
+    # Stop-all aborts every run and empties the mailbox. A send already in
+    # flight at that moment would otherwise land its message *after* the
+    # clear-out and wake the target straight back up -- so two sessions
+    # messaging each other could survive the one control that is meant to end
+    # everything at once.
+    if ctx.abort.is_set():
+        return ToolResult.error("cancelled before the message was sent", title)
+
     was_running = agent.is_running(target["id"])
     if was_running:
         # Defer to the next turn boundary; inserting mid-tool-loop would corrupt

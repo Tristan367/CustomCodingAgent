@@ -1881,12 +1881,19 @@ function appendPermissionCard(event) {
       // "Approved" card is pure noise taking up several lines.
       node.remove();
     } else {
-      // A rejection leaves no other trace, so keep one compact line.
-      actions.remove();
-      detail.remove();
-      sub.remove();
-      node.className = 'message notice permission-resolved';
-      head.textContent = `Rejected: ${truncate(event.command || event.path || 'tool call', 90)}`;
+      // A rejection leaves no other trace, so keep one compact line -- rebuilt
+      // as an ordinary transcript row rather than restyled in place. The card
+      // is `display: block`, which is what kept `.message`'s grid out of it;
+      // swapping the class alone handed the grid back its two columns with the
+      // text as the first child, so the rejected command was rendered down the
+      // 50px role gutter a character or two per line.
+      node.className = 'message notice notice-aborted';
+      node.textContent = '';
+      node.appendChild(roleEl('rejected'));
+      const body = el('div', 'msg-content');
+      body.appendChild(el('div', 'content-text',
+        `Rejected: ${truncate(event.command || event.path || 'tool call', 90)}`));
+      node.appendChild(body);
     }
     if (scope === 'session') markAutoApprove(true);
     resolveToolCall(event.tool_call_id, action, value, scope, event.scope);

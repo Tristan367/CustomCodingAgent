@@ -186,7 +186,11 @@ async def run_bash(
     cwd = str(ctx.resolve(workdir)) if workdir else ctx.project_dir
     if not os.path.isdir(cwd):
         cwd = ctx.project_dir
-    title = command.strip().splitlines()[0][:90]
+    # Ellipsised, because the transcript appends "(exit 0)" to this: a bare
+    # cut left rows reading `python3 todo.py li (exit 0)`, which looks like
+    # the command was mangled rather than merely shortened for display.
+    first_line = command.strip().splitlines()[0]
+    title = first_line if len(first_line) <= 90 else first_line[:89] + "\u2026"
 
     proc = None
     detached = False

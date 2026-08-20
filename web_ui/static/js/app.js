@@ -2226,36 +2226,27 @@ const Notifier = {
   },
 
   _playSound(sound) {
-    if (sound === 'chime') this._beep([1047, 1319, 1568]);
-    else if (sound === 'knock') this._beep([200, 300, 200]);
-    else if (sound === 'click') this._beep([1200, 1500]);
-    else {
-      // A user-uploaded file: play it through an Audio element.
-      const audio = new Audio('/_settings/sounds/' + encodeURIComponent(sound) + '/play');
-      audio.volume = this.volume || 0.5;
-      audio.play().catch(() => {});
-    }
+    if (SOUNDS[sound]) return this._synth(sound);
+    // A user-uploaded file: play it through an Audio element.
+    const audio = new Audio('/_settings/sounds/' + encodeURIComponent(sound) + '/play');
+    audio.volume = this.volume || 0.5;
+    audio.play().catch(() => {});
   },
 
-  _beep(tones) {
-    const vol = this.volume || 0.5;
+  _synth(name) {
     try {
       this.ctx = this.ctx || new (window.AudioContext || window.webkitAudioContext)();
       if (this.ctx.state === 'suspended') this.ctx.resume();
-      tones.forEach((freq, i) => {
-        const osc = this.ctx.createOscillator();
-        const gain = this.ctx.createGain();
-        const start = this.ctx.currentTime + i * 0.11;
-        osc.type = 'sine';
-        osc.frequency.value = freq;
-        gain.gain.setValueAtTime(0.0001, start);
-        gain.gain.exponentialRampToValueAtTime(vol * 0.2, start + 0.012);
-        gain.gain.exponentialRampToValueAtTime(0.0001, start + 0.10);
-        osc.connect(gain).connect(this.ctx.destination);
-        osc.start(start);
-        osc.stop(start + 0.12);
-      });
-    } catch (_) {}
+      const voice = SOUNDS[name] || SOUNDS.click;
+      voice(new Synth(this.ctx, this.volume || 0.5));
+    } catch (_) { /* no audio output is not worth an error */ }
+  },
+
+  _beep(tones) {
+    // Kept for the two fixed attention tones, which are deliberately not the
+    // user's chosen sound: you should be able to tell "needs you" from "done"
+    // without having to remember which sound you picked.
+    this._synth(tones[0] > tones[tones.length - 1] ? 'error' : 'waiting');
   },
 
   failures: 0,
@@ -2385,6 +2376,143 @@ async function uploadSound(input) {
 }
 
 /* ── Drafts and scroll position ──────────────────────────────────────────── */
+
+/* ── Notification sounds ──────────────────────────────────────────────────────
+ *
+ * These used to be three calls to one function -- a sine with a 12ms attack and
+ * a 100ms decay -- at different pitches, which is exactly why "click", "chime"
+ * and "knock" all came out as the same ping. What a sound *is* comes from its
+ * envelope and its spectrum, not its pitch: a pure sine with a fast attack is a
+ * bell whatever note you play it at. So each of these builds its own.
+ *
+ * Synthesised rather than shipped as audio files: nothing to license, nothing
+ * to download, a few hundred bytes of source instead of a few hundred KB, and
+ * the volume slider stays honest because it scales the gain rather than the
+ * playback level of something already mastered. Uploading a file is still
+ * there for anyone who wants a specific sound.
+ */
+
+/* A few primitives, so a voice below reads as a description of the sound
+ * rather than as WebAudio bookkeeping. */
+class Synth {
+  constructor(ctx, volume) {
+    this.ctx = ctx;
+    this.now = ctx.currentTime + 0.01;   // a beat of headroom for scheduling
+    this.vol = volume;
+  }
+
+  /* An amplitude envelope. Exponential ramps cannot reach zero, hence the
+     floor; `peak` is relative so the volume control governs everything. */
+  _env(peak, at, attack, decay) {
+    const g = this.ctx.createGain();
+    const top = Math.max(0.0002, this.vol * peak);
+    g.gain.setValueAtTime(0.0001, at);
+    g.gain.exponentialRampToValueAtTime(top, at + attack);
+    g.gain.exponentialRampToValueAtTime(0.0001, at + attack + decay);
+    g.connect(this.ctx.destination);
+    return g;
+  }
+
+  /* One pitched partial. `to` bends the pitch across the note, which is most
+     of what separates a pop from a blip from a thunk. */
+  tone({ freq, to, type = 'sine', peak = 0.2, attack = 0.004, decay = 0.15, delay = 0 }) {
+    const at = this.now + delay;
+    const osc = this.ctx.createOscillator();
+    osc.type = type;
+    osc.frequency.setValueAtTime(freq, at);
+    if (to) osc.frequency.exponentialRampToValueAtTime(to, at + attack + decay);
+    osc.connect(this._env(peak, at, attack, decay));
+    osc.start(at);
+    osc.stop(at + attack + decay + 0.02);
+    return this;
+  }
+
+  /* Filtered noise: the transient that makes a knock sound struck rather than
+     rung, and on its own the whole of a click. */
+  noise({ peak = 0.2, decay = 0.03, delay = 0, type = 'highpass', freq = 2000, q = 1 }) {
+    const at = this.now + delay;
+    const frames = Math.max(1, Math.ceil(this.ctx.sampleRate * (decay + 0.02)));
+    const buffer = this.ctx.createBuffer(1, frames, this.ctx.sampleRate);
+    const data = buffer.getChannelData(0);
+    for (let i = 0; i < frames; i++) data[i] = Math.random() * 2 - 1;
+    const src = this.ctx.createBufferSource();
+    src.buffer = buffer;
+    const filter = this.ctx.createBiquadFilter();
+    filter.type = type;
+    filter.frequency.value = freq;
+    filter.Q.value = q;
+    src.connect(filter).connect(this._env(peak, at, 0.001, decay));
+    src.start(at);
+    src.stop(at + decay + 0.02);
+    return this;
+  }
+}
+
+/* The catalogue. Keys must match SOUND_CHOICES in agent_server/config.py --
+ * there is a test that fails if they drift apart. */
+const SOUNDS = {
+  // Dry and unpitched: a real click is a transient, not a note.
+  click: (s) => s.noise({ freq: 1800, decay: 0.012, peak: 0.35 }),
+
+  // The same idea, narrower and brighter -- a watch tick rather than a button.
+  tick: (s) => s.noise({ type: 'bandpass', freq: 3400, q: 8, decay: 0.025, peak: 2.2 }),
+
+  // Struck wood: a hard transient on top of a low body that dies immediately.
+  knock: (s) => s.noise({ type: 'lowpass', freq: 1400, decay: 0.02, peak: 0.3 })
+    .tone({ freq: 190, to: 130, peak: 0.5, attack: 0.002, decay: 0.09 }),
+
+  // Hollow and pitched, like a woodblock or a rim shot.
+  block: (s) => s.noise({ type: 'bandpass', freq: 2600, q: 3, decay: 0.01, peak: 0.35 })
+    .tone({ freq: 1180, type: 'triangle', peak: 0.28, attack: 0.002, decay: 0.04 }),
+
+  // A bell: inharmonic partials and a long tail are what make it ring rather
+  // than beep. The ratios are roughly those of a struck bell.
+  chime: (s) => s.tone({ freq: 880, peak: 0.22, attack: 0.004, decay: 1.1 })
+    .tone({ freq: 880 * 2.76, peak: 0.08, attack: 0.004, decay: 0.6 })
+    .tone({ freq: 880 * 5.4, peak: 0.04, attack: 0.004, decay: 0.3 }),
+
+  // Two-note doorbell, same bell voice.
+  ding: (s) => s.tone({ freq: 988, peak: 0.2, attack: 0.004, decay: 0.5 })
+    .tone({ freq: 988 * 2.76, peak: 0.06, attack: 0.004, decay: 0.3 })
+    .tone({ freq: 784, peak: 0.2, attack: 0.004, decay: 0.9, delay: 0.16 })
+    .tone({ freq: 784 * 2.76, peak: 0.05, attack: 0.004, decay: 0.4, delay: 0.16 }),
+
+  // Soft mallet: a gentle attack and an octave above, which reads as wooden.
+  marimba: (s) => s.tone({ freq: 660, peak: 0.3, attack: 0.006, decay: 0.28 })
+    .tone({ freq: 1320, peak: 0.09, attack: 0.006, decay: 0.14 }),
+
+  // A plucked string, approximated by ringing noise through a sharp bandpass
+  // rather than by a delay line -- close enough at this length, far simpler.
+  pluck: (s) => s.noise({ type: 'bandpass', freq: 520, q: 18, decay: 0.28, peak: 1.2 })
+    .tone({ freq: 520, type: 'triangle', peak: 0.22, attack: 0.003, decay: 0.22 }),
+
+  // Bubble pop: a fast downward bend is the whole effect.
+  pop: (s) => s.tone({ freq: 420, to: 90, peak: 0.35, attack: 0.003, decay: 0.06 }),
+
+  // Retro blip: a square bending upward.
+  blip: (s) => s.tone({ freq: 440, to: 1760, type: 'square', peak: 0.26, attack: 0.003, decay: 0.1 }),
+
+  // Dull and low, for when a ping is too much.
+  thunk: (s) => s.noise({ type: 'lowpass', freq: 500, decay: 0.03, peak: 0.3 })
+    .tone({ freq: 150, to: 60, peak: 0.5, attack: 0.003, decay: 0.13 }),
+
+  // Two quick rising blips, bird-like.
+  chirp: (s) => s.tone({ freq: 1500, to: 2100, peak: 0.24, attack: 0.004, decay: 0.05 })
+    .tone({ freq: 1800, to: 2500, peak: 0.22, attack: 0.004, decay: 0.05, delay: 0.075 }),
+
+  // Slow in, slow out: the least startling thing here, for a long run ending
+  // while you are reading something else.
+  swell: (s) => s.tone({ freq: 523, peak: 0.22, attack: 0.09, decay: 0.5 })
+    .tone({ freq: 784, peak: 0.1, attack: 0.12, decay: 0.45 }),
+
+  // ── The two fixed tones, which are never the user's choice ───────────────
+  // Rising, open, asking for attention.
+  waiting: (s) => s.tone({ freq: 660, peak: 0.22, attack: 0.005, decay: 0.13 })
+    .tone({ freq: 880, peak: 0.22, attack: 0.005, decay: 0.2, delay: 0.11 }),
+  // Falling and flatter, which reads as "something went wrong" everywhere.
+  error: (s) => s.tone({ freq: 380, type: 'triangle', peak: 0.24, attack: 0.005, decay: 0.16 })
+    .tone({ freq: 260, type: 'triangle', peak: 0.24, attack: 0.005, decay: 0.3, delay: 0.13 }),
+};
 
 const Persist = {
   key(kind) { return `codeagent:${kind}:${App.sessionId}`; },

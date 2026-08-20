@@ -400,3 +400,30 @@ def whisper_streaming_available() -> bool:
     """Same engine as one-shot transcription; the difference is the caller."""
     return stt_available()
 
+# The built-in notification sounds, in the order the picker offers them.
+#
+# The synthesis lives in `SOUNDS` in web_ui/static/js/app.js and is keyed by the
+# ids here; `test_sounds.py` fails if the two lists drift apart. They are
+# generated rather than shipped as audio files -- nothing to license, a few
+# hundred bytes instead of a few hundred KB, and the volume control scales the
+# gain rather than the level of something already mastered.
+SOUND_CHOICES = [
+    ("click", "Click"),
+    ("tick", "Tick"),
+    ("knock", "Knock"),
+    ("block", "Wood block"),
+    ("pop", "Pop"),
+    ("blip", "Blip"),
+    ("thunk", "Thunk"),
+    ("pluck", "Pluck"),
+    ("marimba", "Marimba"),
+    ("chime", "Chime"),
+    ("ding", "Ding"),
+    ("chirp", "Chirp"),
+    ("swell", "Swell"),
+]
+
+# Played for "needs you" and "something failed" regardless of the choice above,
+# so those two are always distinguishable from an ordinary finish.
+FIXED_SOUNDS = ("waiting", "error")
+DEFAULT_SOUND = "click"

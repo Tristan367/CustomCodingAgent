@@ -191,9 +191,10 @@ async function restartMyriadCode(button) {
             <label class="field-label">Sound
                 <span class="control-row">
                     <select id="sound-choice" onchange="saveSoundSetting()">
-                        <option value="click" {% if settings.get('sound_choice', 'click') == 'click' %}selected{% endif %}>Click</option>
-                        <option value="chime" {% if settings.get('sound_choice', 'click') == 'chime' %}selected{% endif %}>Chime</option>
-                        <option value="knock" {% if settings.get('sound_choice', 'click') == 'knock' %}selected{% endif %}>Knock</option>
+{# From SOUND_CHOICES in config.py, which the synthesis in app.js is keyed by. #}
+                        {% for value, label in sound_choices %}
+                        <option value="{{ value }}" {% if settings.get('sound_choice', 'click') == value %}selected{% endif %}>{{ label }}</option>
+                        {% endfor %}
                         {% for s in uploaded_sounds %}
                         <option value="{{ s }}" {% if settings.get('sound_choice', 'click') == s %}selected{% endif %}>{{ s }}</option>
                         {% endfor %}

@@ -24,6 +24,20 @@
     </div>
     {% endif %}
 
+    {# Only the tail of a long session is drawn on arrival: switching sessions
+       re-renders the whole transcript, and with several sessions open that is a
+       constant cost for scrollback nobody is reading. The rest is one click
+       away, and the model's view is unaffected -- it is built from the database,
+       not from this. #}
+    {% if older_count %}
+    <div class="load-earlier" data-before="{{ oldest_id }}">
+        <button type="button" onclick="loadEarlierMessages(this.parentElement)">
+            Show earlier messages
+        </button>
+        <span class="hint">{{ '{:,}'.format(older_count) }} older</span>
+    </div>
+    {% endif %}
+
     {% for m in messages %}
     {% if not m._hidden %}
     {% if m.role == 'tool' %}

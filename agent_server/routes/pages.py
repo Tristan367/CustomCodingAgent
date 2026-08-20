@@ -9,9 +9,15 @@ from fastapi.responses import HTMLResponse, RedirectResponse
 from agent_server import database as db
 from agent_server.config import DEFAULT_MODEL, resolve_model_choice
 from agent_server.routes.context import (
+    TRANSCRIPT_WINDOW,
+    _apply_transcript_hiding,
+    _expand_tools,
+    _hide_thinking,
+    _hide_tool_calls,
     _home_context,
     _session_context,
     _start_watching,
+    _tool_inputs,
     _track_tab,
 )
 from agent_server.system_prompt import PROTECTED_PROMPT
@@ -68,6 +74,43 @@ async def messages_partial(request: Request, session_id: str):
         return HTMLResponse("Session not found", status_code=404)
     return templates.TemplateResponse(
         request=request, name="chat_messages.html", context=await _session_context(session)
+    )
+
+
+@router.get("/_messages/{session_id}/earlier")
+async def earlier_messages(request: Request, session_id: str, before: int, limit: int = 0):
+    """The batch of messages just older than `before`, for the transcript.
+
+    Rendered with the same template as the rest so an older message is drawn
+    exactly like a recent one. `compactions` is deliberately empty: the summary
+    cards belong at the very top of the transcript and are already there, and
+    repeating them above every batch would read as new ones arriving.
+    """
+    session = await db.get_session(session_id)
+    if session is None:
+        return HTMLResponse("Session not found", status_code=404)
+    count = max(1, min(limit or TRANSCRIPT_WINDOW, 500))
+    rows = await db.get_messages_before(session_id, before, count)
+    # Hiding is annotated as if these were the whole transcript, which is right
+    # for a batch drawn from the middle: nothing here is the current turn, so
+    # nothing here is the block that survives.
+    _apply_transcript_hiding(
+        rows, await _hide_tool_calls(), await _hide_thinking(), keep_last=False
+    )
+    remaining = await db.count_messages_before(session_id, rows[0]["id"]) if rows else 0
+    return templates.TemplateResponse(
+        request=request,
+        name="chat_messages.html",
+        context={
+            "session": session,
+            "messages": rows,
+            "compactions": [],
+            "tool_inputs": _tool_inputs(rows),
+            "expand_tools": await _expand_tools(),
+            "older_count": remaining,
+            "oldest_id": rows[0]["id"] if rows else 0,
+            "pending": None,
+        },
     )
 
 

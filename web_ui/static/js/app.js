@@ -167,6 +167,77 @@ function initSession() {
   expandDeferredBlocks();
 }
 
+/* Pull in the batch of messages older than the ones on screen.
+ *
+ * The transcript arrives windowed to its tail, so this is how the rest of a
+ * long session is reached. The whole job is to add height *above* the reader
+ * without moving what they are looking at: the scroller is corrected by exactly
+ * the height that was inserted, in the same frame, so the viewport does not
+ * shift by a pixel. Growth above the viewport is the one case the browser's own
+ * scroll anchoring does not reliably cover here, because the insertion happens
+ * while the anchor node is being re-laid-out. */
+async function loadEarlierMessages(control) {
+  const before = control.dataset.before;
+  if (!before || control.dataset.loading) return;
+  control.dataset.loading = '1';
+  const button = control.querySelector('button');
+  const label = button.textContent;
+  button.textContent = 'Loading…';
+  button.disabled = true;
+
+  try {
+    const resp = await fetch(
+      `/_messages/${App.sessionId}/earlier?before=${encodeURIComponent(before)}`);
+    if (!resp.ok) throw new Error(String(resp.status));
+    const holder = document.createElement('div');
+    holder.innerHTML = await resp.text();
+    const fresh = holder.querySelector('#messages');
+    if (!fresh) throw new Error('no transcript in the response');
+
+    // Markdown, highlighting and the click-to-open wiring, done while the batch
+    // is still inside its own container. `markOpenableTools` and friends match
+    // descendants, so a `.message` passed as the root would not match itself --
+    // and doing it here rather than after insertion keeps the work off the
+    // whole transcript, which is the entire point of windowing it.
+    fresh.querySelectorAll('[data-markdown]:not([data-rendered])').forEach((el) => {
+      el.dataset.raw = el.textContent;
+      el.innerHTML = md.render(el.textContent);
+      el.dataset.rendered = '1';
+    });
+    highlightToolCode(fresh);
+    markOpenableTools(fresh);
+    // Opening these is the point of the click, so it is not deferred here.
+    fresh.querySelectorAll('details[data-expand]').forEach((d) => {
+      d.open = true;
+      d.removeAttribute('data-expand');
+    });
+
+    const rows = [...fresh.children].filter((n) => !n.classList.contains('load-earlier'));
+    const box = App.els.scroller;
+    const heightBefore = box ? box.scrollHeight : 0;
+    control.after(...rows);
+    if (box) box.scrollTop += box.scrollHeight - heightBefore;
+
+    // How much further back it goes, from the batch we just received.
+    const next = fresh.querySelector('.load-earlier');
+    if (next) {
+      control.dataset.before = next.dataset.before;
+      control.querySelector('.hint').textContent = next.querySelector('.hint').textContent;
+    } else {
+      control.remove();   // the start of the conversation
+      return;
+    }
+  } catch (e) {
+    appendNotice('error', 'Could not load the earlier messages.');
+  } finally {
+    if (control.isConnected) {
+      control.removeAttribute('data-loading');
+      button.textContent = label;
+      button.disabled = false;
+    }
+  }
+}
+
 /* Open the auto-expand blocks after the first frame, then settle the scroll.
  *
  * The server marks them with `data-expand` rather than `open`, so the first

@@ -41,7 +41,7 @@ def _free_port() -> int:
 
 
 async def _seed(data_dir: Path) -> str:
-    """A transcript long enough that the scroller actually scrolls."""
+    """A transcript longer than the window, so the scroller really scrolls."""
     from agent_server import database as db
 
     original = db.DB_PATH
@@ -50,7 +50,10 @@ async def _seed(data_dir: Path) -> str:
         await db.init_db()
         session = await db.create_session(name="anchoring", project_dir=str(REPO))
         await db.add_message(session["id"], "user", "Audit the file routes.")
-        for i in range(12):
+        # Past the transcript window on purpose, so these run against a
+        # transcript that is drawn in a window with a "show earlier" control --
+        # which is what a real long session looks like.
+        for i in range(40):
             await db.add_message(
                 session["id"], "tool", TOOL_OUTPUT,
                 tool_call_id=f"c{i}", tool_name=["read", "grep", "bash"][i % 3],
@@ -447,6 +450,89 @@ async def test_the_streamed_tail_is_replaced_by_the_real_result(page):
     assert not state["stream"], "the live tail outlived the call"
     # hide_tool_calls is off here, so a finished result belongs in the flow.
     assert not state["live"], "the overlay was not handed back when the call ended"
+
+
+# ── Loading the rest of a long transcript ────────────────────────────────────
+
+async def test_the_transcript_arrives_windowed(page):
+    """Only the tail is drawn. A switch into a session re-renders all of this,
+    and with several sessions open that happens constantly."""
+    state = await page.evaluate("""
+    () => ({ rows: document.querySelectorAll('#messages .message').length,
+             control: !!document.querySelector('.load-earlier'),
+             older: (document.querySelector('.load-earlier .hint') || {}).textContent || '' })
+    """)
+    assert state["control"], "a transcript past the window should offer the rest"
+    assert state["rows"] < 81, "the whole history was drawn"
+    assert "older" in state["older"]
+
+
+async def test_loading_earlier_messages_does_not_move_the_viewport(page):
+    """Height is added *above* the reader, which is the one direction that
+    moves what they are looking at unless the scroller is corrected for it."""
+    added = await page.evaluate("""
+    async () => {
+      const box = document.getElementById('chat-container');
+      const control = document.querySelector('.load-earlier');
+      box.scrollTop = 0;
+      await new Promise(r => requestAnimationFrame(r));
+      const view = box.getBoundingClientRect();
+      // A row the reader can actually see, to check against afterwards.
+      const anchor = [...document.querySelectorAll('#messages .message')]
+        .find(r => r.getBoundingClientRect().top > view.top + 20);
+      const before = anchor.getBoundingClientRect().top;
+      const rowsBefore = document.querySelectorAll('#messages .message').length;
+      await loadEarlierMessages(control);
+      await new Promise(r => requestAnimationFrame(r));
+      return { moved: anchor.getBoundingClientRect().top - before,
+               added: document.querySelectorAll('#messages .message').length - rowsBefore };
+    }
+    """)
+    assert added["added"] > 0, "nothing was loaded"
+    assert abs(added["moved"]) <= TOLERANCE, (
+        f"the viewport moved {added['moved']:+.2f}px when earlier messages loaded")
+
+
+async def test_walking_back_reaches_the_start_and_stops_offering(page):
+    """Batches must tile: no gaps, no repeats, and the control goes away."""
+    result = await page.evaluate("""
+    async () => {
+      let clicks = 0;
+      while (document.querySelector('.load-earlier') && clicks < 30) {
+        await loadEarlierMessages(document.querySelector('.load-earlier'));
+        clicks++;
+      }
+      const ids = [...document.querySelectorAll('#messages .message[id]')].map(r => r.id);
+      return { clicks, rows: document.querySelectorAll('#messages .message').length,
+               control: !!document.querySelector('.load-earlier'),
+               unique: new Set(ids).size === ids.length };
+    }
+    """)
+    assert result["control"] is False, "still offering to load with nothing older"
+    assert result["rows"] == 81, f"expected the whole 81-message history, got {result['rows']}"
+    assert result["unique"], "a message was rendered twice"
+
+
+async def test_a_new_turn_still_lands_at_the_bottom_of_a_windowed_transcript(page):
+    """Streaming appends; the window is about what arrives with the page."""
+    state = await page.evaluate("""
+    async () => {
+      const before = document.querySelectorAll('#messages .message').length;
+      window._s = { assistantEl: null, contentEl: null, text: '', reasoningEl: null };
+      handleEvent({ type: 'tool_start', tool_call_id: 'nw', name: 'bash',
+                    args: { command: 'ls' } }, window._s);
+      handleEvent({ type: 'tool_end', tool_call_id: 'nw', title: 'bash ls',
+                    content: 'a\\nb\\n' }, window._s);
+      await new Promise(r => requestAnimationFrame(r));
+      const rows = [...document.querySelectorAll('#messages .message')];
+      return { added: rows.length - before,
+               lastIsNew: rows[rows.length - 1].dataset.toolCallId === 'nw',
+               control: !!document.querySelector('.load-earlier') };
+    }
+    """)
+    assert state["added"] == 1
+    assert state["lastIsNew"], "a streamed row did not land at the end"
+    assert state["control"], "streaming removed the way back to the rest of the session"
 
 
 # ── Collapse all ─────────────────────────────────────────────────────────────

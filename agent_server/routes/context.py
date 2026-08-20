@@ -11,6 +11,7 @@ partial re-renders through, so most handlers end by calling one of them.
 
 import asyncio
 import json
+import os
 import re
 from datetime import datetime
 from pathlib import Path
@@ -130,15 +131,21 @@ async def _hide_tool_calls() -> bool:
 
 
 def _apply_transcript_hiding(
-    messages: list[dict], hide_tool_calls: bool, hide_thinking: bool
+    messages: list[dict], hide_tool_calls: bool, hide_thinking: bool,
+    keep_last: bool = True,
 ) -> None:
     """Annotate messages the transcript should leave out when the user wants a
     cleaner history. Only the *current* thinking block and tool call survive; a
     block is current only while nothing has come after it, so the last thinking
-    before a reply and the last tool before a reply are hidden too."""
+    before a reply and the last tool before a reply are hidden too.
+
+    `keep_last` is False for a batch of older messages fetched by "show earlier":
+    those come from the middle of the history, so the last row in the batch is
+    not the current turn and must not be spared as though it were.
+    """
     if not messages or (not hide_tool_calls and not hide_thinking):
         return
-    last = len(messages) - 1
+    last = len(messages) - 1 if keep_last else -1
     for i, m in enumerate(messages):
         if hide_tool_calls and m.get("role") == "tool" and i != last:
             m["_hidden"] = True
@@ -306,18 +313,43 @@ def _tool_inputs(messages: list[dict]) -> dict[str, str]:
     return inputs
 
 
+# How much of a transcript is drawn on arrival. The rest is a click away.
+#
+# Switching sessions is not a rare action in this app -- inter-session messaging
+# and subagent hierarchies mean a user may have ten sessions open and move
+# between them constantly -- and a switch re-renders the whole transcript. A
+# thousand-message history cost that every time for scrollback nobody was
+# looking at.
+#
+# This bounds what is *drawn*, never what is *sent*: the model's view is built
+# from `get_messages` in conversation.py and is untouched.
+TRANSCRIPT_WINDOW = int(os.getenv("CODEAGENT_TRANSCRIPT_WINDOW") or 60)
+
+# A tool result renders the arguments of the assistant message that asked for
+# it, which sits just before it. Reading a few extra rows means the oldest tool
+# call in the window still shows its input instead of losing it to the boundary.
+_INPUT_LOOKBEHIND = 12
+
+
 async def _session_context(session: dict) -> dict:
     usage = await db.get_session_usage(session["id"])
-    messages = await db.get_messages(session["id"])
+    rows = await db.get_recent_messages(session["id"], TRANSCRIPT_WINDOW + _INPUT_LOOKBEHIND)
+    messages = rows[-TRANSCRIPT_WINDOW:] if len(rows) > TRANSCRIPT_WINDOW else rows
     _apply_transcript_hiding(messages, await _hide_tool_calls(), await _hide_thinking())
+    older = await db.count_messages_before(session["id"], messages[0]["id"]) if messages else 0
     return {
         "session": session,
         "messages": messages,
+        # What the "show earlier messages" control needs: how many there are,
+        # and where to continue from.
+        "older_count": older,
+        "oldest_id": messages[0]["id"] if messages else 0,
         "hide_thinking": await _hide_thinking(),
         "hide_tool_calls": await _hide_tool_calls(),
         # tool_call_id -> pretty-printed arguments, so a reloaded page can show
         # what each tool was asked to do alongside its result.
-        "tool_inputs": _tool_inputs(messages),
+        # Built from the wider read, so the boundary tool call keeps its input.
+        "tool_inputs": _tool_inputs(rows),
         "compactions": await db.get_compactions(session["id"]),
         # Only models that can actually authenticate, so switching to one does
         # not produce a session that fails on its next message.

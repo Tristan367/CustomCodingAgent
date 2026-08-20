@@ -2633,3 +2633,27 @@ dialog.file-browser::backdrop { background: transparent; }
   vertical-align: -1px;
 }
 @keyframes stt-spin { to { transform: rotate(360deg); } }
+
+/* "Show earlier messages", at the top of a windowed transcript. Sits in the
+   message grid's centre column so it lines up with the conversation rather
+   than with the role gutter. */
+.load-earlier {
+  display: flex;
+  align-items: baseline;
+  gap: var(--s3);
+  margin: 0 60px 14px;
+  padding-bottom: 10px;
+  border-bottom: 1px dashed var(--border);
+}
+.load-earlier button {
+  background: none;
+  border: none;
+  padding: 0;
+  color: var(--accent);
+  font-size: 12px;
+  font-weight: 600;
+  cursor: pointer;
+}
+.load-earlier button:hover:not(:disabled) { text-decoration: underline; }
+.load-earlier button:disabled { color: var(--text-faint); cursor: default; }
+.load-earlier .hint { font-size: 11px; color: var(--text-faint); }

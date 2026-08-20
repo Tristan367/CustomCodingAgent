@@ -585,6 +585,44 @@ async def get_messages(session_id: str) -> list[dict]:
     )
 
 
+async def get_recent_messages(session_id: str, limit: int) -> list[dict]:
+    """The newest `limit` messages, oldest first.
+
+    For the transcript only. What the model is sent is still assembled from
+    `get_messages`, so windowing what is drawn can never change what is asked --
+    the two must not be confused.
+
+    Ordered DESC and reversed rather than filtered by id, so it rides the
+    (session_id, id) index and reads `limit` rows instead of the history.
+    """
+    rows = await _fetchall(
+        "SELECT * FROM messages WHERE session_id = ? AND is_compacted = 0"
+        " ORDER BY id DESC LIMIT ?",
+        (session_id, limit),
+    )
+    return list(reversed(rows))
+
+
+async def get_messages_before(session_id: str, before_id: int, limit: int) -> list[dict]:
+    """The `limit` messages immediately older than `before_id`, oldest first."""
+    rows = await _fetchall(
+        "SELECT * FROM messages WHERE session_id = ? AND is_compacted = 0 AND id < ?"
+        " ORDER BY id DESC LIMIT ?",
+        (session_id, before_id, limit),
+    )
+    return list(reversed(rows))
+
+
+async def count_messages_before(session_id: str, before_id: int) -> int:
+    """How many older messages exist, so the control can say how many are left."""
+    row = await _fetchone(
+        "SELECT COUNT(*) AS n FROM messages WHERE session_id = ? AND is_compacted = 0"
+        " AND id < ?",
+        (session_id, before_id),
+    )
+    return int(row["n"]) if row else 0
+
+
 async def delete_messages_after(session_id: str, message_id: int) -> int:
     """Drop everything after a message. Used by retry and edit-and-resend."""
     db = await connect()

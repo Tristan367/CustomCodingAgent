@@ -2377,6 +2377,58 @@ async function uploadSound(input) {
 
 /* ── Drafts and scroll position ──────────────────────────────────────────── */
 
+/* Run a saved script from its keyboard shortcut.
+ *
+ * No confirmation dialog: the user chose this key for this script, which is a
+ * far more deliberate act than clicking a row in a list. What it does instead
+ * is say what happened -- a script that fails silently on a keystroke is the
+ * worst version of this feature, because there is nothing on screen to connect
+ * the failure to the key you pressed.
+ */
+async function runScriptFromKey(name) {
+  const toast = showRunningToast(name);
+  try {
+    const body = new FormData();
+    body.append('name', name);
+    const resp = await fetch('/_run_script', { method: 'POST', body });
+    const html = await resp.text();
+    // The endpoint renders a result card; the exit state is the only part
+    // worth surfacing from a keystroke.
+    const failed = !resp.ok || /class="script-exit fail"/.test(html);
+    const code = (html.match(/exit (-?\d+)/) || [])[1];
+    toast.remove();
+    if (failed) {
+      ui.alert(stripTags(html) || 'The script failed.', `${name} failed`);
+    } else {
+      showToast(`${name} finished` + (code ? ` \u00b7 exit ${code}` : ''));
+    }
+  } catch (e) {
+    toast.remove();
+    ui.alert('Could not reach the server to run it.', `${name} did not run`);
+  }
+}
+
+function stripTags(html) {
+  const box = document.createElement('div');
+  // Each block becomes its own line first: `textContent` alone runs the exit
+  // line, the "stderr" label and the output together into one unreadable string.
+  box.innerHTML = html.replace(/<\/(div|pre|p|h[1-6]|summary)>/gi, '\n');
+  return box.textContent.replace(/\n{3,}/g, '\n\n').trim().slice(0, 2000);
+}
+
+function showRunningToast(name) {
+  return showToast(`Running ${name}\u2026`, 0);
+}
+
+/* A small transient message in the corner. `ms` of 0 means it stays until the
+ * caller removes it, which is what the "still running" state needs. */
+function showToast(text, ms = 2600) {
+  const node = el('div', 'run-toast', text);
+  document.body.appendChild(node);
+  if (ms) setTimeout(() => node.remove(), ms);
+  return node;
+}
+
 /* ── Notification sounds ──────────────────────────────────────────────────────
  *
  * These used to be three calls to one function -- a sine with a 12ms attack and
@@ -5673,9 +5725,48 @@ const Keys = (() => {
       // Alt+. was a chord you could hit reaching for a full stop.
       combo: 'Ctrl+Alt+Shift+Escape', run: () => stopAll() },
 
+    // Alt+T is the browser's own Tools menu (see RESERVED), so the shortcut
+    // with the obvious mnemonic has to take Shift as well.
+    { id: 'page.profiles', group: 'Pages', label: 'Profiles',
+      combo: 'Alt+KeyP', run: () => { window.location.href = '/prompts'; } },
+    { id: 'page.tools', group: 'Pages', label: 'Custom tools',
+      combo: 'Alt+Shift+KeyT', run: () => { window.location.href = '/tools'; } },
+
     { id: 'help.keys', group: 'Help', label: 'Keyboard shortcuts',
       combo: 'Shift+Slash', run: () => Keys.overlay() },
   ];
+
+  /* One action per saved script, rebuilt whenever the list changes.
+   *
+   * These ship with no default combo. A shortcut nobody chose that runs a shell
+   * script is not a feature, and there is no sensible key to guess for a script
+   * whose name and contents this code has never seen -- so a script does
+   * nothing until the user binds it, and binding it *is* the confirmation. The
+   * home page still asks before running one, because a click on a list is a
+   * much easier thing to do by accident than a chord you invented.
+   *
+   * Ids are `script.<name>`, so a binding survives an edit to the script body
+   * and is lost only if the script is renamed -- which is the right answer,
+   * since a renamed script is a different thing to the person who bound it. */
+  function syncScripts(names) {
+    for (let i = ACTIONS.length - 1; i >= 0; i--) {
+      if (ACTIONS[i].id.startsWith('script.')) {
+        byId.delete(ACTIONS[i].id);
+        ACTIONS.splice(i, 1);
+      }
+    }
+    for (const name of names || []) {
+      const action = {
+        id: `script.${name}`,
+        group: 'Scripts',
+        label: name,
+        combo: '',
+        run: () => runScriptFromKey(name),
+      };
+      ACTIONS.push(action);
+      byId.set(action.id, action);
+    }
+  }
 
   /* Documented but not rebindable: they are the behaviour of a control rather
    * than a shortcut, and rebinding them would break the control. */
@@ -5783,7 +5874,13 @@ const Keys = (() => {
   async function load() {
     try {
       const resp = await fetch(STORAGE);
-      if (resp.ok) overrides = (await resp.json()).keybinds || {};
+      if (resp.ok) {
+        const body = await resp.json();
+        overrides = body.keybinds || {};
+        // The saved scripts come back on the same request: this is the only
+        // consumer, and a second round trip to build one list is silly.
+        syncScripts(body.scripts);
+      }
     } catch (_) { overrides = {}; }
     renderAll();
   }

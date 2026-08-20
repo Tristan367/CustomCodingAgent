@@ -194,9 +194,11 @@ def _offerable_models() -> list[dict]:
 
     for key, provider in _providers.items():
         if key.startswith("custom:") and provider.has_credentials():
+            # Just the name the user gave it. The optgroup already says these
+            # are custom endpoints, so repeating it on every row was noise.
             offered.append({
                 "id": key,
-                "name": f"{provider.name} (custom endpoint)",
+                "name": provider.name,
                 "provider": key,
                 "provider_name": "Custom endpoints",
             })

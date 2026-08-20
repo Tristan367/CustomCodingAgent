@@ -1735,7 +1735,12 @@ body.dragging-files::after {
 .tools-table td { line-height: 1.9; }
 .panel .hint { margin-bottom: var(--s3); }
 #scripts-panel .prompt-bar { margin-top: var(--s3); }
-#tools-page h2 { margin-top: 24px; }
+/* Section headings on the tools page get breathing room above them. Scoped
+   to direct children so it does not also reach the heading inside
+   `.page-head`, which it outranks on specificity -- that pushed the title
+   down 24px on this page and not on Profiles, so crossing between the two
+   shifted the whole page. */
+#tools-page > h2 { margin-top: 24px; }
 #tools-page .schema-preview {
   display: block;
   width: 100%;
@@ -2691,3 +2696,20 @@ dialog.file-browser::backdrop { background: transparent; }
 .load-earlier button:hover:not(:disabled) { text-decoration: underline; }
 .load-earlier button:disabled { color: var(--text-faint); cursor: default; }
 .load-earlier .hint { font-size: 11px; color: var(--text-faint); }
+
+/* Transient confirmation that a keyboard-run script started and finished. It
+   has no dialog to appear in -- the whole point of the shortcut is not stopping
+   to click something -- so it says its piece in the corner and leaves. */
+.run-toast {
+  position: fixed;
+  right: 18px;
+  bottom: 18px;
+  z-index: 9500;
+  padding: 8px 14px;
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius);
+  background: var(--bg-inset);
+  color: var(--text);
+  font-size: 12px;
+  box-shadow: 0 6px 20px rgba(0, 0, 0, 0.45);
+}

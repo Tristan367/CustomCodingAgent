@@ -89,7 +89,10 @@ async def get_keybinds():
         values = json.loads(raw) if raw else {}
     except json.JSONDecodeError:
         values = {}
-    return {"keybinds": values if isinstance(values, dict) else {}}
+    # The saved scripts ride along: the shortcut table is their only consumer,
+    # and each one becomes a bindable action so a script can be run from a key.
+    scripts = [row["name"] for row in await db.list_scripts()]
+    return {"keybinds": values if isinstance(values, dict) else {}, "scripts": scripts}
 
 
 @router.post("/_settings/keybinds")

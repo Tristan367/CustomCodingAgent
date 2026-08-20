@@ -6,16 +6,36 @@
    grouping is a native <optgroup>, so the answer is on screen without a longer
    label on every row.
 
+   Custom endpoints come first because they are the ones the user set up by
+   hand and reaches for most; everything else follows alphabetically, which is
+   what Jinja's groupby gives for free. A user with no custom endpoints gets no
+   such group at all.
+
    One macro for all three dropdowns -- new session, session model, subagent
    model -- because they drifted apart the last time they were three copies. #}
+{% set CUSTOM_GROUP = 'Custom endpoints' %}
+
+{% macro _option(m, selected, with_data) -%}
+<option value="{{ m.id }}"
+        {%- if with_data %} data-needs-model-id="{{ 1 if m.needs_model_id else 0 }}"{% endif %}
+        {%- if m.id == selected %} selected{% endif %}>{{ m.name }}</option>
+{%- endmacro %}
+
 {% macro model_options(models, selected, skip_custom=false, with_data=false) %}
     {% set shown = models | rejectattr('needs_model_id') | list if skip_custom else models %}
-    {% for provider_name, group in shown | groupby('provider_name') %}
+    {% set custom = shown | selectattr('provider_name', 'equalto', CUSTOM_GROUP) | list %}
+    {% if custom %}
+    <optgroup label="{{ CUSTOM_GROUP }}">
+        {% for m in custom %}
+        {{ _option(m, selected, with_data) }}
+        {% endfor %}
+    </optgroup>
+    {% endif %}
+    {% for provider_name, group in shown | rejectattr('provider_name', 'equalto', CUSTOM_GROUP)
+                                         | list | groupby('provider_name') %}
     <optgroup label="{{ provider_name }}">
         {% for m in group %}
-        <option value="{{ m.id }}"
-                {%- if with_data %} data-needs-model-id="{{ 1 if m.needs_model_id else 0 }}"{% endif %}
-                {%- if m.id == selected %} selected{% endif %}>{{ m.name }}</option>
+        {{ _option(m, selected, with_data) }}
         {% endfor %}
     </optgroup>
     {% endfor %}

@@ -19,6 +19,7 @@ import pytest
 from agent_server.compaction import (
     KEEP_TAIL_FLOOR,
     KEEP_TAIL_TOKENS,
+    MIN_COMPACT_HEAD_TOKENS,
     split_for_compaction,
     tail_budget,
 )
@@ -97,15 +98,17 @@ def test_compaction_frees_more_than_it_keeps_at_a_low_threshold():
     assert freed > held, f"freed {freed} but held {held}"
 
 
-def test_a_conversation_well_under_the_budget_keeps_almost_everything():
-    """The split always leaves one unit to summarise by design, so the check is
-    that a short conversation is kept essentially whole rather than untouched.
-    In practice it is never reached: compaction only runs once the context is
-    over the threshold, which a conversation this size cannot be."""
-    rows = _rows(4, 100)
+def test_a_budget_larger_than_the_conversation_still_leaves_a_head():
+    """A budget bigger than everything there is used to keep everything there
+    is. It is now held against the conversation as well, so there is always
+    something to summarise -- see MAX_TAIL_SHARE_OF_CONVERSATION."""
+    rows = _rows(20, 300)
+    conversation = sum(r["token_count"] for r in rows)
     to_compact, kept = split_for_compaction(rows, tail_budget(750_000))
-    assert len(kept) >= len(rows) - 1
-    assert len(to_compact) <= 1
+    freed = sum(r["token_count"] for r in to_compact)
+    assert freed > conversation * 0.25, (
+        f"the tail kept almost everything: only {freed} of {conversation} freed")
+    assert kept, "nothing was kept verbatim"
 
 
 def test_a_conversation_of_two_units_is_left_completely_alone():
@@ -183,3 +186,66 @@ def test_uncounted_user_turns_still_fill_the_tail_budget():
         f"only {len(to_compact)} message(s) to summarise: user turns were priced at zero"
     )
     assert len(kept) >= 2
+
+
+
+# ── The tail is denominated in the wrong unit, so it is clamped twice ─────────
+
+def test_the_tail_never_takes_the_whole_conversation():
+    """The budget is a share of the *threshold*, and the threshold is compared
+    against the last request's prompt_tokens -- system prompt, tool schemas and
+    messages. The budget can only be spent on the messages, so the difference is
+    overhead it can never reach. On a small threshold, or with a long profile
+    and a lot of tools, the budget therefore exceeds every message there is: the
+    walk keeps all of them and nothing is freed.
+
+    No clamp written in threshold tokens can fix that, because the threshold is
+    the wrong unit. This one is written against the conversation.
+    """
+    from agent_server.compaction import MAX_TAIL_SHARE_OF_CONVERSATION
+
+    rows = _rows(12, 180)
+    conversation = sum(r["token_count"] for r in rows)
+    # A budget deliberately larger than everything there is.
+    to_compact, kept = split_for_compaction(rows, conversation * 10)
+
+    assert to_compact, "an over-large budget swallowed the whole conversation"
+    kept_tokens = sum(r["token_count"] for r in kept)
+    assert kept_tokens <= conversation * MAX_TAIL_SHARE_OF_CONVERSATION + 180
+
+
+@pytest.mark.parametrize("threshold,percent", [
+    (7_000, None), (7_000, 40), (8_192, 40), (16_384, 40),
+    (32_768, 40), (65_536, 40), (891_808, 40), (891_808, None),
+])
+def test_every_slider_position_can_free_something(threshold, percent):
+    """Both paths, across the range the sliders offer. The percentage path had
+    no flat cap at all, and the default path's cap only binds above ~60K -- by
+    which point the overhead is negligible and there was never a problem. The
+    broken region was the low end of both."""
+    rows = _rows(14, 200)
+    conversation = sum(r["token_count"] for r in rows)
+    to_compact, kept = split_for_compaction(rows, tail_budget(threshold, percent))
+
+    # Non-empty is not the property: the split always leaves one unit, so a
+    # single trailing message would satisfy that while freeing nothing. What has
+    # to hold is that a real share of the conversation is summarised -- below
+    # MIN_COMPACT_HEAD_TOKENS the compaction is declined as not worth the call.
+    freed = sum(r["token_count"] for r in to_compact)
+    assert freed >= MIN_COMPACT_HEAD_TOKENS, (
+        f"threshold {threshold} at {percent}: only {freed} tokens would be "
+        f"summarised out of {conversation}, so compaction frees nothing"
+    )
+    assert kept, f"threshold {threshold} at {percent}: nothing kept verbatim"
+
+
+def test_the_default_budget_is_untouched_when_it_already_fits():
+    """The clamp must only bite on the broken case. A normal long session at the
+    default threshold should split exactly where it did before."""
+    rows = _rows(400, 500)
+    conversation = sum(r["token_count"] for r in rows)
+    budget = tail_budget(891_808)
+    assert budget < conversation * 0.5, "this test no longer covers the normal case"
+
+    _to_compact, kept = split_for_compaction(rows, budget)
+    assert sum(r["token_count"] for r in kept) <= budget + 500

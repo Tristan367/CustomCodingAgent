@@ -129,6 +129,15 @@ list.
   tail with a 16K threshold swallows the whole conversation: it summarises the
   single oldest round, frees nothing, and fires again next round while
   destroying history a message at a time.
+- **The threshold and the tail budget are in different units.** The threshold is
+  compared against `context`, which is the last request's `prompt_tokens` — the
+  system prompt, every tool schema, *and* the messages. The tail budget can only
+  be spent on the messages. The difference is fixed overhead the budget cannot
+  reach, and it is not small: a long profile with a dozen custom tools is tens of
+  thousands of tokens before the conversation starts. Derive the tail from the
+  threshold alone and, on a small threshold, the budget exceeds every message
+  there is — the walk keeps all of them and nothing is freed. No clamp written in
+  threshold tokens closes this; clamp against the conversation you actually have.
 - A compaction that summarised nothing will summarise nothing next time. Stop,
   and say so.
 - **A failed compaction must not end the turn.** Returning there leaves the

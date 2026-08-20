@@ -70,6 +70,24 @@ KEEP_TAIL_FLOOR = 2_000
 MIN_TAIL_PERCENT = 0.5
 MAX_TAIL_PERCENT = 40.0
 
+# The tail may never take more than this share of the conversation that actually
+# exists, whatever the threshold arithmetic says.
+#
+# The budget above is derived from the threshold, and the threshold is compared
+# against `context` -- which is the last request's prompt_tokens: the system
+# prompt, every tool schema, *and* the messages. The budget can only ever be
+# spent on the messages. The difference is fixed overhead the budget cannot
+# reach, and it is not small: a long profile with a dozen custom tools is tens
+# of thousands of tokens before the conversation starts.
+#
+# So on a small threshold the tail can be larger than every message there is.
+# The walk then keeps all of them, the head is a few hundred tokens, and nothing
+# is freed. This is the same failure as the flat 24K tail, arriving by a
+# different route, and no clamp expressed in threshold tokens can close it --
+# the threshold is the wrong unit. Clamping against the conversation is the
+# thing that is always true.
+MAX_TAIL_SHARE_OF_CONVERSATION = 0.5
+
 
 def tail_budget(threshold: int, tail_percent: float | None = None) -> int:
     """How much of the recent conversation to keep verbatim, for this session.
@@ -161,6 +179,15 @@ def split_for_compaction(
     groups = group_messages(rows)
     if len(groups) <= KEEP_MIN_UNITS:
         return [], rows
+
+    # See MAX_TAIL_SHARE_OF_CONVERSATION: the budget arrives denominated in
+    # threshold tokens, which include the system prompt and tool schemas it can
+    # never be spent on. Hold it against what is actually here.
+    conversation = sum(message_tokens(r) for r in rows)
+    if conversation:
+        keep_tail_tokens = min(
+            keep_tail_tokens, int(conversation * MAX_TAIL_SHARE_OF_CONVERSATION)
+        )
 
     # Grow the kept window backwards from the end until it fills the budget,
     # always stopping on a unit boundary, and always leaving at least one unit
@@ -342,11 +369,28 @@ async def compact_session_events(
 
     head_tokens = sum(message_tokens(r, session["model"]) for r in to_compact)
     if head_tokens < MIN_COMPACT_HEAD_TOKENS and not manual_summary.strip():
-        yield fail(
-            f"Only {head_tokens} tokens of older conversation to summarise, which "
-            f"would cost more than it saves. The threshold is too low for this "
-            f"session."
-        )
+        # Say which of the two things is actually in the way. The threshold is
+        # compared against the whole request, so a long system prompt and a lot
+        # of tool schemas can leave almost no conversation under it -- and being
+        # told to raise the threshold is unhelpful when the prompt is the
+        # problem.
+        conversation = sum(message_tokens(r, session["model"]) for r in rows)
+        overhead = max(0, (usage.get("context") or 0) - conversation)
+        if overhead > conversation:
+            reason = (
+                f"There is almost nothing to summarise: the system prompt and tool "
+                f"schemas come to about {overhead:,} tokens before the conversation "
+                f"starts, against {conversation:,} tokens of actual conversation. "
+                f"Raise the threshold, shorten the profile, or switch off tools this "
+                f"profile does not use."
+            )
+        else:
+            reason = (
+                f"Only {head_tokens} tokens of older conversation to summarise, which "
+                f"would cost more than it saves. The threshold is too low for this "
+                f"session."
+            )
+        yield fail(reason)
         return
 
     provider = get_provider(session["provider"])

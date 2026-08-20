@@ -270,17 +270,53 @@ async def test_a_discovered_model_still_refuses_a_mismatched_provider(
         await _validate(SessionUpdate(model="deepseek-v4-pro-0813", provider="anthropic"))
 
 
-def test_default_compaction_threshold_scales_with_the_model_window():
-    """75% of the window, capped at 750K.
+def test_the_compaction_threshold_leaves_room_for_one_more_round():
+    """What matters is the headroom above the threshold, not the threshold.
 
-    A 1M model compacts at 750K, but a smaller model must still compact before
-    it runs out -- a flat 750K would exceed its window and never fire.
+    The check runs at a round boundary and the request goes out straight after,
+    so the window must still hold the model's output plus that round's tool
+    results. Both are bounded -- `max_output` by the model, each tool result by
+    MAX_TOOL_RESULT_CHARS -- so the reserve is computed rather than assumed.
+
+    A flat 75% was wrong in both directions. DeepSeek's 8K output ceiling left
+    140K of a 1M window unused; Haiku's 64K ceiling in a 200K window left 50K of
+    headroom for a reply that can be 64K on its own.
     """
+    from agent_server.config import compaction_reserve, default_compact_threshold
+
+    for context, output in ((1_000_000, 8_192), (1_000_000, 128_000),
+                            (200_000, 64_000), (131_072, 8_192)):
+        threshold = default_compact_threshold(context, output)
+        headroom = context - threshold
+        assert headroom >= output, (
+            f"{context:,}/{output:,}: a single maximum-length reply ({output:,}) "
+            f"does not fit in {headroom:,} of headroom"
+        )
+        assert headroom >= compaction_reserve(context, output)
+        assert threshold > 0
+
+
+def test_a_bigger_output_ceiling_means_an_earlier_threshold():
+    """The two models differ only in how much they can say in one go."""
     from agent_server.config import default_compact_threshold
 
-    assert default_compact_threshold(1_000_000) == 750_000
-    assert default_compact_threshold(131_072) == 98_304
-    assert default_compact_threshold(32_768) == 24_576
+    assert default_compact_threshold(1_000_000, 8_192) > default_compact_threshold(
+        1_000_000, 128_000)
+
+
+def test_the_threshold_never_runs_past_the_ceiling():
+    from agent_server.config import COMPACT_CEILING_RATIO, default_compact_threshold
+
+    for context in (32_768, 200_000, 1_000_000):
+        assert default_compact_threshold(context, 0) <= int(context * COMPACT_CEILING_RATIO)
+
+
+def test_a_tiny_window_still_gets_a_usable_threshold():
+    """A model too small to reserve for must still compact rather than get a
+    threshold of zero and never fire."""
+    from agent_server.config import MIN_COMPACT_THRESHOLD, default_compact_threshold
+
+    assert default_compact_threshold(8_192, 8_192) >= MIN_COMPACT_THRESHOLD
 
 
 # ── Gemini, and the console link every provider now carries ──────────────────

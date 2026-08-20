@@ -772,7 +772,9 @@ async def get_session_usage(session_id: str) -> dict:
         context = (row or {}).get("total", 0) + (summaries or {}).get("total", 0)
 
     totals["context"] = context
-    totals["threshold"] = (session or {}).get("compact_threshold") or default_compact_threshold(info["context"])
+    totals["threshold"] = (session or {}).get("compact_threshold") or default_compact_threshold(
+        info["context"], info["max_output"]
+    )
     totals["max_context"] = info["context"]
     totals["percent"] = round(100 * context / totals["threshold"], 1) if totals["threshold"] else 0
     totals["cache_hit_rate"] = (

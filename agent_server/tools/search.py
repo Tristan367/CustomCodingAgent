@@ -109,6 +109,37 @@ def _expand_braces(pattern: str) -> list[str]:
     return [pattern]  # unbalanced; leave it alone and let it match literally
 
 
+def _with_zero_depth(patterns: list[str]) -> list[str]:
+    """Add the "no intervening directory" reading of every `**/` in a pattern.
+
+    Everything else that globs -- git, ripgrep, fd, every editor -- reads `**/`
+    as *zero* or more directories, and it is the first form a model reaches for.
+    `fnmatch` has no such notion: it compiles `**/*.py` to a regex that requires
+    a literal slash, so the pattern matched nothing at the search root. An agent
+    asking `**/todo.py` about a file it had just written at the top of the
+    project was told the file did not exist, and carried on believing it.
+
+    Each `**/` is therefore expanded both ways. Two of them give four patterns,
+    which is the practical ceiling for anything anyone writes by hand.
+    """
+    out: list[str] = []
+    for pattern in patterns:
+        variants = {pattern}
+        while True:
+            grown = {
+                v[:i] + v[i + 3:]
+                for v in variants
+                for i in range(len(v))
+                if v.startswith("**/", i) and (i == 0 or v[i - 1] == "/")
+            }
+            if grown <= variants:
+                break
+            variants |= grown
+        # Longest first so the most specific reading is tried before the loosest.
+        out.extend(sorted(variants, key=len, reverse=True))
+    return out
+
+
 async def glob_search(ctx: ToolContext, *, pattern: str, path: str | None = None, **_) -> ToolResult:
     search_dir = ctx.resolve(path)
     title = f"'{pattern}'"
@@ -116,7 +147,7 @@ async def glob_search(ctx: ToolContext, *, pattern: str, path: str | None = None
     if not search_dir.is_dir():
         return ToolResult.error(f"directory not found: {search_dir}", title)
 
-    patterns = _expand_braces(pattern)
+    patterns = _with_zero_depth(_expand_braces(pattern))
 
     def _walk() -> list[tuple[float, str]]:
         results: list[tuple[float, str]] = []

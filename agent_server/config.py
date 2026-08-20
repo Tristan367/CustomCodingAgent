@@ -267,19 +267,49 @@ def resolve_model_choice(choice: str, custom_model: str = "") -> tuple[str, str]
         raise ValueError(f"Unknown model: {choice}")
     return provider_for_model(choice), choice
 
-# Offer compaction once a session's live context passes this many tokens.
-# Overridable per session. The default is model-aware: 75% of the model's
-# context window, capped at COMPACT_THRESHOLD_TOKENS. A flat 256K wasted three
-# quarters of a 1M window (compacting long before the model ran out), while a
-# flat 750K would exceed a smaller model's window and stop it ever compacting.
+# Compact once a session's live context passes this many tokens. Overridable
+# per session.
+#
+# The number that matters is the *headroom* left above it, not the threshold
+# itself. The check runs at each round boundary and the request goes out
+# immediately after, so the window must still hold one more round: the model's
+# output, plus the tool results that round produces. Both are bounded --
+# `max_output` by the model, and each tool result by MAX_TOOL_RESULT_CHARS,
+# beyond which the output is spilled to a file for the agent to grep instead.
+#
+# A flat 75% got this wrong in both directions. DeepSeek's output ceiling is
+# 8,192 tokens, so a 1M window was compacting at 750K while needing barely 110K
+# of headroom -- 140K of usable context thrown away. Claude Haiku 4.5 has a 64K
+# output ceiling in a 200K window, so 75% left 50K of headroom for a round that
+# can need 114K: a single large round after the threshold overflowed the model.
+#
+# So the reserve is computed from the model rather than assumed.
 COMPACT_THRESHOLD_TOKENS = int(os.getenv("COMPACT_THRESHOLD_TOKENS", "750000"))
 COMPACT_THRESHOLD_RATIO = 0.75
 MIN_COMPACT_THRESHOLD = 4096
 
+# Room for the tool results of one round: eight results at the per-result cap.
+# Scaled down for small windows, where eight capped results is more than the
+# model could hold at all and reserving for them would leave nothing.
+TOOL_ROUND_RESERVE = 100_000
+TOOL_RESERVE_SHARE = 0.15
 
-def default_compact_threshold(max_context: int) -> int:
+# Never compact later than this share of the window, whatever the arithmetic
+# says: some slack has to survive an underestimate of the context.
+COMPACT_CEILING_RATIO = 0.92
+
+
+def compaction_reserve(max_context: int, max_output: int) -> int:
+    """Tokens that must stay free above the threshold for one more round."""
+    tools = min(TOOL_ROUND_RESERVE, int(max_context * TOOL_RESERVE_SHARE))
+    return max_output + tools
+
+
+def default_compact_threshold(max_context: int, max_output: int = DEFAULT_MAX_OUTPUT) -> int:
     """Compaction point for a model with no per-session override."""
-    return min(COMPACT_THRESHOLD_TOKENS, int(max_context * COMPACT_THRESHOLD_RATIO))
+    room = max_context - compaction_reserve(max_context, max_output)
+    ceiling = int(max_context * COMPACT_CEILING_RATIO)
+    return max(MIN_COMPACT_THRESHOLD, min(ceiling, room))
 
 # Slider stops offered in the UI: powers of two from 4K to 1M.
 THRESHOLD_STEPS = [4096 * 2 ** i for i in range(8)] + [1_000_000]

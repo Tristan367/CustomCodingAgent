@@ -31,6 +31,31 @@ from agent_server.system_prompt import (
 KEEP_MIN_UNITS = 2
 KEEP_TAIL_TOKENS = 24_000
 
+# ...but the budget cannot be larger than the session has room for. It is a flat
+# constant tuned for the default threshold of 750K, where keeping 24K verbatim
+# and summarising the other 726K is obviously right. The threshold is a slider
+# the user can drag down to 4K, and at any setting near or below 24K the tail
+# swallowed the whole conversation: compaction summarised the single oldest
+# round, freed nothing, and -- because the check runs at every turn boundary --
+# fired again on the next one, and the next, destroying the start of the
+# conversation a round at a time while the context kept growing. Measured on a
+# 6,600-token threshold: three compactions inside one turn, context went *up*
+# from 6,834 to 7,468, and a fact planted in the first message was gone.
+#
+# So the tail is a share of what the session is actually working with.
+KEEP_TAIL_SHARE = 0.4
+# Below this there is not enough verbatim context for the next request to be
+# coherent, and compaction is not the right tool -- the window is simply too
+# small for the work.
+KEEP_TAIL_FLOOR = 2_000
+
+
+def tail_budget(threshold: int) -> int:
+    """How much of the recent conversation to keep verbatim, for this session."""
+    if not threshold or threshold <= 0:
+        return KEEP_TAIL_TOKENS
+    return max(KEEP_TAIL_FLOOR, min(KEEP_TAIL_TOKENS, int(threshold * KEEP_TAIL_SHARE)))
+
 
 def group_messages(rows: list[dict]) -> list[list[dict]]:
     """Split a transcript into the smallest units that are safe to cut between.
@@ -250,7 +275,8 @@ async def compact_session_events(
         return
 
     rows = await db.get_messages(session_id)
-    to_compact, kept = split_for_compaction(rows)
+    usage = await db.get_session_usage(session_id)
+    to_compact, kept = split_for_compaction(rows, tail_budget(usage.get("threshold") or 0))
     if not to_compact:
         yield fail("Not enough completed turns to compact yet.")
         return

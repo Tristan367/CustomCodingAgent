@@ -3,7 +3,7 @@
 import json
 
 from fastapi import APIRouter, Request
-from fastapi.responses import RedirectResponse
+from fastapi.responses import JSONResponse, RedirectResponse
 
 from agent_server import database as db
 from agent_server.config import REASONING_EFFORTS
@@ -378,3 +378,65 @@ async def delete_prompt(request: Request):
             if row.get("prompt_profile") == name:
                 await db.update_session(row["id"], prompt_profile=PROTECTED_PROMPT)
     return RedirectResponse("/prompts", status_code=303)
+
+# ── Sharing a profile ───────────────────────────────────────────────────────
+
+@router.get("/_prompts/{name}/export")
+async def export_profile(name: str):
+    """Download a profile and the custom tools it uses as one JSON file."""
+    from fastapi.responses import Response
+
+    from agent_server import bundles
+
+    bundle = await bundles.build_bundle(name)
+    if bundle is None:
+        return JSONResponse({"ok": False, "error": "No profile by that name."}, status_code=404)
+    return Response(
+        content=bundles.dump_bundle(bundle),
+        media_type="application/json",
+        headers={
+            "Content-Disposition":
+                f'attachment; filename="{bundles.bundle_filename(name)}"'
+        },
+    )
+
+
+@router.post("/_prompts/inspect")
+async def inspect_bundle(request: Request):
+    """What a bundle would do, without doing any of it.
+
+    Always the step before importing. A bundle carries shell scripts that will
+    run on this machine, so the person has to see them first -- this is what
+    puts them on screen.
+    """
+    from agent_server import bundles
+
+    form = await request.form()
+    upload = form.get("bundle")
+    raw = await upload.read() if hasattr(upload, "read") else str(form.get("json") or "")
+    try:
+        parsed = bundles.read_bundle(raw)
+    except bundles.BundleError as exc:
+        return JSONResponse({"ok": False, "error": str(exc)}, status_code=400)
+    return JSONResponse({
+        "ok": True,
+        "summary": await bundles.describe_bundle(parsed),
+        "bundle": {"profile": parsed["profile"], "tools": parsed["tools"]},
+    })
+
+
+@router.post("/_prompts/import")
+async def import_bundle(request: Request):
+    """Apply a bundle the user has just been shown and accepted."""
+    from agent_server import bundles
+
+    try:
+        body = await request.json()
+    except Exception:
+        return JSONResponse({"ok": False, "error": "Malformed request."}, status_code=400)
+    try:
+        parsed = bundles.read_bundle(body.get("bundle") or {})
+        result = await bundles.apply_bundle(parsed, str(body.get("rename") or ""))
+    except bundles.BundleError as exc:
+        return JSONResponse({"ok": False, "error": str(exc)}, status_code=400)
+    return JSONResponse({"ok": True, **result})

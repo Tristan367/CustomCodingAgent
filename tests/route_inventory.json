@@ -98,6 +98,27 @@
     "name": "new_secret"
   },
   {
+    "path": "/_prompts/import",
+    "methods": [
+      "POST"
+    ],
+    "name": "import_bundle"
+  },
+  {
+    "path": "/_prompts/inspect",
+    "methods": [
+      "POST"
+    ],
+    "name": "inspect_bundle"
+  },
+  {
+    "path": "/_prompts/{name}/export",
+    "methods": [
+      "GET"
+    ],
+    "name": "export_profile"
+  },
+  {
     "path": "/_quick_chat",
     "methods": [
       "POST"
@@ -394,16 +415,16 @@
   {
     "path": "/api/sessions",
     "methods": [
-      "GET"
+      "POST"
     ],
-    "name": "list_sessions"
+    "name": "create_session"
   },
   {
     "path": "/api/sessions",
     "methods": [
-      "POST"
+      "GET"
     ],
-    "name": "create_session"
+    "name": "list_sessions"
   },
   {
     "path": "/api/sessions/{session_id}",
@@ -590,9 +611,9 @@
   {
     "path": "/api/sessions/{session_id}/write-dirs",
     "methods": [
-      "DELETE"
+      "POST"
     ],
-    "name": "remove_write_dir"
+    "name": "add_write_dir"
   },
   {
     "path": "/api/sessions/{session_id}/write-dirs",
@@ -604,9 +625,9 @@
   {
     "path": "/api/sessions/{session_id}/write-dirs",
     "methods": [
-      "POST"
+      "DELETE"
     ],
-    "name": "add_write_dir"
+    "name": "remove_write_dir"
   },
   {
     "path": "/api/status",

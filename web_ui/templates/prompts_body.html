@@ -35,6 +35,13 @@
             <button type="button" class="btn-secondary" onclick="newProfile()">New</button>
             <button type="button" class="btn-danger" onclick="deletePrompt()"
                     id="delete-prompt">Delete</button>
+            {# Sharing. A profile is only useful somewhere else together with the
+               custom tools its agents are allowed to call, so export takes both. #}
+            <button type="button" class="btn-secondary" onclick="exportProfile()">Export</button>
+            <button type="button" class="btn-secondary"
+                    onclick="document.getElementById('bundle-file').click()">Import</button>
+            <input type="file" id="bundle-file" accept=".json,application/json" hidden
+                   onchange="inspectBundle(this)">
         </div>
         <div id="prompt-drift" class="drift-banner" {% if selected not in drift %}hidden{% endif %}>
             {% if selected in drift %}{% for d in drift[selected] %}<p>{{ d }}</p>{% endfor %}{% endif %}
@@ -292,6 +299,25 @@
         </div>
     </form>
 
+    {# What an import would do, shown before it does any of it. A bundle carries
+       shell scripts that will run on this machine, so every one of them is put
+       on screen in full first. #}
+    <div id="bundle-modal" class="modal" hidden>
+        <div class="modal-content wide">
+            <h3>Import this profile?</h3>
+            <div id="bundle-summary"></div>
+            <p class="hint" id="bundle-warning"></p>
+            <label class="field-label">Import the profile as
+                <input type="text" id="bundle-rename" autocomplete="off" spellcheck="false">
+            </label>
+            <div class="modal-actions">
+                <button type="button" class="btn-primary" onclick="applyBundle()">Import</button>
+                <button type="button" class="btn-secondary"
+                        onclick="closeModal('bundle-modal')">Cancel</button>
+            </div>
+        </div>
+    </div>
+
     <form method="POST" action="/_new_prompt" id="new-prompt-form" hidden>
         <input name="new_name" id="new-prompt-name">
         <input name="kind" id="new-prompt-kind" value="system">
@@ -367,6 +393,103 @@
             if (!ok) return;
             document.getElementById('delete-prompt-name').value = picker.value;
             document.getElementById('delete-prompt-form').submit();
+        }
+
+
+        /* ── Sharing a profile ──────────────────────────────────────────────
+         *
+         * Export hands back the profile plus every custom tool a session on it
+         * would actually have. Import never writes anything until the scripts
+         * in the bundle have been shown to a person: they are shell, and they
+         * will run on this machine.
+         */
+        let pendingBundle = null;
+
+        function exportProfile() {
+            const name = document.getElementById('prompt-picker').value;
+            if (!name) return;
+            window.location.href = `/_prompts/${encodeURIComponent(name)}/export`;
+        }
+
+        async function inspectBundle(input) {
+            const file = input.files[0];
+            input.value = '';
+            if (!file) return;
+            const form = new FormData();
+            form.append('bundle', file);
+            let data;
+            try {
+                const resp = await fetch('/_prompts/inspect', { method: 'POST', body: form });
+                data = await resp.json();
+            } catch (e) {
+                ui.alert('Could not read that file.', 'Import failed');
+                return;
+            }
+            if (!data.ok) { ui.alert(data.error, 'Import failed'); return; }
+            pendingBundle = data.bundle;
+            renderBundle(data.summary);
+        }
+
+        function renderBundle(summary) {
+            const box = document.getElementById('bundle-summary');
+            box.textContent = '';
+
+            const head = document.createElement('p');
+            head.textContent = summary.profile.exists
+                ? `Profile "${summary.profile.name}" already exists here and would be replaced.`
+                : `New profile "${summary.profile.name}".`;
+            if (summary.profile.tiers) {
+                head.textContent += ` ${summary.profile.tiers} subagent tier(s).`;
+            }
+            box.appendChild(head);
+
+            if (!summary.tools.length) {
+                const none = document.createElement('p');
+                none.className = 'hint';
+                none.textContent = 'No custom tools travel with it.';
+                box.appendChild(none);
+            }
+            for (const tool of summary.tools) {
+                const wrap = document.createElement('details');
+                wrap.className = 'schema-details';
+                const head2 = document.createElement('summary');
+                head2.textContent =
+                    `${tool.name}${tool.exists ? ' — replaces a tool you already have' : ''}`
+                    + (tool.ask_permission ? '' : ' — runs without asking');
+                wrap.appendChild(head2);
+                const desc = document.createElement('p');
+                desc.className = 'hint';
+                desc.textContent = tool.description || '(no description)';
+                wrap.appendChild(desc);
+                const pre = document.createElement('pre');
+                pre.className = 'tool-raw';
+                pre.textContent = tool.script;
+                wrap.appendChild(pre);
+                box.appendChild(wrap);
+            }
+
+            document.getElementById('bundle-warning').textContent = summary.tools.length
+                ? 'These are shell scripts that will run on this machine. Read them before '
+                  + 'importing. They arrive switched off, so nothing can call them until you '
+                  + 'enable each one on the Tools page.'
+                : '';
+            document.getElementById('bundle-rename').value = summary.profile.name;
+            document.getElementById('bundle-modal').hidden = false;
+        }
+
+        async function applyBundle() {
+            if (!pendingBundle) return;
+            const rename = document.getElementById('bundle-rename').value.trim();
+            const resp = await fetch('/_prompts/import', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ bundle: pendingBundle, rename }),
+            });
+            const data = await resp.json();
+            closeModal('bundle-modal');
+            pendingBundle = null;
+            if (!data.ok) { ui.alert(data.error, 'Import failed'); return; }
+            window.location.href = '/prompts?saved=true';
         }
 
         document.getElementById('prompt-form').addEventListener('submit', () => { lastSaved = bodyBox.value; });

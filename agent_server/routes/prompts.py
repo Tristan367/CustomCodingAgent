@@ -418,10 +418,20 @@ async def inspect_bundle(request: Request):
         parsed = bundles.read_bundle(raw)
     except bundles.BundleError as exc:
         return JSONResponse({"ok": False, "error": str(exc)}, status_code=400)
+    # Handed back as a *complete* bundle, envelope and all, so the import that
+    # follows validates exactly the same shape it would have validated straight
+    # from the file. Returning the parsed halves alone meant the import step
+    # re-read something with no `format` and refused it -- so the review worked
+    # and the button after it did not.
     return JSONResponse({
         "ok": True,
         "summary": await bundles.describe_bundle(parsed),
-        "bundle": {"profile": parsed["profile"], "tools": parsed["tools"]},
+        "bundle": {
+            "format": bundles.FORMAT,
+            "version": bundles.VERSION,
+            "profile": parsed["profile"],
+            "tools": parsed["tools"],
+        },
     })
 
 

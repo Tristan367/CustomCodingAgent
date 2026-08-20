@@ -245,3 +245,36 @@ async def test_a_full_round_trip_through_the_database(store):
     assert row["disabled_tools"] == "noisy"
     tools = {t["name"] for t in parsed["tools"]}
     assert tools == {"useful"}, f"the disabled tool travelled: {tools}"
+
+
+# ── The seam between reviewing and importing ─────────────────────────────────
+
+async def test_what_inspect_hands_back_is_something_import_accepts(store):
+    """The two endpoints have to agree on a shape.
+
+    `inspect` used to return the parsed halves with no envelope, and `import`
+    re-validated expecting a whole bundle -- so the review rendered correctly
+    and the button after it failed with "not a MyriadCode profile bundle". A
+    unit test that validated a complete bundle could never see it.
+    """
+    from agent_server.routes.prompts import inspect_bundle
+
+    await db.save_prompt("p", "body", "system", disabled_tools="")
+    await _tool("t")
+    original = bundles.dump_bundle(await bundles.build_bundle("p"))
+
+    class _Upload:
+        async def read(self):
+            return original
+
+    class _Req:
+        async def form(self):
+            return {"bundle": _Upload()}
+
+    response = await inspect_bundle(_Req())
+    handed_back = json.loads(response.body)["bundle"]
+
+    # The exact thing the page posts back to /import.
+    reparsed = bundles.read_bundle(handed_back)
+    assert reparsed["profile"]["name"] == "p"
+    assert [t["name"] for t in reparsed["tools"]] == ["t"]

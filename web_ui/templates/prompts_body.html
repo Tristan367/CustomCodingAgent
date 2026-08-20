@@ -338,7 +338,10 @@
         let lastSaved = bodyBox.value;
         let pickerPrevious = picker.value;
 
-        const nameOf = (key) => key.split(':')[1];
+        // The picker holds "system:<name>", not the name. Everything that talks to
+        // the server has to unwrap it -- export did not, and asked for a profile
+        // literally called "system:default".
+        const nameOf = (key) => key.split(':').slice(1).join(':');
 
         function syncDelete() {
             const del = document.getElementById('delete-prompt');
@@ -406,7 +409,7 @@
         let pendingBundle = null;
 
         function exportProfile() {
-            const name = document.getElementById('prompt-picker').value;
+            const name = nameOf(document.getElementById('prompt-picker').value);
             if (!name) return;
             window.location.href = `/_prompts/${encodeURIComponent(name)}/export`;
         }

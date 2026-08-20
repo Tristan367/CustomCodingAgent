@@ -2403,7 +2403,7 @@ dialog.file-browser::backdrop { background: transparent; }
 
 .home-nav {
   display: flex;
-  justify-content: flex-end;
+  justify-content: flex-start;
   align-items: baseline;
   gap: var(--s4);
   padding-bottom: var(--s3);
@@ -2724,28 +2724,25 @@ dialog.file-browser::backdrop { background: transparent; }
 
 /* Links to the repository. Two of them, for two different people.
 
-   The top-bar one is for the user: the most valuable thing they can do with the
-   URL is give it to their own agent and ask what this app already does, which
-   is what stops them building a workaround for something already here. So it
-   sits in front of them, next to the logo, labelled for what it gives them
-   rather than where it points.
+   The home-page one is for the user: the most valuable thing they can do with
+   the URL is give it to their own agent and ask what this app already does,
+   which is what stops them building a workaround for something already here.
+   It sits at the left of the row that already holds Profiles and Tools, apart
+   from them because it goes somewhere else. It is deliberately *not* in the top
+   bar -- that row is the tab bar, and every pixel of it belongs to moving
+   between sessions.
 
    The corner one is for whoever wants to change the app rather than use it, so
    it stays out of the way until looked for. */
-/* No border and an icon, so it does not read as one more session tab sitting
-   among the real ones -- which a bordered pill in this position does. */
-.repo-link {
-  display: flex;
+.home-nav-docs {
+  display: inline-flex;
   align-items: center;
-  gap: 5px;
-  margin: 0 4px 0 2px;
-  padding: 2px 4px;
-  font-size: 11.5px;
-  color: var(--text-faint);
-  text-decoration: none;
-  flex: 0 0 auto;
+  gap: 6px;
+  font-weight: 500 !important;
+  color: var(--text-dim) !important;
 }
-.repo-link:hover { color: var(--accent); }
+.home-nav-docs:hover { color: var(--accent) !important; }
+.home-nav .spacer { flex: 1; }
 
 .repo-corner {
   position: fixed;

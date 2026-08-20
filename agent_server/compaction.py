@@ -7,11 +7,13 @@ the session fails with a 400. The previous implementation sliced at a fixed
 offset and could split a group; this one only ever cuts on a group boundary.
 """
 
+import logging
+
 from agent_server import database as db
 from agent_server.config import model_info
 from agent_server.conversation import build_messages, normalize_tool_calls
 from agent_server.providers import get_provider
-from agent_server.providers.base import completion_with_retry
+from agent_server.providers.base import chars_per_token, completion_with_retry
 from agent_server.system_prompt import (
     get_compact_prompt,
     session_system_prompt,
@@ -28,6 +30,18 @@ from agent_server.system_prompt import (
 # single request can now run for dozens of tool rounds, and four of those came
 # to 74,000 tokens in one real session, so the early return fired every time and
 # nothing was ever summarised.
+# Below this, the older part of the conversation is not worth a summariser call:
+# a 25-token head came back as a 291-token summary, which is slower, costs a
+# request, and leaves the context larger than before. It happens when the kept
+# tail is nearly the whole conversation, which means the threshold is too low
+# for this session rather than that anything is wrong.
+MIN_COMPACT_HEAD_TOKENS = 400
+
+# How many times to ask for a summary before giving up on a blank answer.
+log = logging.getLogger(__name__)
+
+EMPTY_SUMMARY_ATTEMPTS = 3
+
 KEEP_MIN_UNITS = 2
 KEEP_TAIL_TOKENS = 24_000
 
@@ -97,6 +111,33 @@ def group_messages(rows: list[dict]) -> list[list[dict]]:
     return groups
 
 
+def message_tokens(row: dict, model: str = "") -> int:
+    """What one stored message costs, estimated when nothing measured it.
+
+    `token_count` is written only for assistant and tool rows, from the usage
+    the provider reports back. Nothing reports a cost for the user's own
+    message, so those rows carry NULL -- and every reader of this column used
+    `or 0`, which quietly priced a user turn at nothing.
+
+    Two things broke on that. The kept-tail walk never filled its budget,
+    because a run of user turns was free, so it kept nearly the whole
+    conversation and left a head of one or two messages. And `original_tokens`
+    then reported 0 for a head that was all user text, which is how the
+    summariser came to be handed an empty transcript and answered with nothing
+    -- failing the compaction, and with it the whole turn.
+    """
+    counted = row.get("token_count")
+    if counted:
+        return int(counted)
+    text = (row.get("content") or "") + (row.get("reasoning_content") or "")
+    calls = row.get("tool_calls")
+    if calls:
+        text += calls if isinstance(calls, str) else str(calls)
+    if not text:
+        return 0
+    return max(1, int(len(text) / chars_per_token(model)))
+
+
 def split_for_compaction(
     rows: list[dict], keep_tail_tokens: int = KEEP_TAIL_TOKENS
 ) -> tuple[list[dict], list[dict]]:
@@ -112,7 +153,7 @@ def split_for_compaction(
     keep = 0
     total = 0
     for group in reversed(groups):
-        cost = sum(r.get("token_count") or 0 for r in group)
+        cost = sum(message_tokens(r) for r in group)
         if keep >= KEEP_MIN_UNITS and total + cost > keep_tail_tokens:
             break
         if keep >= len(groups) - 1:
@@ -281,6 +322,15 @@ async def compact_session_events(
         yield fail("Not enough completed turns to compact yet.")
         return
 
+    head_tokens = sum(message_tokens(r, session["model"]) for r in to_compact)
+    if head_tokens < MIN_COMPACT_HEAD_TOKENS and not manual_summary.strip():
+        yield fail(
+            f"Only {head_tokens} tokens of older conversation to summarise, which "
+            f"would cost more than it saves. The threshold is too low for this "
+            f"session."
+        )
+        return
+
     provider = get_provider(session["provider"])
 
     if manual_summary.strip():
@@ -294,31 +344,52 @@ async def compact_session_events(
             instructions += f"\n\nAdditional instructions for this summary:\n{extra_instructions.strip()}"
 
         messages, tools = await _summariser_messages(session, to_compact, instructions)
+
+        # An empty response is not a transport error, so `completion_with_retry`
+        # does not see it and nothing retried. It happens: a smaller model
+        # handed a short head sometimes answers with nothing at all, or answers
+        # the *conversation* instead of summarising it. Observed three times in
+        # one soak run. Failing the compaction on the first blank is the wrong
+        # call three hours into a session, so ask again before giving up.
         summary = ""
-        async for event in completion_with_retry(
-            provider,
-            messages=messages,
-            tools=tools,
-            model=session["model"],
-            thinking_effort="low",
-        ):
-            if event["type"] == "content":
-                summary += event["text"]
-                yield {"type": "compact_delta", "text": event["text"]}
-            elif event["type"] == "retry":
-                # The partial summary already streamed is being replaced; tell
-                # the client to clear its draft and start it again.
-                summary = ""
-                yield {"type": "compact_reset", "message": event["message"]}
-            elif event["type"] == "error":
-                yield fail(event["message"])
+        for attempt in range(EMPTY_SUMMARY_ATTEMPTS):
+            summary = ""
+            failed = None
+            async for event in completion_with_retry(
+                provider,
+                messages=messages,
+                tools=tools,
+                model=session["model"],
+                thinking_effort="low",
+            ):
+                if event["type"] == "content":
+                    summary += event["text"]
+                    yield {"type": "compact_delta", "text": event["text"]}
+                elif event["type"] == "retry":
+                    # The partial summary already streamed is being replaced;
+                    # tell the client to clear its draft and start it again.
+                    summary = ""
+                    yield {"type": "compact_reset", "message": event["message"]}
+                elif event["type"] == "error":
+                    failed = event["message"]
+                    break
+            if failed:
+                yield fail(failed)
                 return
-        summary = summary.strip()
+            summary = summary.strip()
+            if summary:
+                break
+            if attempt + 1 < EMPTY_SUMMARY_ATTEMPTS:
+                log.warning(
+                    "empty summary for session=%s, asking again (attempt %s)",
+                    session_id, attempt + 2,
+                )
+                yield {"type": "compact_reset", "message": "The summary came back empty; retrying."}
         if not summary:
             yield fail("The model returned an empty summary.")
             return
 
-    original_tokens = sum(r.get("token_count") or 0 for r in to_compact)
+    original_tokens = sum(message_tokens(r, session["model"]) for r in to_compact)
     compressed_tokens = provider.count_tokens([{"role": "system", "content": summary}])
 
     await db.add_compaction(

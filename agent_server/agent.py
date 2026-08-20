@@ -592,35 +592,59 @@ async def _loop(
                 result = await compact_session(session_id)
                 yield {"type": "compacted", **result}
                 if not result.get("ok"):
-                    yield {"type": "error", "message": result.get("reason", "Compaction failed")}
-                    return
-                # A compaction that summarised *nothing* will summarise nothing
-                # next time either, and the check runs at every turn boundary --
-                # so without this the loop pays for a summariser call per round,
-                # forever, while destroying the oldest messages each time.
-                #
-                # Judged on what the compaction itself reports, not on whether
-                # the context came down: a successful compaction followed by a
-                # long turn that refills the window is a different thing, and
-                # that one *should* compact again.
-                original = result.get("original_tokens")
-                compressed = result.get("compressed_tokens")
-                if original is not None and compressed is not None and original <= compressed:
+                    # A failed compaction must not take the turn with it. It
+                    # used to `return` here, which left the user's message
+                    # sitting in the transcript with nothing answering it -- the
+                    # next thing they typed simply piled on behind it. Warn,
+                    # stop trying for this run, and let the turn continue: if
+                    # the window really is full the provider will say so, which
+                    # is a failure the user can see and act on.
                     snooze_compaction(session_id)
                     log.warning(
-                        "compaction freed nothing for session=%s (%s -> %s tokens,"
-                        " context %s, threshold %s); not retrying this run",
-                        session_id, original, compressed, before_tokens, usage["threshold"],
+                        "compaction failed for session=%s: %s",
+                        session_id, result.get("reason"),
                     )
                     yield {
                         "type": "notice",
                         "level": "warn",
                         "message": (
-                            "Compaction could not free any space -- the threshold is too "
-                            "low for this conversation to be summarised into. Raise it in "
-                            "the session menu."
+                            f"Could not compact this conversation: "
+                            f"{result.get('reason', 'unknown reason')}. Carrying on "
+                            f"without it -- compact by hand from the session menu if "
+                            f"the context keeps growing."
                         ),
                     }
+                else:
+                    # A compaction that summarised *nothing* will summarise
+                    # nothing next time either, and the check runs at every turn
+                    # boundary -- so without this the loop pays for a summariser
+                    # call per round, forever, while destroying the oldest
+                    # messages each time.
+                    #
+                    # Judged on what the compaction itself reports, not on
+                    # whether the context came down: a successful compaction
+                    # followed by a long turn that refills the window is a
+                    # different thing, and that one *should* compact again.
+                    original = result.get("original_tokens")
+                    compressed = result.get("compressed_tokens")
+                    if (original is not None and compressed is not None
+                            and original <= compressed):
+                        snooze_compaction(session_id)
+                        log.warning(
+                            "compaction freed nothing for session=%s (%s -> %s tokens,"
+                            " context %s, threshold %s); not retrying this run",
+                            session_id, original, compressed, before_tokens,
+                            usage["threshold"],
+                        )
+                        yield {
+                            "type": "notice",
+                            "level": "warn",
+                            "message": (
+                                "Compaction could not free any space -- the threshold "
+                                "is too low for this conversation to be summarised "
+                                "into. Raise it in the session menu."
+                            ),
+                        }
                 # Compaction adopts `pending_system_prompt` and clears the
                 # frozen tools, so the copies above are now stale. Rebuild them
                 # before the next request, otherwise that request still sends the

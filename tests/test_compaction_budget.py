@@ -129,3 +129,57 @@ def test_the_split_still_lands_on_a_unit_boundary():
     ]
     _to_compact, kept = split_for_compaction(rows, 300)
     assert not kept or kept[0]["role"] != "tool", "kept window starts on an orphaned tool result"
+
+
+# ── Costing a message nothing measured ───────────────────────────────────────
+
+def test_a_user_message_is_not_free():
+    """`token_count` is written only for assistant and tool rows, from the usage
+    the provider reports. Nothing reports a cost for the user's own message, and
+    every reader used `or 0` -- so a run of user turns filled no budget at all."""
+    from agent_server.compaction import message_tokens
+
+    row = {"role": "user", "content": "x" * 4000, "token_count": None}
+    assert message_tokens(row) > 500
+
+
+def test_a_measured_message_keeps_its_measurement():
+    from agent_server.compaction import message_tokens
+
+    assert message_tokens({"role": "assistant", "content": "hi", "token_count": 913}) == 913
+
+
+def test_an_empty_message_costs_nothing():
+    from agent_server.compaction import message_tokens
+
+    assert message_tokens({"role": "assistant", "content": "", "token_count": None}) == 0
+
+
+def test_a_tool_call_message_costs_its_arguments():
+    """An assistant row that only carries tool calls has no content at all, but
+    the calls themselves are sent and paid for."""
+    from agent_server.compaction import message_tokens
+
+    row = {"role": "assistant", "content": "", "token_count": None,
+           "tool_calls": '[{"id":"c1","function":{"name":"read","arguments":"' + "x" * 2000 + '"}}]'}
+    assert message_tokens(row) > 100
+
+
+def test_uncounted_user_turns_still_fill_the_tail_budget():
+    """The failure this exists to stop: a conversation of long user messages
+    that the walk priced at zero, so it kept everything and left a head of one
+    message for the summariser -- which then returned nothing and failed the
+    whole turn."""
+    from agent_server.compaction import split_for_compaction, tail_budget
+
+    rows = []
+    for i in range(30):
+        rows.append({"id": i * 2 + 1, "role": "user", "content": "u" * 3000,
+                     "tool_calls": None, "token_count": None})
+        rows.append({"id": i * 2 + 2, "role": "assistant", "content": "ok",
+                     "tool_calls": None, "token_count": 5})
+    to_compact, kept = split_for_compaction(rows, tail_budget(20_000))
+    assert len(to_compact) > 2, (
+        f"only {len(to_compact)} message(s) to summarise: user turns were priced at zero"
+    )
+    assert len(kept) >= 2

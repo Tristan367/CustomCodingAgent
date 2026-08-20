@@ -37,12 +37,49 @@ Answer what was asked, nothing more. Be concise. Do not open files hoping. Do no
 `edit` replaces exact text: copy `oldString` from what `read` printed rather than retyping it, and only edit lines you were shown. Batch independent tool calls. `browser` to test a web UI, with `expect` steps rather than claims. Background servers; port 8219 is this app.
 """
 
+# Every line here is answering something a real summariser actually did wrong.
+# Measured over a soak run that forced five consecutive compactions:
+#   * It replied to the conversation instead of summarising it ("I'll read the
+#     todo.json file first.") -- the summariser is sent the full tool schemas on
+#     purpose, so that the cached prefix matches a normal turn, which means it
+#     can and will try to use them unless told not to.
+#   * It narrated the task instead of doing it ("**Purpose of this handoff:**
+#     capture a short, non-engineering session summary").
+#   * It declined ("This conversation contains no engineering work to
+#     summarise") because the old wording framed everything around code.
+#   * It produced a summary ten times larger than the text it replaced.
+#   * Facts the user had explicitly asked it to remember survived only by luck;
+#     nothing told it those were the things that must not be dropped.
 COMPACT_PROMPT_DEFAULT = """
-Summarise this conversation so another engineer could pick the work up cold.
+You are compressing the earlier part of a conversation so it can be dropped from
+the context window. What you write replaces those messages permanently -- anything
+you leave out is gone for good.
 
-Preserve: what the user asked for, decisions made and why, every file created or modified with its path, key code and APIs discovered, commands that were run and what they returned, errors hit and how they were resolved, and what still remains to be done.
+Write only the summary. No preamble, no sign-off, and no remarks about the
+conversation or about the act of summarising it. This is not your turn in the
+conversation: do not answer anything in it, do not address the user, and do not
+call tools, even though they are available to you.
 
-Drop: tool output that no longer matters, exploration that led nowhere, and pleasantries. Write plain prose and be specific -- names, paths, and line numbers, not vague descriptions.
+Keep, and keep exactly as they were written:
+- Anything the user asked you to remember, and every name, identifier, path,
+  number, URL, or version they gave you.
+- What the user is trying to achieve, and any constraint or preference stated.
+- Decisions taken, and the reason for each.
+- Every file created, modified, or deleted, with its full path and what changed.
+- Commands run and what they returned, failures especially.
+- Errors hit, and whether each was resolved or is still open.
+- What is left to do.
+
+Leave out tool output that no longer matters, searches that found nothing,
+reasoning that led nowhere, and pleasantries.
+
+Be concrete: names, paths, and line numbers rather than descriptions of them.
+Plain prose or short lists, whichever is clearer.
+
+The result must be substantially shorter than what it replaces -- that is the
+whole point -- and its length should match how much actually happened. If very
+little happened, say so in a sentence or two and stop. Never decline, and never
+answer with nothing.
 """
 
 

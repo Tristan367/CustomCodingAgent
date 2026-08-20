@@ -247,4 +247,14 @@ async def test_auto_compaction_fires_again_in_the_same_run(session, monkeypatch)
     events = [e async for e in agent.run(session["id"])]
 
     assert len(calls) == 2, f"auto-compaction should fire again, got {len(calls)} call(s)"
-    assert any(e["type"] == "error" for e in events)
+    # The failure is surfaced, but no longer as a fatal `error` that ends the
+    # turn. Returning there left the user's message in the transcript with
+    # nothing answering it, and the next thing they typed piled on behind it --
+    # seen in a real session as two user messages in a row. A warning the user
+    # can act on is the right loud-but-harmless failure.
+    warnings = [e for e in events if e["type"] == "notice" and e.get("level") == "warn"]
+    assert warnings, "a failed compaction told the user nothing"
+    assert "compact" in warnings[-1]["message"].lower()
+    assert not any(e["type"] == "error" for e in events), (
+        "a failed compaction should no longer end the turn"
+    )

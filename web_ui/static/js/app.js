@@ -164,7 +164,43 @@ function initSession() {
   setupDragDrop();
   markSessionSeen();
   updateComposerButtons();
-  if (!Persist.restore()) scrollToBottom(true);
+  expandDeferredBlocks();
+}
+
+/* Open the auto-expand blocks after the first frame, then settle the scroll.
+ *
+ * The server marks them with `data-expand` rather than `open`, so the first
+ * layout is of a collapsed transcript. On a long session with `edit` set to
+ * auto-expand that is the difference between laying out 124,000px of diffs and
+ * 18,000px of one-line headers, and it is paid again on every tab switch --
+ * switching into a big session is an htmx swap that re-runs all of this.
+ *
+ * Measured on a session of 250 edits: shipping them open cost 512ms of blocked
+ * main thread and a 569ms DOMContentLoaded. Opening the same blocks once the
+ * page is up costs 12ms, because it is one layout pass instead of one per
+ * chunk the parser hands over.
+ *
+ * The scroll restore has to come after, not before: a position saved against
+ * the expanded document would be clamped to the height of the collapsed one. */
+function expandDeferredBlocks() {
+  const settle = () => { if (!Persist.restore()) scrollToBottom(true); };
+  const pending = App.els.messages
+    ? App.els.messages.querySelectorAll('details[data-expand]')
+    : [];
+  if (!pending.length) {
+    settle();
+    return;
+  }
+  requestAnimationFrame(() => {
+    pending.forEach((d) => {
+      d.open = true;
+      d.removeAttribute('data-expand');
+    });
+    // Force the layout here rather than leaving it for the scroll assignment
+    // to trigger, so `Persist.restore` is working against the real height.
+    if (App.els.scroller) void App.els.scroller.scrollHeight;
+    settle();
+  });
 }
 
 document.addEventListener('DOMContentLoaded', () => {

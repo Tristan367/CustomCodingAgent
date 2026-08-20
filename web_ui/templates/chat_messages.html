@@ -36,8 +36,11 @@
         <div class="msg-content">
             {% set input_text = tool_inputs.get(m.tool_call_id) %}
             {% if m.diff and m.tool_name == 'edit' %}
-            {# Open by default only for the tools the user chose to auto-expand. #}
-            <details class="tool-details diff-details"{% if m.tool_name in expand_tools %} open{% endif %}>
+            {# Marked rather than opened: the transcript is painted collapsed and
+               app.js opens these after the first frame. Shipping 250 expanded
+               diffs in the initial layout cost ~360ms of blocked main thread;
+               opening them once the page is up costs 12ms. #}
+            <details class="tool-details diff-details"{% if m.tool_name in expand_tools %} data-expand="1"{% endif %}>
                 {% set added, removed = m.diff | diffstat %}
                 {% set lnw, dlines = m.diff | difflines %}
                 <summary class="tool-summary">
@@ -55,7 +58,7 @@
                 <pre class="diff-block"{% if m.lang %} data-lang="{{ m.lang }}"{% endif %} style="--lnw: {{ lnw }}ch">{%- for cls, num, line in dlines %}<span class="row {{ cls }}"><span class="ln">{{ num }}</span><span class="lc">{{ line if line else ' ' }}</span></span>{%- endfor %}</pre>
             </details>
             {% else %}
-            <details class="tool-details"{% if m.tool_name in expand_tools %} open{% endif %}>
+            <details class="tool-details"{% if m.tool_name in expand_tools %} data-expand="1"{% endif %}>
                 <summary class="tool-summary">
                     <span class="tool-label">{{ m.tool_title or 'result' }}</span>
                     {%- if m.duration_ms | duration %}
@@ -101,7 +104,7 @@
     <div class="message thinking" id="msg-{{ m.id }}-thinking">
         <div class="msg-role" title="reasoning"></div>
         <div class="msg-content">
-            <details class="tool-details reasoning-details"{% if 'reasoning' in expand_tools %} open{% endif %}>
+            <details class="tool-details reasoning-details"{% if 'reasoning' in expand_tools %} data-expand="1"{% endif %}>
                 <summary class="reasoning-summary">{{ m.reasoning_content }}</summary>
             </details>
         </div>

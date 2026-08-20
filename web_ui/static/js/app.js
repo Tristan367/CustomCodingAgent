@@ -2989,6 +2989,7 @@ const MicTest = {
     this.els.gain = document.getElementById('mic-test-gain');
     this.els.gainOut = document.getElementById('mic-test-gain-out');
     this.els.record = document.getElementById('mic-test-record');
+    this.els.hint = document.getElementById('mic-test-hint');
     this.els.play = document.getElementById('mic-test-play');
     this.els.audio = document.getElementById('mic-test-audio');
     this.els.device = document.getElementById('mic-test-device');
@@ -3036,9 +3037,20 @@ const MicTest = {
       opt.selected = d.deviceId === current;
       this.els.device.appendChild(opt);
     }
+    // The select is capped in width, so a long device name is ellipsised. Put
+    // the whole thing on the element's title, which is where a truncated label
+    // should always be recoverable from.
+    this.setDeviceTitle();
+  },
+
+  setDeviceTitle() {
+    const sel = this.els.device;
+    if (!sel) return;
+    sel.title = sel.selectedOptions[0] ? sel.selectedOptions[0].textContent : '';
   },
 
   async selectDevice() {
+    this.setDeviceTitle();
     saveMicDeviceId(this.els.device ? this.els.device.value : '');
     // Restart the capture so the newly chosen device takes effect immediately.
     if (this.active) {
@@ -3099,6 +3111,7 @@ const MicTest = {
 
     this.els.meter.hidden = false;
     this.els.record.hidden = false;
+    if (this.els.hint) this.els.hint.hidden = false;
     this.els.toggle.textContent = 'Stop mic test';
     this.meterLoop();
   },
@@ -3108,6 +3121,7 @@ const MicTest = {
     if (this.els.meter) this.els.meter.hidden = true;
     if (this.els.record) { this.els.record.hidden = true; this.els.record.textContent = 'Record'; }
     if (this.els.play) this.els.play.hidden = true;
+    if (this.els.hint) this.els.hint.hidden = true;
     if (this.els.toggle) this.els.toggle.textContent = 'Start mic test';
     if (this.els.audio) this.els.audio.removeAttribute('src');
   },

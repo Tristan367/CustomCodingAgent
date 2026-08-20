@@ -284,23 +284,28 @@ async function restartMyriadCode(button) {
     <section class="panel">
         <h2>Microphone</h2>
         <div class="mic-test">
+            {# Label and control on one line each, so the row has a single
+               baseline. `.field-label` is a block and `.control-row` is only
+               styled inside `.form-row`, so here the readout wrapped under the
+               slider and the three groups each set their own height. #}
             <div class="mic-test-row">
                 <button type="button" id="mic-test-toggle" class="btn-secondary">Start mic test</button>
-                <label class="field-label">Input gain
-                    <span class="control-row">
-                        <input type="range" id="mic-test-gain" min="-18" max="18" step="1" value="0">
-                        <span class="readout"><output id="mic-test-gain-out">0</output> dB</span>
-                    </span>
-                </label>
-                <label class="field-label">Microphone
+                <span class="mic-field">
+                    <label for="mic-test-gain">Input gain</label>
+                    <input type="range" id="mic-test-gain" min="-18" max="18" step="1" value="0">
+                    <span class="readout"><output id="mic-test-gain-out">0</output> dB</span>
+                </span>
+                <span class="mic-field mic-field-device">
+                    <label for="mic-test-device">Microphone</label>
                     <select id="mic-test-device"></select>
-                </label>
+                </span>
             </div>
             <div class="mic-test-meter" id="mic-test-meter" hidden aria-hidden="true"></div>
             <div class="mic-test-row">
                 <button type="button" id="mic-test-record" class="btn-secondary" hidden>Record</button>
                 <button type="button" id="mic-test-play" class="btn-secondary" hidden>Play back</button>
-                <span class="hint">Records the mic through the gain above (stops at ~10s), so you can hear exactly what dictation will get.</span>
+                {# Describes the Record button, so it comes and goes with it. #}
+                <span class="hint" id="mic-test-hint" hidden>Records the mic through the gain above (stops at ~10s), so you can hear exactly what dictation will get.</span>
             </div>
             <audio id="mic-test-audio" hidden></audio>
         </div>

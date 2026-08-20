@@ -956,6 +956,40 @@ button:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
 /* Home-page microphone test: a meter in normal flow plus gain/record controls. */
 .mic-test { display: flex; flex-direction: column; gap: 10px; }
 .mic-test-row { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }
+
+/* One labelled control, laid out on a single line. */
+.mic-field {
+  display: flex;
+  align-items: center;
+  gap: var(--s2);
+  font-size: 11.5px;
+  color: var(--text-dim);
+}
+.mic-field > label { white-space: nowrap; }
+.mic-field input[type="range"] { width: 190px; }
+/* Wide enough for "-18 dB", and tabular so the row does not twitch as the
+   number changes width while the slider is dragged. */
+.mic-field .readout {
+  min-width: 6ch;
+  color: var(--text);
+  font-variant-numeric: tabular-nums;
+}
+
+/* The device picker sits at the right-hand end, with the gap before it coming
+   from the auto margin rather than from a guessed padding.
+ *
+ * A native select is as wide as its widest option, and a microphone reports
+ * itself as "Default - Blue Yeti Stereo Microphone (b58e:9e84)". Before the
+ * mic test runs, the browser withholds those labels, so the select is narrow;
+ * granting permission fills them in, the select triples in width, and the whole
+ * control wraps onto a second line under the button -- the row reflowing under
+ * the cursor at the exact moment the user clicked something. Capping the width
+ * keeps the name readable and the row still. */
+.mic-field-device { margin-left: auto; padding-left: var(--s4); }
+.mic-field-device select {
+  max-width: 240px;
+  text-overflow: ellipsis;
+}
 .mic-test-meter {
   display: flex;
   align-items: flex-end;

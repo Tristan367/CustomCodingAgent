@@ -19,6 +19,12 @@ enforces, all of which produce hard 400s when violated:
 import json
 from typing import Any
 
+# Fields a provider hangs off a tool call that are not part of the OpenAI shape
+# but must be echoed back verbatim. Kept as a list rather than "everything that
+# is not id/type/function" so a stray key from the database cannot be smuggled
+# into an outgoing request.
+VENDOR_CALL_KEYS = ("extra_content",)
+
 
 def normalize_tool_calls(raw: Any) -> list[dict]:
     """Coerce any stored tool-call shape into the canonical wire format.
@@ -60,11 +66,28 @@ def normalize_tool_calls(raw: Any) -> list[dict]:
         # tool call, which the loop already knows how to finish.
         if not name or not call_id:
             continue
-        out.append({
+        call = {
             "id": call_id,
             "type": "function",
             "function": {"name": name, "arguments": arguments},
-        })
+        }
+        # Vendor fields that have to survive the round trip. Gemini attaches a
+        # `thought_signature` to every function call and rejects the follow-up
+        # request that does not carry it back, so a rebuilt call without this
+        # fails the *next* request with a 400 rather than anywhere near the
+        # cause. `extra` is how the provider hands them over while streaming;
+        # the named keys are the same fields read back from the database, where
+        # they were stored in the canonical shape.
+        vendor = tc.get("extra")
+        if isinstance(vendor, dict):
+            call.update({
+                key: value for key, value in vendor.items()
+                if key not in ("id", "type", "function")
+            })
+        for key in VENDOR_CALL_KEYS:
+            if key in tc and key not in call:
+                call[key] = tc[key]
+        out.append(call)
     return out
 
 

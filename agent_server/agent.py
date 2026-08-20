@@ -1249,9 +1249,17 @@ async def resolve_pending(
 
 
 def _accumulate(partials: dict[int, dict], deltas: list[dict]):
-    """Reassemble streamed tool-call fragments keyed by their index."""
+    """Reassemble streamed tool-call fragments keyed by their index.
+
+    Gemini sends no index at all, and sends each call in a single fragment. Two
+    calls in one turn would therefore both land in slot 0 and the first would be
+    overwritten, so a fragment that names a call while the slot already holds a
+    different one starts a new slot instead.
+    """
     for d in deltas:
-        idx = d.get("index") or 0
+        idx = d.get("index")
+        if idx is None:
+            idx = _slot_for(partials, d)
         slot = partials.setdefault(idx, {"id": "", "name": "", "arguments": ""})
         if d.get("id"):
             slot["id"] = d["id"]
@@ -1259,6 +1267,24 @@ def _accumulate(partials: dict[int, dict], deltas: list[dict]):
             slot["name"] = d["name"]
         if d.get("arguments"):
             slot["arguments"] += d["arguments"]
+        if d.get("extra"):
+            slot.setdefault("extra", {}).update(d["extra"])
+
+
+def _slot_for(partials: dict[int, dict], delta: dict) -> int:
+    """Which call an unindexed fragment belongs to.
+
+    A provider that indexes its fragments never reaches this. For one that does
+    not, a fragment carrying an id different from the last slot's is a new call;
+    anything else continues the one in progress.
+    """
+    if not partials:
+        return 0
+    last = max(partials)
+    call_id = delta.get("id")
+    if call_id and partials[last].get("id") and partials[last]["id"] != call_id:
+        return last + 1
+    return last
 
 
 def sse(event: dict) -> str:

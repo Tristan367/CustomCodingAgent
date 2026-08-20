@@ -108,11 +108,16 @@ class AnthropicProvider(Provider):
         system = _extract_system(messages)
         max_tokens = model_info(model)["max_output"]
 
+        # No "stream": True here. `messages.stream()` below *is* the streaming
+        # call -- it is a context manager that opens the stream itself -- and
+        # passing the flag as well is a TypeError before any request is sent.
+        # That made every Anthropic turn fail instantly, so this provider had
+        # never worked; the unit tests drive `_build_kwargs` and a fake stream
+        # separately and so never put the two together.
         kwargs: dict = {
             "model": model,
             "messages": _convert_messages(messages),
             "max_tokens": max_tokens,
-            "stream": True,
         }
 
         if system:

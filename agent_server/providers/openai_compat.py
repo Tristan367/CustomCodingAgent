@@ -108,6 +108,11 @@ class OpenAICompatibleProvider(Provider):
                                     "id": tc.id,
                                     "name": tc.function.name if tc.function else None,
                                     "arguments": tc.function.arguments if tc.function else None,
+                                    # Vendor fields the SDK did not model. Gemini
+                                    # puts a `thought_signature` here and rejects
+                                    # the next request if it does not come back,
+                                    # so a tool call is unusable without them.
+                                    "extra": dict(tc.model_extra or {}) or None,
                                 }
                                 for tc in delta.tool_calls
                             ],

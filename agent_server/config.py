@@ -93,12 +93,6 @@ MODELS = [
         "context": 1_000_000,
     },
     {
-        "id": "anthropic/claude-sonnet-4-20250514",
-        "name": "Claude Sonnet 4",
-        "provider": "openrouter",
-        "context": 200_000,
-    },
-    {
         "id": "openai/gpt-4.1",
         "name": "GPT-4.1",
         "provider": "openrouter",

@@ -6,7 +6,19 @@ subagent hierarchy you define tier by tier.
 
 FastAPI + HTMX + vanilla JS, SQLite, no build step, no framework. Runs against
 your own filesystem with whatever model you point it at — DeepSeek, Anthropic,
-OpenRouter, or any OpenAI-compatible endpoint.
+OpenRouter, Google Gemini, or any OpenAI-compatible endpoint.
+
+**Documentation**
+
+| | |
+|---|---|
+| [docs/USING.md](docs/USING.md) | What you can do with it, in plain terms. Start here — it opens with a table of "if you find yourself doing X, the app already does Y". |
+| [docs/FEATURES.md](docs/FEATURES.md) | Complete index of every feature and a one-line note on how each works. |
+| [docs/DEVELOPING.md](docs/DEVELOPING.md) | For changing the code: the architecture, the invariants, and the traps that have already caught someone. |
+
+If you are pointing an agent at this repository, `docs/USING.md` answers "what
+can this app already do?" and `docs/DEVELOPING.md` answers "how do I work on it
+without breaking something subtle?".
 
 ---
 

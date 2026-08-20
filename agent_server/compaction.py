@@ -64,10 +64,26 @@ KEEP_TAIL_SHARE = 0.4
 KEEP_TAIL_FLOOR = 2_000
 
 
-def tail_budget(threshold: int) -> int:
-    """How much of the recent conversation to keep verbatim, for this session."""
+# What the user may choose. Below the floor there is not enough recent
+# conversation for the next request to make sense; above the ceiling there is
+# not enough room left above the tail for compaction to free anything.
+MIN_TAIL_PERCENT = 0.5
+MAX_TAIL_PERCENT = 40.0
+
+
+def tail_budget(threshold: int, tail_percent: float | None = None) -> int:
+    """How much of the recent conversation to keep verbatim, for this session.
+
+    `tail_percent` is the user's own choice, as a percentage of the threshold.
+    Without one, the share below applies and the flat cap keeps a large window
+    from keeping absurdly much -- which is why the default works out at around
+    3% of a 750K threshold but 23% of a 106K one.
+    """
     if not threshold or threshold <= 0:
         return KEEP_TAIL_TOKENS
+    if tail_percent:
+        share = min(MAX_TAIL_PERCENT, max(MIN_TAIL_PERCENT, float(tail_percent))) / 100
+        return max(KEEP_TAIL_FLOOR, int(threshold * share))
     return max(KEEP_TAIL_FLOOR, min(KEEP_TAIL_TOKENS, int(threshold * KEEP_TAIL_SHARE)))
 
 
@@ -317,7 +333,9 @@ async def compact_session_events(
 
     rows = await db.get_messages(session_id)
     usage = await db.get_session_usage(session_id)
-    to_compact, kept = split_for_compaction(rows, tail_budget(usage.get("threshold") or 0))
+    to_compact, kept = split_for_compaction(
+        rows, tail_budget(usage.get("threshold") or 0, session.get("compact_tail_percent"))
+    )
     if not to_compact:
         yield fail("Not enough completed turns to compact yet.")
         return

@@ -128,3 +128,27 @@ def test_the_voices_use_more_than_one_kind_of_synthesis():
         "every pitched voice is a sine, so they will all sound like bells"
     )
     assert "to:" in body, "no pitch bends, which is what makes a pop or a blip"
+
+
+def test_the_default_sound_is_the_gentle_one():
+    """It fires when a long run finishes, often while the user is reading
+    something else, so the least startling voice is the right default."""
+    assert DEFAULT_SOUND == "swell"
+
+
+def test_nothing_hardcodes_a_different_default():
+    """The default used to be spelled `'click'` in five places -- two templates,
+    a route, and two spots in app.js -- so changing it changed it partially."""
+    import re
+    from pathlib import Path
+
+    root = Path(__file__).resolve().parent.parent
+    stale = []
+    for path in (root / "web_ui/templates/base.html",
+                 root / "web_ui/templates/index_content.html",
+                 root / "agent_server/routes/settings.py"):
+        if re.search(r"sound_choice['\"],\s*['\"]click['\"]", path.read_text()):
+            stale.append(path.name)
+        if "soundKind || 'click'" in path.read_text():
+            stale.append(path.name)
+    assert not stale, f"a literal sound default is still hardcoded in: {stale}"

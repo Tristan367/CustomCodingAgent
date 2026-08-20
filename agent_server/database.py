@@ -134,6 +134,12 @@ MIGRATIONS: list[tuple[str, str, str]] = [
     ("sessions", "prompt_profile", "TEXT DEFAULT 'default'"),
     ("sessions", "bash_auto_approve", "INTEGER DEFAULT 0"),
     ("sessions", "compact_threshold", "INTEGER"),
+    # What share of the threshold stays verbatim when compaction runs,
+    # as a percentage. NULL means "work it out from the threshold" --
+    # see compaction.tail_budget. Per session because how much recent
+    # conversation has to survive is a property of the work: a long
+    # refactor wants more of it than a series of one-shot questions.
+    ("sessions", "compact_tail_percent", "REAL"),
     # The rendered system prompt, frozen per session. Kept here rather than
     # rebuilt per request so that editing a shared prompt, restarting the
     # server, or the date rolling over cannot change a live conversation's
@@ -346,6 +352,7 @@ async def _execute(sql: str, params: tuple = ()) -> int:
 SESSION_FIELDS = {
     "name", "project_dir", "provider", "model", "thinking_effort",
     "prompt_profile", "compact_profile", "bash_auto_approve", "is_archived", "compact_threshold",
+    "compact_tail_percent",
     "cache_fp", "cache_fp_tokens", "cache_checked_at", "cache_prompt_tokens",
     "system_prompt", "prompt_custom", "pending_system_prompt", "subagent_model",
     "tool_descriptions", "tool_schemas",

@@ -12,6 +12,7 @@ from pathlib import Path
 
 from fastapi.templating import Jinja2Templates
 
+from agent_server.config import DEFAULT_SOUND, REPO_URL
 from agent_server.conversation import normalize_tool_calls
 
 BASE_DIR = Path(__file__).resolve().parent.parent
@@ -284,6 +285,8 @@ def custom_theme_style() -> str:
     )
 
 
+templates.env.globals["REPO_URL"] = REPO_URL
+templates.env.globals["DEFAULT_SOUND"] = DEFAULT_SOUND
 templates.env.globals["current_theme"] = current_theme
 templates.env.globals["custom_color"] = custom_color
 templates.env.globals["custom_theme_style"] = custom_theme_style

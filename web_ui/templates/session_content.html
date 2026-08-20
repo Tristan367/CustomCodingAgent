@@ -169,6 +169,24 @@
         <div class="threshold-scale">
             <span>4k</span><span>32k</span><span>256k</span><span>1M</span>
         </div>
+
+        {# How much of the recent conversation survives a compaction untouched.
+           A share of the threshold rather than a token count, so it stays
+           sensible when the threshold moves. #}
+        <h3 class="modal-subhead">Recent conversation kept verbatim</h3>
+        <p class="hint">Everything older than this is replaced by the summary. More keeps
+            the last stretch of work word-for-word; less leaves more room before the next
+            compaction.</p>
+        <div class="threshold-readout">
+            <span id="tail-value">{{ tail_percent }}</span>% &middot;
+            <span id="tail-tokens" class="hint"></span>
+        </div>
+        <input type="range" id="tail-slider" min="5" max="400" step="5"
+               value="{{ (tail_percent * 10) | round | int }}"
+               oninput="updateThresholdLabel()">
+        <div class="threshold-scale">
+            <span>0.5%</span><span>10%</span><span>25%</span><span>40%</span>
+        </div>
         <div class="modal-actions">
             <button type="button" class="btn-primary" onclick="saveThreshold()">Save threshold</button>
             <button type="button" class="btn-secondary" onclick="closeModal('threshold-modal')">Cancel</button>

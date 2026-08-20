@@ -2167,14 +2167,26 @@ function openThresholdModal() {
 function updateThresholdLabel() {
   const value = THRESHOLD_STEPS[Number(document.getElementById('threshold-slider').value)] || THRESHOLD_STEPS.at(-1);
   document.getElementById('threshold-value').textContent = formatTokens(value);
+
+  // The tail is a share of the threshold, so it is only meaningful next to the
+  // token count it works out to -- 3% means something very different on a 1M
+  // window and on a 16K one.
+  const tail = document.getElementById('tail-slider');
+  if (!tail) return;
+  const percent = Number(tail.value) / 10;
+  document.getElementById('tail-value').textContent = percent.toFixed(1).replace(/\.0$/, '');
+  document.getElementById('tail-tokens').textContent =
+    `about ${formatTokens(Math.round(value * percent / 100))} tokens kept`;
 }
 
 async function saveThreshold() {
   const value = THRESHOLD_STEPS[Number(document.getElementById('threshold-slider').value)] || THRESHOLD_STEPS.at(-1);
+  const tail = document.getElementById('tail-slider');
   closeModal('threshold-modal');
 
   const form = new FormData();
   form.append('threshold', String(value));
+  if (tail) form.append('tail_percent', String(Number(tail.value) / 10));
 
   await fetch(`/api/sessions/${App.sessionId}/compact-threshold`, { method: 'POST', body: form });
   refreshMeta();
@@ -2215,12 +2227,12 @@ const Notifier = {
   lastUnseen: {},
 
   volume: 0.5,
-  kind: 'click',
+  kind: 'swell',
 
   init() {
     this.enabled = document.body.dataset.sound !== 'off';
     this.volume = parseFloat(document.body.dataset.soundVolume || '0.5');
-    this.kind = document.body.dataset.soundKind || 'click';
+    this.kind = document.body.dataset.soundKind || 'swell';
   },
 
   play(kind) {
@@ -2229,7 +2241,7 @@ const Notifier = {
     // notification plays the user's chosen sound (click/chime/knock/upload).
     if (kind === 'waiting') return this._beep([660, 880]);
     if (kind === 'error') return this._beep([300, 220]);
-    this._playSound(this.kind || 'click');
+    this._playSound(this.kind || 'swell');
   },
 
   _playSound(sound) {
@@ -2244,7 +2256,7 @@ const Notifier = {
     try {
       this.ctx = this.ctx || new (window.AudioContext || window.webkitAudioContext)();
       if (this.ctx.state === 'suspended') this.ctx.resume();
-      const voice = SOUNDS[name] || SOUNDS.click;
+      const voice = SOUNDS[name] || SOUNDS.swell;
       voice(new Synth(this.ctx, this.volume || 0.5));
     } catch (_) { /* no audio output is not worth an error */ }
   },

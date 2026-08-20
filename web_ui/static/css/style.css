@@ -2713,3 +2713,59 @@ dialog.file-browser::backdrop { background: transparent; }
   font-size: 12px;
   box-shadow: 0 6px 20px rgba(0, 0, 0, 0.45);
 }
+
+/* A second heading inside a modal, for a setting that belongs with the one
+   above it but is not the same knob. */
+.modal-subhead {
+  margin: 20px 0 4px;
+  font-size: 13px;
+  font-weight: 600;
+}
+
+/* Links to the repository. Two of them, for two different people.
+
+   The top-bar one is for the user: the most valuable thing they can do with the
+   URL is give it to their own agent and ask what this app already does, which
+   is what stops them building a workaround for something already here. So it
+   sits in front of them, next to the logo, labelled for what it gives them
+   rather than where it points.
+
+   The corner one is for whoever wants to change the app rather than use it, so
+   it stays out of the way until looked for. */
+/* No border and an icon, so it does not read as one more session tab sitting
+   among the real ones -- which a bordered pill in this position does. */
+.repo-link {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  margin: 0 4px 0 2px;
+  padding: 2px 4px;
+  font-size: 11.5px;
+  color: var(--text-faint);
+  text-decoration: none;
+  flex: 0 0 auto;
+}
+.repo-link:hover { color: var(--accent); }
+
+.repo-corner {
+  position: fixed;
+  right: 12px;
+  bottom: 10px;
+  z-index: 40;
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  padding: 3px 9px;
+  font-size: 11px;
+  color: var(--text-faint);
+  text-decoration: none;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  opacity: 0.55;
+  transition: opacity 120ms ease, color 120ms ease;
+}
+.repo-corner:hover { opacity: 1; color: var(--text); }
+/* The composer and the editor own the bottom of a session view; the corner link
+   must not sit on top of either. */
+#session-view ~ .repo-corner, body:has(#session-view) .repo-corner { display: none; }

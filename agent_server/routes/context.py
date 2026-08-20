@@ -18,7 +18,7 @@ from pathlib import Path
 
 from agent_server import agent, permissions
 from agent_server import database as db
-from agent_server.compaction import should_offer_compaction
+from agent_server.compaction import should_offer_compaction, tail_budget
 from agent_server.config import (
     DEFAULT_MODEL,
     DYNAMIC_DEEPSEEK_MODELS,
@@ -361,6 +361,14 @@ async def _session_context(session: dict) -> dict:
         "efforts": REASONING_EFFORTS,
         "usage": usage,
         "should_compact": await should_offer_compaction(session["id"]),
+        # What the tail slider should start on: the session's own choice,
+        # or the share the default budget currently works out to.
+        "tail_percent": round(
+            session.get("compact_tail_percent")
+            or (100 * tail_budget(usage["threshold"]) / usage["threshold"]
+                if usage["threshold"] else 3.0),
+            1,
+        ),
         "auto_approve": bool(session.get("bash_auto_approve"))
         or agent.runtime_auto_approve(session["id"]),
         "stt_enabled": stt_available(),

@@ -7,6 +7,7 @@ import re
 from fastapi import APIRouter, Request
 
 from agent_server import database as db
+from agent_server.config import DEFAULT_SOUND
 from agent_server.providers import get_provider, get_provider_settings_fields
 from agent_server.routes.context import _home_context
 from agent_server.templating import set_custom_color, set_theme, templates
@@ -58,7 +59,7 @@ async def save_sound_setting(request: Request):
         enabled = str(form.get("enabled", "1"))
         await db.set_setting("sound_enabled", "1" if enabled in ("1", "true", "on") else "0")
     if "sound" in form:
-        await db.set_setting("sound_choice", str(form.get("sound", "click")))
+        await db.set_setting("sound_choice", str(form.get("sound", DEFAULT_SOUND)))
     if "volume" in form:
         await db.set_setting("sound_volume", str(form.get("volume", "0.5")))
     return {"ok": True}

@@ -450,4 +450,13 @@ SOUND_CHOICES = [
 # Played for "needs you" and "something failed" regardless of the choice above,
 # so those two are always distinguishable from an ordinary finish.
 FIXED_SOUNDS = ("waiting", "error")
-DEFAULT_SOUND = "click"
+# Soft in, soft out: the least startling thing in the list, which is what you
+# want from something that fires when a long run finishes while you are
+# reading something else.
+DEFAULT_SOUND = "swell"
+
+
+# Where this app lives. Linked from the top bar so a user can hand the URL to
+# their own agent and ask what the app already does, and from the bottom corner
+# for whoever wants to change it. Overridable so a fork points at itself.
+REPO_URL = os.getenv("CODEAGENT_REPO_URL", "https://github.com/Tristan367/MyriadCode")

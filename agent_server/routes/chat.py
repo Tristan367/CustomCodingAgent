@@ -454,20 +454,31 @@ async def set_compact_threshold(
     session_id: str,
     request: Request,
     threshold: int = Form(...),
+    tail_percent: float = Form(0.0),
     resume: bool = Form(False),
 ):
-    """Raise or lower the point at which compaction happens.
+    """Raise or lower the point at which compaction happens, and how much of the
+    conversation survives it verbatim.
 
-    No ceiling: the user may set it above the model's window to compact by hand
-    instead of automatically.
+    No ceiling on the threshold: the user may set it above the model's window to
+    compact by hand instead of automatically. The tail share is clamped, because
+    a tail larger than the room above it leaves compaction nothing to free.
     """
+    from agent_server.compaction import MAX_TAIL_PERCENT, MIN_TAIL_PERCENT
+
     await _require_session(session_id)
     value = max(MIN_COMPACT_THRESHOLD, int(threshold))
-    await db.update_session(session_id, compact_threshold=value)
+    fields = {"compact_threshold": value}
+    if tail_percent:
+        fields["compact_tail_percent"] = min(
+            MAX_TAIL_PERCENT, max(MIN_TAIL_PERCENT, float(tail_percent))
+        )
+    await db.update_session(session_id, **fields)
     agent.snooze_compaction(session_id)
     if resume:
         return _stream(session_id, request)
-    return JSONResponse({"ok": True, "threshold": value})
+    return JSONResponse({"ok": True, "threshold": value,
+                         "tail_percent": fields.get("compact_tail_percent")})
 
 
 # ── Speech-to-text ───────────────────────────────────────────────────────────

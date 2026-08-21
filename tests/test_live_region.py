@@ -56,6 +56,19 @@ async def _seed(data_dir: Path) -> str:
         await db.add_message(session["id"], "user", "Do the thing.")
         for i in range(6):
             await db.add_message(session["id"], "assistant", f"Let me get on that, step {i}.")
+        # Rows rendered by the *server*, which is what a reload shows. The rest
+        # of this module drives `handleEvent` and so only ever exercises the
+        # markup app.js builds; the two templates are separate and can drift.
+        await db.add_message(
+            session["id"], "tool", "collected 40 items\nall passed",
+            tool_call_id="seed-bash", tool_name="bash",
+            tool_title="bash pytest -q", duration_ms=1200)
+        await db.add_message(
+            session["id"], "tool", "edited", tool_call_id="seed-edit", tool_name="edit",
+            tool_title="edit agent_server/agent.py", diff=DIFF, lang="python",
+            duration_ms=800)
+        await db.add_message(session["id"], "assistant", "That is done.",
+                             reasoning_content="I considered several options.\nThen chose one.")
         return session["id"]
     finally:
         await db.close()
@@ -464,3 +477,59 @@ async def test_an_elapsed_time_never_wraps_onto_a_second_line(page):
     """)
     assert lines["rects"] == 1, f"the elapsed time wrapped: {lines}"
     assert lines["rowHeight"] <= 34, f"the row grew past one line: {lines}"
+
+
+# ── The markup the server renders, which is what a reload shows ──────────────
+
+async def test_server_rendered_rows_line_up_with_the_prose(page):
+    """Everything above drives `handleEvent`, so it only ever measures the
+    markup app.js builds. `chat_messages.html` is a separate template rendering
+    the same blocks, and after a refresh it is the one on screen -- so it gets
+    the same measurement, or a fix can pass here and be invisible in the app.
+    """
+    # The fixture hides past calls, which is the right default and the wrong
+    # thing here: a hidden row has no box to measure.
+    await page.evaluate("""
+    () => { App.hideToolCalls = false;
+            document.querySelectorAll('#messages .message').forEach(m => { m.hidden = false; });
+            document.querySelectorAll('#messages details.tool-details')
+                    .forEach(d => { d.open = true; });
+            document.querySelectorAll('#messages .reasoning-details')
+                    .forEach(d => { d.open = true; }); }
+    """)
+    await page.wait_for_timeout(250)
+    edges = {
+        "prose": await _glyph_left(page, ".message.assistant .content-text"),
+        "tool label": await _glyph_left(page, ".message.tool .tool-label"),
+        "tool output": await _glyph_left(page, ".message.tool .tool-raw"),
+        # The block's first glyph is the line number. Its *code* sits further
+        # right by the width of the number gutter, which is the point of a
+        # gutter -- so it is the numbers that line up with the prose.
+        "diff": await _glyph_left(page, ".message.tool .diff-block"),
+        "thinking": await _glyph_left(page, ".message .reasoning-summary"),
+    }
+    present = {k: v for k, v in edges.items() if v is not None}
+    assert len(present) >= 4, f"the seeded transcript did not render: {edges}"
+    spread = max(present.values()) - min(present.values())
+    assert spread <= TOLERANCE, f"server-rendered blocks are ragged: {present}"
+
+
+async def test_a_server_rendered_call_is_the_same_height_as_a_streamed_one(page):
+    await page.evaluate("() => { App.hideToolCalls = false; }")
+    await _fire(page, "{ type: 'tool_start', tool_call_id: 'cmp', name: 'bash',"
+                      " args: { command: 'ls' } }")
+    await _fire(page, "{ type: 'tool_end', tool_call_id: 'cmp', title: 'bash ls', output: 'a' }")
+    await page.evaluate(
+        "() => document.querySelectorAll('#messages .message').forEach(m => { m.hidden = false; })")
+    await page.wait_for_timeout(150)
+    heights = await page.evaluate("""
+    () => {
+      const h = (sel) => { const n = document.querySelector(sel);
+                           return n ? n.getBoundingClientRect().height : null; };
+      return { streamed: h('.message.tool[data-tool-call-id="cmp"]'),
+               rendered: h('.message.tool[data-tool-call-id="seed-bash"]') };
+    }
+    """)
+    assert heights["rendered"] is not None, "the seeded call did not render"
+    assert abs(heights["streamed"] - heights["rendered"]) <= TOLERANCE, (
+        f"the two templates disagree on row height: {heights}")

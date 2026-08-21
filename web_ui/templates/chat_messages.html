@@ -116,7 +116,9 @@
        split the thinking text sits inside the assistant bubble and the model's
        own reply ends up below it with no breathing room. #}
     <div class="message thinking" id="msg-{{ m.id }}-thinking">
-        <div class="msg-role" title="reasoning"></div>
+        {# "think", not "thinking": the role column is 50px and right-aligned, so a
+   longer word is clipped at its *start* -- "thinking" rendered as "NKING". #}
+        <div class="msg-role" title="thinking">think</div>
         <div class="msg-content">
             <details class="tool-details reasoning-details"{% if 'reasoning' in expand_tools %} data-expand="1"{% endif %}>
                 <summary class="reasoning-summary">{{ m.reasoning_content }}</summary>

@@ -1364,8 +1364,11 @@ function appendReasoning() {
   // every one of them used to push the conversation around; then hiding it
   // took the whole height back at once, which is the jump that hurt.
   const node = el('div', 'message thinking live');
-  const role = el('div', 'msg-role');
-  role.title = 'reasoning';
+  // Named like every other row, so hovering says what it is. It was the only
+  // kind of row whose role was blank. "think" rather than "thinking" because
+  // the column is 50px and right-aligned, so a longer word loses its start.
+  const role = el('div', 'msg-role', 'think');
+  role.title = 'thinking';
   node.appendChild(role);
   const body = el('div', 'msg-content');
   const details = el('details', 'tool-details reasoning-details');

@@ -416,18 +416,14 @@ async def test_the_page_raises_no_console_errors_driving_all_of_this(page):
 
 # ── Expanded blocks share the left edge too ──────────────────────────────────
 
-async def test_expanded_blocks_start_their_text_on_the_margin(page):
-    """Every block's first character lands where the prose does.
+async def test_every_box_starts_where_the_user_s_own_message_does(page):
+    """A block is a box, and every box on the page shares a left edge.
 
-    Two earlier attempts at this failed and are worth not repeating. A negative
-    margin alone was clipped: a streaming block sits in `.msg-content`, which
-    has `overflow-y: auto`, and CSS computes the other axis to `auto` as soon as
-    one is not `visible`. Stripping the padding instead left diff line numbers
-    jammed against the edge of their own background.
-
-    What works is both together -- the block keeps its padding and reaches back
-    into the gutter by exactly that much, and the overlay is shifted by the same
-    amount so there is room inside it to reach into.
+    An earlier version reached back into the gutter so a block's *text* landed
+    on the prose margin. That did line the text up, and it put the box 10px left
+    of everything else -- including the user's reply, whose bubble starts at the
+    content column. Two boxes stacked with different left edges is worse than
+    text that is inset, and the reply is what the eye compares against.
     """
     await page.evaluate("() => { App.expandTools = ['bash', 'edit']; }")
     await _fire(page, "{ type: 'tool_start', tool_call_id: 'x1', name: 'bash',"
@@ -444,29 +440,27 @@ async def test_expanded_blocks_start_their_text_on_the_margin(page):
                             f"Thinking line {i}.\n")
     await page.wait_for_timeout(300)
 
-    async def edges():
-        return {
-            "prose": await _glyph_left(page, ".message.assistant .content-text"),
-            "tool output": await _glyph_left(page, ".message.tool .tool-raw"),
-            "diff": await _glyph_left(page, ".message.tool .diff-block"),
-            "thinking": await _glyph_left(page, ".message.thinking .reasoning-summary"),
-        }
+    boxes = await page.evaluate("""
+    () => {
+      const left = (sel) => { for (const n of document.querySelectorAll(sel)) {
+          if (n.closest('[hidden]')) continue;
+          const r = n.getBoundingClientRect();
+          if (r.width) return Math.round(r.left); } return null; };
+      return { userBubble: left('.message.user .content-text'),
+               toolOutput: left('.message.tool .tool-raw'),
+               diff: left('.message.tool .diff-block'),
+               thinking: left('.message.thinking.live .reasoning-summary') };
+    }
+    """)
+    present = {k: v for k, v in boxes.items() if v is not None}
+    assert len(present) >= 3, f"not enough boxes rendered to compare: {boxes}"
+    spread = max(present.values()) - min(present.values())
+    assert spread <= TOLERANCE, f"boxes do not share a left edge: {present}"
 
-    # While the thinking block is still streaming it is drawn out of the flow,
-    # which is the case the earlier attempts got wrong, so measure it twice.
-    live = {k: v for k, v in (await edges()).items() if v is not None}
-    assert len(live) >= 3, f"not enough blocks rendered to compare: {live}"
-    assert max(live.values()) - min(live.values()) <= TOLERANCE, (
-        f"blocks do not share a margin while one is streaming: {live}")
-
-    await page.evaluate(
-        "() => document.querySelectorAll('.message.live').forEach(n => n.classList.remove('live'))")
-    await page.wait_for_timeout(250)
-    settled = {k: v for k, v in (await edges()).items() if v is not None}
-    assert max(settled.values()) - min(settled.values()) <= TOLERANCE, (
-        f"blocks do not share a margin once settled: {settled}")
-    assert settled == live, (
-        f"a block moved when it stopped streaming: {live} -> {settled}")
+    # And the prose, which has no box, sits on the column the boxes start at.
+    prose = await _glyph_left(page, ".message.assistant .content-text")
+    assert abs(prose - min(present.values())) <= TOLERANCE, (
+        f"prose at {prose} does not sit on the column the boxes start at {present}")
 
 
 # ── The clocks ───────────────────────────────────────────────────────────────
@@ -560,9 +554,12 @@ async def test_server_rendered_rows_line_up_with_the_prose(page):
     }
     present = {k: v for k, v in boxes.items() if v is not None}
     assert present, "no expanded block rendered"
-    off = {k: v - prose for k, v in present.items()}
-    assert all(abs(v) <= TOLERANCE for v in off.values()), (
-        f"server-rendered blocks are off the margin: {off}")
+    # Boxes are inset from the prose by their own border and padding; what
+    # matters is that they agree with each other and with the streamed ones.
+    spread = max(present.values()) - min(present.values())
+    assert spread <= 4, f"server-rendered blocks are inset unevenly: {present}"
+    assert all(0 < v - prose <= 16 for v in present.values()), (
+        f"a server-rendered block is not inset like the others: {present}, prose {prose}")
 
 
 async def test_a_server_rendered_call_is_the_same_height_as_a_streamed_one(page):
@@ -750,7 +747,19 @@ async def test_the_activity_marker_touches_nothing(page):
         const row = dot.closest('.message');
         for (const other of row.querySelectorAll('.msg-role, .tool-label, .status-text,'
                                                  + ' .tool-elapsed, .status-elapsed')) {
-          const r = other.getBoundingClientRect();
+          // The role's *box* is the whole 50px column and is mostly empty; the
+          // marker legitimately hangs beside it. Measure the glyphs.
+          const r = (() => {
+            const w = document.createTreeWalker(other, NodeFilter.SHOW_TEXT);
+            let n;
+            while ((n = w.nextNode())) {
+              if (!n.textContent.trim()) continue;
+              const rg = document.createRange(); rg.selectNodeContents(n);
+              const b = rg.getBoundingClientRect();
+              if (b.width) return b;
+            }
+            return other.getBoundingClientRect();
+          })();
           if (!r.width || !r.height) continue;
           if (getComputedStyle(other).opacity === '0') continue;
           const vertical = Math.min(dr.bottom, r.bottom) - Math.max(dr.top, r.top);
@@ -827,11 +836,15 @@ async def test_a_streaming_block_is_not_pushed_out_of_place(page):
     streaming block jumped 60px right."""
     await _fire(page, "{ type: 'reasoning', text: 'Weighing it up.' }")
     await page.wait_for_timeout(250)
-    live = await _glyph_left(page, ".message.thinking.live .reasoning-summary")
-    prose = await _glyph_left(page, ".message.assistant .content-text")
-    assert live is not None and prose is not None
-    assert abs(live - prose) <= TOLERANCE, (
-        f"a streaming block sits {live - prose}px off the margin")
+    live = await page.evaluate(
+        "() => { const n = document.querySelector('.message.thinking.live .reasoning-summary');"
+        " return n ? Math.round(n.getBoundingClientRect().left) : null; }")
+    bubble = await page.evaluate(
+        "() => { const n = document.querySelector('.message.user .content-text');"
+        " return n ? Math.round(n.getBoundingClientRect().left) : null; }")
+    assert live is not None and bubble is not None
+    assert abs(live - bubble) <= TOLERANCE, (
+        f"a streaming block's box sits {live - bubble}px off the user's own bubble")
 
 
 # ── The collapsed thinking block, and the role beside it ─────────────────────
@@ -910,8 +923,12 @@ async def test_the_role_label_sits_on_the_line_it_names(page):
         while ((n = w.nextNode())) {
           if (!n.textContent.trim()) continue;
           const r = document.createRange(); r.selectNodeContents(n);
-          const b = r.getBoundingClientRect();
-          if (b.height) return b.top + b.height / 2;
+          // The *first line box*, not the bounding box. A clamped block hides
+          // all but one line, and a Range is not clipped by overflow -- its
+          // bounding box spans every hidden line and its midpoint sits well
+          // below the line actually on screen.
+          const line = r.getClientRects()[0];
+          if (line && line.height) return line.top + line.height / 2;
         }
         return null;
       };
@@ -924,7 +941,10 @@ async def test_the_role_label_sits_on_the_line_it_names(page):
         if (!role || !line || !role.textContent.trim()) continue;
         const a = mid(role), b = mid(line);
         if (a === null || b === null) continue;
-        out.push({ role: role.textContent.trim().slice(0, 8), off: Math.round(a - b) });
+        out.push({ role: role.textContent.trim().slice(0, 8), off: Math.round(a - b),
+                   rowH: Math.round(row.getBoundingClientRect().height),
+                   live: row.classList.contains('live'),
+                   open: !!row.querySelector('details[open]') });
       }
       return out;
     }
@@ -932,3 +952,51 @@ async def test_the_role_label_sits_on_the_line_it_names(page):
     assert offsets, "no labelled transient row to measure"
     bad = [o for o in offsets if abs(o["off"]) > 2]
     assert not bad, f"role labels are off the line they name: {bad}"
+
+
+async def test_a_thinking_block_says_what_it_is(page):
+    """It was the only kind of row whose role was blank, so hovering it told you
+    nothing while every tool call named itself."""
+    await _fire(page, "{ type: 'reasoning', text: 'Weighing the options.' }")
+    await page.wait_for_timeout(200)
+    shown = await page.evaluate("""
+    () => {
+      const rows = [...document.querySelectorAll('#messages .message.thinking')]
+                     .filter(r => !r.hidden);
+      return rows.map(r => { const role = r.querySelector(':scope > .msg-role');
+                             return { text: role ? role.textContent.trim() : null,
+                                      title: role ? role.title : null,
+                                      clipped: role
+                                        ? role.scrollWidth > role.clientWidth + 1 : null }; });
+    }
+    """)
+    assert shown, "no thinking row rendered"
+    for row in shown:
+        assert row["text"], "a thinking row has no role label"
+        assert row["title"], "the role has no full name on hover"
+        assert not row["clipped"], (
+            f"the role label {row['text']!r} does not fit its column -- a "
+            "right-aligned label loses its *start* when it overflows")
+
+
+async def test_the_marker_is_left_of_the_line_it_belongs_to(page):
+    """It reads as stalled if the mark is only at the far right: the eye goes to
+    the left of the line first."""
+    await _fire(page, "{ type: 'tool_start', tool_call_id: 'lm', name: 'bash',"
+                      " args: { command: 'pytest -q' } }")
+    await page.wait_for_timeout(200)
+    where = await page.evaluate("""
+    () => {
+      const row = document.querySelector('.message.tool[data-tool-call-id="lm"]');
+      const dot = row.querySelector('.spinner-dot');
+      const label = row.querySelector('.tool-label');
+      if (!dot || !label) return null;
+      const d = dot.getBoundingClientRect(), l = label.getBoundingClientRect();
+      return { dotRight: Math.round(d.right), labelLeft: Math.round(l.left),
+               visible: getComputedStyle(dot).visibility };
+    }
+    """)
+    assert where, "the running call has no marker"
+    assert where["visible"] != "hidden", "a running call should show its marker"
+    assert where["dotRight"] <= where["labelLeft"], (
+        f"the marker is not left of the line it belongs to: {where}")

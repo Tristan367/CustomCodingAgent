@@ -65,14 +65,8 @@
      moves when one becomes another. --live-marker is the gutter their labels
      start after, so those labels line up with each other too. */
   --live-row: 30px;
-  --live-marker: 12px;
+  --live-marker: 11px;
 
-  /* How far an expanded block reaches back into the gutter so that its *text*
-     starts on the same margin as the prose. It is exactly the width of the gap
-     between the role column and the content, so a block fills that gap and
-     stops -- reaching further would put it under the role label, which fades in
-     on hover. Each block's own border-plus-padding is set to match. */
-  --block-bleed: 10px;
 
   /* Type. Five steps, and --fs-body is the default. There were fifteen sizes
      between 8px and 24px, most of them a half-pixel apart and indistinguishable
@@ -476,33 +470,19 @@ hr { border: 0; border-top: 1px solid var(--border); margin: 6px 0; }
   padding: 0;
 }
 
-/* Expanded blocks start their text on the same margin as the prose.
+/* Every box starts where the user's own message box starts.
  *
- * They keep their padding -- text jammed against the edge of its own background
- * was the last attempt at this and it looked broken. The box reaches back into
- * the gutter by exactly its own border-plus-padding instead, so the padding is
- * still there and the first character still lands on the margin.
+ * There was a version of this that reached back into the gutter so a block's
+ * *text* landed on the prose margin. It did line the text up, and it put the
+ * box 10px to the left of everything else -- including the user's reply, whose
+ * bubble starts at the content column. Two boxes one above the other with
+ * different left edges is worse than text that is inset, and the user's message
+ * is the thing the eye compares against.
  *
- * The reason this needs care: a streaming block is drawn inside `.msg-content`
- * with `overflow-y: auto`, and CSS computes the other axis to `auto` as soon as
- * one is not `visible` -- so that box has a hard left edge and an earlier
- * version of this was sliced down its left side. The overlay below is therefore
- * shifted left by the same amount and given matching padding, which keeps its
- * contents where they were and leaves exactly enough room inside for a block to
- * reach into. Change --block-bleed and every padding-left here has to move with
- * it, or the text stops lining up. */
-.message.tool > .msg-content .tool-raw,
-.message.tool > .msg-content .diff-block,
-.message.thinking > .msg-content > .reasoning-details[open] > .reasoning-summary {
-  margin-left: calc(-1 * var(--block-bleed));
-}
-/* Each padding below is --block-bleed minus that element's own left border. */
-.message.tool > .msg-content .tool-raw { padding-left: 9px; }          /* 1px border */
-.message.thinking > .msg-content > .reasoning-details[open] > .reasoning-summary {
-  padding-left: 8px;                                                   /* 2px border */
-}
-.message.tool > .msg-content .diff-block { padding-left: 0; }          /* 1px border... */
-.message.tool > .msg-content .diff-block .row { padding-left: 9px; }   /* ...plus the row */
+ * So no block reaches out. A box's edge is the content column, its contents are
+ * inset by its own border and padding, and that is the same for the reply
+ * bubble, tool output, a diff and an open thinking block. Prose, which has no
+ * box, sits on the column itself. */
 
 .msg-role {
   font-size: 10.5px;
@@ -512,6 +492,8 @@ hr { border: 0; border-top: 1px solid var(--border); margin: 6px 0; }
   color: var(--text-faint);
   padding-top: 3px;
   text-align: right;
+  /* Keeps clear of the gutter, which the activity marker hangs in. */
+  padding-right: 6px;
   overflow: hidden;
   text-overflow: ellipsis;
   opacity: 0;
@@ -532,6 +514,20 @@ hr { border: 0; border-top: 1px solid var(--border); margin: 6px 0; }
   display: flex;
   align-items: center;
   justify-content: flex-end;
+}
+/* ...unless the block is open, when the row is a tall box and centring puts the
+   label halfway down it. Then it goes back to the top, level with the block's
+   first line: the box's own top margin and padding, which is what separates
+   that line from the top of the row. */
+.message.thinking:has(> .msg-content > .reasoning-details[open]) > .msg-role {
+  /* Height stays: while the block is streaming it is drawn out of the flow, so
+     this label is the only thing holding the row open and dropping the minimum
+     shrinks the row below every other one. */
+  align-items: flex-start;
+  /* A predictable line box, so the padding that puts this level with the
+     block's first line does not also make the row taller than every other. */
+  line-height: 1;
+  padding-top: 17px;
 }
 .message.user     .msg-role { color: var(--role-user); }
 .message.mail     .msg-role { color: var(--role-mail); }
@@ -759,11 +755,7 @@ a.file-ref:hover { border-bottom-style: solid; color: var(--text); background: v
 .message.live .msg-content {
   position: absolute;
   top: 0;
-  /* Shifted left by --block-bleed and given it back as padding, so the contents
-     sit exactly where they do in the flow while a block inside still has room
-     to reach into the gutter without being clipped by this box's own edge. */
-  left: calc(60px - var(--block-bleed));
-  padding-left: var(--block-bleed);
+  left: 60px;
   right: 60px;
   z-index: 3;
   max-height: 22vh;
@@ -815,7 +807,10 @@ a.file-ref:hover { border-bottom-style: solid; color: var(--text); background: v
 .reasoning-details[open] .reasoning-summary {
   display: block;
   margin: 5px 0 0;
-  padding: 8px 11px;
+  /* 10px, not 11: with the 2px border that puts the text at the same x as the
+     user's own message bubble, which sits directly above it more often than
+     not and is what the eye lines it up against. */
+  padding: 8px 10px;
   background: var(--bg-inset);
   border-left: 2px solid var(--border-strong);
   border-radius: 0 4px 4px 0;
@@ -865,26 +860,28 @@ a.file-ref:hover { border-bottom-style: solid; color: var(--text); background: v
   color: var(--text-faint);
 }
 
-/* The activity marker lives on the right of its row, beside the elapsed time.
+/* The activity marker sits to the left of the line it belongs to, because that
+ * is where the eye goes first: a running command with no mark on its left reads
+ * as stalled until you happen to look at the far right.
  *
- * On the left it had nowhere to go. In the flow it pushed the label 12px past
- * the prose, which is the misalignment this all started with. Hung in the
- * gutter at -12px it overlapped the role label, which fades in on hover, so
- * hovering a running call drew the tool's name on top of its own spinner. Moved
- * in to -8px it sat 2px from the label and read as jammed against it -- the
- * gap between the role column and the content is 10px, and a 6px dot in it is
- * never going to breathe.
+ * It hangs in the gutter rather than sitting in the flow. In the flow it pushed
+ * the label 12px past the prose, which is the misalignment this all started
+ * with. The gutter is only 10px wide, so the two earlier attempts at hanging it
+ * there both fouled something: at -12px it overlapped the role label, which
+ * fades in on hover, and at -8px it sat 2px from the tool's own name.
  *
- * The right-hand end has none of those problems: nothing is there but the
- * elapsed time, which is the other half of the same idea -- this is running,
- * and this is how long for. The left edge is then free to line up with
- * everything else, which is the whole point.
- */
-.tool-summary > .tool-label { flex: 1 1 auto; }
+ * The room comes from the role label giving some back -- it is right-aligned
+ * against the gutter and did not need to be. With 6px of padding on the role
+ * and the dot at -11px, the marker has 5px of clear space on both sides and
+ * overlaps nothing in either direction. */
+.tool-summary { position: relative; }
 .tool-summary > .spinner-dot,
-.status-line .spinner-dot { margin-left: auto; }
-.tool-summary > .spinner-dot ~ .tool-elapsed,
-.status-line .spinner-dot ~ .status-elapsed { margin-left: 0; }
+.status-line .spinner-dot {
+  position: absolute;
+  left: calc(-1 * var(--live-marker));
+  top: 50%;
+  margin-top: -3px;
+}
 
 /* Keeps its space when it stops spinning -- see `completeToolCall`. */
 .spinner-dot.spent { visibility: hidden; animation: none; }
@@ -1889,6 +1886,7 @@ body.dragging-files::after {
   display: flex;
   align-items: center;
   gap: 8px;
+  position: relative;
 }
 .status-line .spinner-dot { display: inline-block; }
 .status-text {

@@ -407,16 +407,18 @@ async def test_the_page_raises_no_console_errors_driving_all_of_this(page):
 
 # ── Expanded blocks share the left edge too ──────────────────────────────────
 
-async def test_expanded_blocks_are_inset_by_the_same_amount(page):
-    """An expanded block is a box and insets its contents. What it must not be
-    is *inconsistently* inset -- three boxes at three different offsets is the
-    ragged margin that started all of this.
+async def test_expanded_blocks_start_their_text_on_the_margin(page):
+    """Every block's first character lands where the prose does.
 
-    Aligning their text with the prose was tried twice and both attempts were
-    worse: a negative margin clipped them against `overflow-y: auto`, and
-    stripping the inset left diff line numbers jammed against the edge of their
-    own background. The one-line rows are what must line up with the prose, and
-    that is the test above.
+    Two earlier attempts at this failed and are worth not repeating. A negative
+    margin alone was clipped: a streaming block sits in `.msg-content`, which
+    has `overflow-y: auto`, and CSS computes the other axis to `auto` as soon as
+    one is not `visible`. Stripping the padding instead left diff line numbers
+    jammed against the edge of their own background.
+
+    What works is both together -- the block keeps its padding and reaches back
+    into the gutter by exactly that much, and the overlay is shifted by the same
+    amount so there is room inside it to reach into.
     """
     await page.evaluate("() => { App.expandTools = ['bash', 'edit']; }")
     await _fire(page, "{ type: 'tool_start', tool_call_id: 'x1', name: 'bash',"
@@ -433,20 +435,29 @@ async def test_expanded_blocks_are_inset_by_the_same_amount(page):
                             f"Thinking line {i}.\n")
     await page.wait_for_timeout(300)
 
-    prose = await _glyph_left(page, ".message.assistant .content-text")
-    boxes = {
-        "tool output": await _glyph_left(page, ".message.tool .tool-raw"),
-        "diff": await _glyph_left(page, ".message.tool .diff-block"),
-        "thinking": await _glyph_left(page, ".message.thinking .reasoning-summary"),
-    }
-    present = {k: v for k, v in boxes.items() if v is not None}
-    assert len(present) >= 2, f"not enough blocks rendered to compare: {boxes}"
-    spread = max(present.values()) - min(present.values())
-    assert spread <= 4, f"expanded blocks are inset by different amounts: {present}"
-    inset = min(present.values()) - prose
-    assert 0 < inset <= 16, (
-        f"an expanded block should be inset from the prose by a small, "
-        f"deliberate amount; measured {inset}px (prose {prose}, boxes {present})")
+    async def edges():
+        return {
+            "prose": await _glyph_left(page, ".message.assistant .content-text"),
+            "tool output": await _glyph_left(page, ".message.tool .tool-raw"),
+            "diff": await _glyph_left(page, ".message.tool .diff-block"),
+            "thinking": await _glyph_left(page, ".message.thinking .reasoning-summary"),
+        }
+
+    # While the thinking block is still streaming it is drawn out of the flow,
+    # which is the case the earlier attempts got wrong, so measure it twice.
+    live = {k: v for k, v in (await edges()).items() if v is not None}
+    assert len(live) >= 3, f"not enough blocks rendered to compare: {live}"
+    assert max(live.values()) - min(live.values()) <= TOLERANCE, (
+        f"blocks do not share a margin while one is streaming: {live}")
+
+    await page.evaluate(
+        "() => document.querySelectorAll('.message.live').forEach(n => n.classList.remove('live'))")
+    await page.wait_for_timeout(250)
+    settled = {k: v for k, v in (await edges()).items() if v is not None}
+    assert max(settled.values()) - min(settled.values()) <= TOLERANCE, (
+        f"blocks do not share a margin once settled: {settled}")
+    assert settled == live, (
+        f"a block moved when it stopped streaming: {live} -> {settled}")
 
 
 # ── The clocks ───────────────────────────────────────────────────────────────
@@ -531,7 +542,7 @@ async def test_server_rendered_rows_line_up_with_the_prose(page):
     assert abs(label - prose) <= TOLERANCE, (
         f"a server-rendered tool label sits {label - prose}px off the prose")
 
-    # And its boxes are inset like the streamed ones, by the same amount.
+    # And its boxes start on the same margin, like the streamed ones.
     boxes = {
         "tool output": await _glyph_left(page, ".message.tool .tool-raw"),
         # The block's first glyph is the line number. Its *code* sits further
@@ -540,8 +551,9 @@ async def test_server_rendered_rows_line_up_with_the_prose(page):
     }
     present = {k: v for k, v in boxes.items() if v is not None}
     assert present, "no expanded block rendered"
-    spread = max(present.values()) - min(present.values())
-    assert spread <= 4, f"server-rendered blocks are inset unevenly: {present}"
+    off = {k: v - prose for k, v in present.items()}
+    assert all(abs(v) <= TOLERANCE for v in off.values()), (
+        f"server-rendered blocks are off the margin: {off}")
 
 
 async def test_a_server_rendered_call_is_the_same_height_as_a_streamed_one(page):
@@ -761,3 +773,53 @@ async def test_the_tool_label_owns_the_left_edge_of_its_row(page):
     assert order, "the running call has no summary contents"
     assert "tool-label" in order[0]["cls"], (
         f"something sits left of the label: {order}")
+
+
+async def test_the_timestamp_stays_out_of_the_content_column(page):
+    """A streaming block sets `.msg-content` to `position: absolute`, which
+    takes it out of the grid -- and auto-placement then slid `.msg-time` from
+    the third column into the second, where it sat at the content's left edge
+    behind the overlay. Hovering revealed the sliver of it that cleared the
+    overlay: a lone digit of the timestamp against the left margin.
+    """
+    await _fire(page, "{ type: 'reasoning', text: 'Thinking about it at length.' }")
+    await page.wait_for_timeout(250)
+    row = ".message.thinking"
+    assert await page.evaluate(f"() => document.querySelector('{row}')"
+                               ".classList.contains('live')"), "expected a live block"
+    await page.hover(f"{row} .reasoning-summary")
+    await page.wait_for_timeout(250)
+
+    placement = await page.evaluate("""
+    () => {
+      const row = document.querySelector('.message.thinking');
+      const time = row.querySelector(':scope > .msg-time');
+      const content = row.querySelector(':scope > .msg-content');
+      if (!time) return { missing: true };
+      const t = time.getBoundingClientRect(), c = content.getBoundingClientRect();
+      const overlapX = Math.min(t.right, c.right) - Math.max(t.left, c.left);
+      const overlapY = Math.min(t.bottom, c.bottom) - Math.max(t.top, c.top);
+      return { timeLeft: Math.round(t.left), contentLeft: Math.round(c.left),
+               overlaps: overlapX > 1 && overlapY > 1, text: time.textContent.trim() };
+    }
+    """)
+    assert not placement.get("missing"), "the row lost its timestamp"
+    assert not placement["overlaps"], (
+        f"the timestamp is sitting on top of the content: {placement}")
+    assert placement["timeLeft"] > placement["contentLeft"], (
+        f"the timestamp is left of the content it belongs beside: {placement}")
+
+
+async def test_a_streaming_block_is_not_pushed_out_of_place(page):
+    """The fix for the timestamp was first written as an explicit `grid-column`
+    on every child. That breaks the overlay: an absolutely positioned grid child
+    with a definite placement is positioned against its *grid area*, not the
+    grid container, so `left` began counting from the content column and every
+    streaming block jumped 60px right."""
+    await _fire(page, "{ type: 'reasoning', text: 'Weighing it up.' }")
+    await page.wait_for_timeout(250)
+    live = await _glyph_left(page, ".message.thinking .reasoning-summary")
+    prose = await _glyph_left(page, ".message.assistant .content-text")
+    assert live is not None and prose is not None
+    assert abs(live - prose) <= TOLERANCE, (
+        f"a streaming block sits {live - prose}px off the margin")

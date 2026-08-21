@@ -67,6 +67,13 @@
   --live-row: 30px;
   --live-marker: 12px;
 
+  /* How far an expanded block reaches back into the gutter so that its *text*
+     starts on the same margin as the prose. It is exactly the width of the gap
+     between the role column and the content, so a block fills that gap and
+     stops -- reaching further would put it under the role label, which fades in
+     on hover. Each block's own border-plus-padding is set to match. */
+  --block-bleed: 10px;
+
   /* Type. Five steps, and --fs-body is the default. There were fifteen sizes
      between 8px and 24px, most of them a half-pixel apart and indistinguishable
      on purpose from nothing. */
@@ -451,22 +458,33 @@ hr { border: 0; border-top: 1px solid var(--border); margin: 6px 0; }
   display: block;
 }
 
-/* Expanded blocks keep their inset, on purpose.
+/* Expanded blocks start their text on the same margin as the prose.
  *
- * Two attempts to align their text with the prose both made things worse, and
- * the second one shipped. Pulling the boxes left with a negative margin clipped
- * them: a streaming block is drawn in `.msg-content`, which has
- * `overflow-y: auto`, and CSS computes the other axis to `auto` as soon as one
- * is not `visible`, so the box has a hard left edge that cuts off anything
- * outside it. Stripping the inset instead left diff line numbers jammed against
- * the edge of their own background and took the border off the thinking block,
- * so it stopped reading as a block at all.
+ * They keep their padding -- text jammed against the edge of its own background
+ * was the last attempt at this and it looked broken. The box reaches back into
+ * the gutter by exactly its own border-plus-padding instead, so the padding is
+ * still there and the first character still lands on the margin.
  *
- * The original complaint was about *one-line rows* -- a running command sitting
- * 12px right of the sentence that introduced it. Those are plain lines of text
- * in the flow and they must line up, which they now do. An expanded block is a
- * box, and a box insets its contents; that is what every code block on the page
- * already does, including the ones inside the agent's own replies. Leave it. */
+ * The reason this needs care: a streaming block is drawn inside `.msg-content`
+ * with `overflow-y: auto`, and CSS computes the other axis to `auto` as soon as
+ * one is not `visible` -- so that box has a hard left edge and an earlier
+ * version of this was sliced down its left side. The overlay below is therefore
+ * shifted left by the same amount and given matching padding, which keeps its
+ * contents where they were and leaves exactly enough room inside for a block to
+ * reach into. Change --block-bleed and every padding-left here has to move with
+ * it, or the text stops lining up. */
+.message.tool > .msg-content .tool-raw,
+.message.tool > .msg-content .diff-block,
+.message.thinking > .msg-content > .reasoning-details[open] > .reasoning-summary {
+  margin-left: calc(-1 * var(--block-bleed));
+}
+/* Each padding below is --block-bleed minus that element's own left border. */
+.message.tool > .msg-content .tool-raw { padding-left: 9px; }          /* 1px border */
+.message.thinking > .msg-content > .reasoning-details[open] > .reasoning-summary {
+  padding-left: 8px;                                                   /* 2px border */
+}
+.message.tool > .msg-content .diff-block { padding-left: 0; }          /* 1px border... */
+.message.tool > .msg-content .diff-block .row { padding-left: 9px; }   /* ...plus the row */
 
 .msg-role {
   font-size: 10.5px;
@@ -489,6 +507,20 @@ hr { border: 0; border-top: 1px solid var(--border); margin: 6px 0; }
 .message.thinking .msg-role { color: var(--text-dim); }
 
 .msg-content { min-width: 0; overflow-wrap: anywhere; }
+
+/* Pinned, because the sibling before it leaves the flow.
+   A streaming block sets `.msg-content` to `position: absolute`, which takes it
+   out of the grid entirely -- and auto-placement then slid `.msg-time` from the
+   third column into the second, where it sat at the content's left edge behind
+   the overlay. Hovering revealed it, and the sliver that cleared the overlay was
+   the leading digit of the timestamp: a stray number against the left margin.
+
+   Only this one is pinned. Giving `.msg-content` an explicit column as well
+   looks tidier and breaks the overlay: an absolutely positioned grid child with
+   a definite placement is positioned against its *grid area* rather than the
+   grid container, so `left` started counting from the content column instead of
+   the row, and every streaming block jumped 60px to the right. */
+.msg-time { grid-column: 3; }
 .msg-time {
   font-size: 10px;
   color: var(--text-faint);
@@ -694,7 +726,11 @@ a.file-ref:hover { border-bottom-style: solid; color: var(--text); background: v
 .message.live .msg-content {
   position: absolute;
   top: 0;
-  left: 60px;
+  /* Shifted left by --block-bleed and given it back as padding, so the contents
+     sit exactly where they do in the flow while a block inside still has room
+     to reach into the gutter without being clipped by this box's own edge. */
+  left: calc(60px - var(--block-bleed));
+  padding-left: var(--block-bleed);
   right: 60px;
   z-index: 3;
   max-height: 22vh;

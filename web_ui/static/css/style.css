@@ -451,37 +451,22 @@ hr { border: 0; border-top: 1px solid var(--border); margin: 6px 0; }
   display: block;
 }
 
-/* Expanded blocks put their *text* on the same left edge as everything else.
+/* Expanded blocks keep their inset, on purpose.
  *
- * Aligning the one-line states was only half of it. An open block is an inset
- * box -- background, border, padding -- and all of that pushed its first
- * character 11 to 13px right of the prose above it, so a transcript of
- * alternating sentences and tool output read as a ragged left margin. Measured
- * on a live session: prose 122, tool output 134, thinking 135.
+ * Two attempts to align their text with the prose both made things worse, and
+ * the second one shipped. Pulling the boxes left with a negative margin clipped
+ * them: a streaming block is drawn in `.msg-content`, which has
+ * `overflow-y: auto`, and CSS computes the other axis to `auto` as soon as one
+ * is not `visible`, so the box has a hard left edge that cuts off anything
+ * outside it. Stripping the inset instead left diff line numbers jammed against
+ * the edge of their own background and took the border off the thinking block,
+ * so it stopped reading as a block at all.
  *
- * The inset is removed on the left rather than the box being pulled left by it.
- * Pulling was tried and clipped: a streaming block is drawn in `.msg-content`,
- * which has `overflow-y: auto`, and CSS computes the other axis to `auto` as
- * soon as one axis is not `visible` -- so the box has a hard left edge and
- * anything given a negative margin is cut off at it, which is what happened to
- * the thinking block. Nothing here may sit outside its own box.
- *
- * The background, the right-hand padding and the vertical padding all stay, so
- * these still read as blocks; they just start where the text starts. */
-.message.tool > .msg-content .tool-raw,
-.message.thinking > .msg-content > .reasoning-details[open] > .reasoning-summary {
-  margin-left: 0;
-  padding-left: 0;
-  border-left: none;
-  border-top-left-radius: 0;
-  border-bottom-left-radius: 0;
-}
-.message.tool > .msg-content .diff-block {
-  margin-left: 0;
-  padding-left: 0;
-  border-left: none;
-}
-.message.tool > .msg-content .diff-block .row { padding-left: 0; }
+ * The original complaint was about *one-line rows* -- a running command sitting
+ * 12px right of the sentence that introduced it. Those are plain lines of text
+ * in the flow and they must line up, which they now do. An expanded block is a
+ * box, and a box insets its contents; that is what every code block on the page
+ * already does, including the ones inside the agent's own replies. Leave it. */
 
 .msg-role {
   font-size: 10.5px;
@@ -783,21 +768,6 @@ a.file-ref:hover { border-bottom-style: solid; color: var(--text); background: v
   display: flex;
   align-items: center;
   gap: 6px;
-  /* For the marker, which hangs in the gutter rather than pushing the label.
-     In the flow it indented every tool row 12px past the assistant text beside
-     it, so a running command did not line up with the sentence that introduced
-     it. The role column to the left is empty until hover, so there is room. */
-  position: relative;
-}
-/* Centred in the 10px grid gap, not at the full marker offset. At -12px the
-   6px dot started at the last 2px of the role column, and the role label fades
-   in on hover -- so hovering a running call drew the tool's name on top of its
-   own spinner. The gap is the only strip here that belongs to nobody. */
-.tool-summary > .spinner-dot {
-  position: absolute;
-  left: -8px;
-  top: 50%;
-  margin-top: -3px;
 }
 .tool-summary::-webkit-details-marker { display: none; }
 .tool-summary:hover { color: var(--text); }
@@ -825,6 +795,27 @@ a.file-ref:hover { border-bottom-style: solid; color: var(--text); background: v
   text-transform: uppercase;
   color: var(--text-faint);
 }
+
+/* The activity marker lives on the right of its row, beside the elapsed time.
+ *
+ * On the left it had nowhere to go. In the flow it pushed the label 12px past
+ * the prose, which is the misalignment this all started with. Hung in the
+ * gutter at -12px it overlapped the role label, which fades in on hover, so
+ * hovering a running call drew the tool's name on top of its own spinner. Moved
+ * in to -8px it sat 2px from the label and read as jammed against it -- the
+ * gap between the role column and the content is 10px, and a 6px dot in it is
+ * never going to breathe.
+ *
+ * The right-hand end has none of those problems: nothing is there but the
+ * elapsed time, which is the other half of the same idea -- this is running,
+ * and this is how long for. The left edge is then free to line up with
+ * everything else, which is the whole point.
+ */
+.tool-summary > .tool-label { flex: 1 1 auto; }
+.tool-summary > .spinner-dot,
+.status-line .spinner-dot { margin-left: auto; }
+.tool-summary > .spinner-dot ~ .tool-elapsed,
+.status-line .spinner-dot ~ .status-elapsed { margin-left: 0; }
 
 /* Keeps its space when it stops spinning -- see `completeToolCall`. */
 .spinner-dot.spent { visibility: hidden; animation: none; }
@@ -1823,20 +1814,14 @@ body.dragging-files::after {
 .status-line.idle .spinner-dot { visibility: hidden; }
 .status-line.idle .status-text::after { content: none; animation: none; }
 
-/* Marker in the gutter, text at the same left edge as every other row. */
+/* Text at the same left edge as every other row; marker on the right, beside
+   the elapsed time. See the note on .spinner-dot. */
 .status-line .msg-content {
   display: flex;
   align-items: center;
   gap: 8px;
-  position: relative;
 }
-.status-line .spinner-dot {
-  display: inline-block;
-  position: absolute;
-  left: -8px;
-  top: 50%;
-  margin-top: -3px;
-}
+.status-line .spinner-dot { display: inline-block; }
 .status-text {
   font-family: var(--mono);
   font-size: 11.5px;

@@ -1147,7 +1147,8 @@ function ensureStatusRow() {
   const node = el('div', 'message status-line');
   node.appendChild(el('div', 'msg-role', ''));
   const body = el('div', 'msg-content');
-  body.append(el('span', 'spinner-dot'), el('span', 'status-text', ''),
+  // Same order as a tool row, for the same reason.
+  body.append(el('span', 'status-text', ''), el('span', 'spinner-dot'),
               el('span', 'status-elapsed', ''));
   node.appendChild(body);
   App.els.messages.appendChild(node);
@@ -1513,7 +1514,9 @@ function appendToolCall(event) {
   const summary = el('summary', 'tool-summary');
   const label = el('span', 'tool-label', toolSummary(event.name, event.args));
   const elapsed = el('span', 'tool-elapsed', '0.0s');
-  summary.append(el('span', 'spinner-dot'), label, elapsed);
+  // Label first: its left edge is what lines up with the prose. The marker
+  // and the clock sit together at the right -- see .spinner-dot in style.css.
+  summary.append(label, el('span', 'spinner-dot'), elapsed);
   details.appendChild(summary);
   // The raw argument JSON used to be dumped here: noise. A subagent is the
   // exception, because its prompt is the only way to see what it was asked

@@ -15,6 +15,12 @@ was a *difference* between two states that replace each other many times a turn.
      22vh tall, painted over each other: a streaming thinking block covered 86%
      of the diff above it, which stayed open and visible underneath.
 
+Two more were then introduced by the fixes above and reported from a real
+session rather than caught here, so they have guards of their own at the bottom:
+a block pulled into the gutter with a negative margin was sliced down its left
+side by its own scroll box, and the marker moved in to clear the role label
+ended up 2px from the tool's own name. It lives at the right-hand end now.
+
 Every assertion here is a measurement, and each one failed before the fix.
 """
 
@@ -215,15 +221,26 @@ async def test_a_call_finishing_does_not_change_its_row_height(page):
 
 # ── One left edge for every row ──────────────────────────────────────────────
 
-async def test_every_row_starts_its_text_at_the_same_left_edge(page):
+async def test_every_one_line_row_starts_its_text_at_the_same_left_edge(page):
     """Tool labels hung 12px right of the assistant text because the spinner was
-    a flow item with a gap after it. The marker belongs in the gutter."""
+    a flow item with a gap after it. The marker sits at the right-hand end now,
+    beside the elapsed time, where there is nothing for it to push or collide
+    with -- see the note on .spinner-dot.
+
+    One-line rows only. An expanded block is a box and insets its contents, the
+    same as any code block on the page; two attempts to change that made things
+    worse and are described in style.css.
+    """
     await _fire(page, "{ type: 'tool_start', tool_call_id: 'g1', name: 'bash',"
                       " args: { command: 'pytest -q' } }")
     await _fire(page, "{ type: 'reasoning', text: 'Considering it.' }")
     await page.evaluate("() => showStatus('Waiting for the model')")
     await page.wait_for_timeout(140)
 
+    await page.evaluate(
+        "() => document.querySelectorAll('#messages .reasoning-details')"
+        ".forEach(d => { d.open = false; })")
+    await page.wait_for_timeout(150)
     lefts = {
         "assistant": await _glyph_left(page, ".message.assistant .content-text"),
         "toolLabel": await _glyph_left(page, ".message.tool .tool-label"),
@@ -390,10 +407,17 @@ async def test_the_page_raises_no_console_errors_driving_all_of_this(page):
 
 # ── Expanded blocks share the left edge too ──────────────────────────────────
 
-async def test_expanded_blocks_line_up_with_the_prose(page):
-    """Measured on a live session before the fix: prose 122, tool output 134,
-    thinking 135. A transcript of alternating sentences and tool output read
-    with a ragged left margin."""
+async def test_expanded_blocks_are_inset_by_the_same_amount(page):
+    """An expanded block is a box and insets its contents. What it must not be
+    is *inconsistently* inset -- three boxes at three different offsets is the
+    ragged margin that started all of this.
+
+    Aligning their text with the prose was tried twice and both attempts were
+    worse: a negative margin clipped them against `overflow-y: auto`, and
+    stripping the inset left diff line numbers jammed against the edge of their
+    own background. The one-line rows are what must line up with the prose, and
+    that is the test above.
+    """
     await page.evaluate("() => { App.expandTools = ['bash', 'edit']; }")
     await _fire(page, "{ type: 'tool_start', tool_call_id: 'x1', name: 'bash',"
                       " args: { command: 'pytest -q' } }")
@@ -409,17 +433,20 @@ async def test_expanded_blocks_line_up_with_the_prose(page):
                             f"Thinking line {i}.\n")
     await page.wait_for_timeout(300)
 
-    edges = {
-        "prose": await _glyph_left(page, ".message.assistant .content-text"),
-        "tool summary": await _glyph_left(page, ".message.tool .tool-summary"),
+    prose = await _glyph_left(page, ".message.assistant .content-text")
+    boxes = {
         "tool output": await _glyph_left(page, ".message.tool .tool-raw"),
         "diff": await _glyph_left(page, ".message.tool .diff-block"),
         "thinking": await _glyph_left(page, ".message.thinking .reasoning-summary"),
     }
-    present = {k: v for k, v in edges.items() if v is not None}
-    assert len(present) >= 4, f"not enough blocks rendered to compare: {edges}"
+    present = {k: v for k, v in boxes.items() if v is not None}
+    assert len(present) >= 2, f"not enough blocks rendered to compare: {boxes}"
     spread = max(present.values()) - min(present.values())
-    assert spread <= TOLERANCE, f"blocks start their text at different x: {present}"
+    assert spread <= 4, f"expanded blocks are inset by different amounts: {present}"
+    inset = min(present.values()) - prose
+    assert 0 < inset <= 16, (
+        f"an expanded block should be inset from the prose by a small, "
+        f"deliberate amount; measured {inset}px (prose {prose}, boxes {present})")
 
 
 # ── The clocks ───────────────────────────────────────────────────────────────
@@ -498,20 +525,23 @@ async def test_server_rendered_rows_line_up_with_the_prose(page):
                     .forEach(d => { d.open = true; }); }
     """)
     await page.wait_for_timeout(250)
-    edges = {
-        "prose": await _glyph_left(page, ".message.assistant .content-text"),
-        "tool label": await _glyph_left(page, ".message.tool .tool-label"),
+    prose = await _glyph_left(page, ".message.assistant .content-text")
+    label = await _glyph_left(page, ".message.tool .tool-label")
+    assert prose is not None and label is not None, "the seeded transcript did not render"
+    assert abs(label - prose) <= TOLERANCE, (
+        f"a server-rendered tool label sits {label - prose}px off the prose")
+
+    # And its boxes are inset like the streamed ones, by the same amount.
+    boxes = {
         "tool output": await _glyph_left(page, ".message.tool .tool-raw"),
         # The block's first glyph is the line number. Its *code* sits further
-        # right by the width of the number gutter, which is the point of a
-        # gutter -- so it is the numbers that line up with the prose.
+        # right by the width of the number gutter, which is the point of one.
         "diff": await _glyph_left(page, ".message.tool .diff-block"),
-        "thinking": await _glyph_left(page, ".message .reasoning-summary"),
     }
-    present = {k: v for k, v in edges.items() if v is not None}
-    assert len(present) >= 4, f"the seeded transcript did not render: {edges}"
+    present = {k: v for k, v in boxes.items() if v is not None}
+    assert present, "no expanded block rendered"
     spread = max(present.values()) - min(present.values())
-    assert spread <= TOLERANCE, f"server-rendered blocks are ragged: {present}"
+    assert spread <= 4, f"server-rendered blocks are inset unevenly: {present}"
 
 
 async def test_a_server_rendered_call_is_the_same_height_as_a_streamed_one(page):
@@ -631,3 +661,103 @@ async def test_a_queued_message_is_not_painted_over_by_a_streaming_block(page):
     assert clash["height"] > 0, "the queued message has no height"
     assert clash["overlap"] == 0, (
         f"a streaming block is painted over {clash['overlap']}px of the queued message")
+
+
+# ── The two mistakes that shipped ────────────────────────────────────────────
+#
+# Both were introduced by fixes here and both were reported from a real session
+# rather than caught by anything. They are cheap to check and neither had a test.
+
+async def _busy_transcript(pg):
+    """A row of every kind, in the states they are actually seen in."""
+    await pg.evaluate("() => { App.expandTools = ['bash', 'edit']; App.hideToolCalls = false; }")
+    await _fire(pg, "{ type: 'turn_start', user_message_id: null }")
+    await _fire(pg, "{ type: 'tool_start', tool_call_id: 'k1', name: 'bash',"
+                    " args: { command: 'ruff check .' } }")
+    await _fire(pg, "{ type: 'tool_end', tool_call_id: 'k1', title: 'bash ruff check .',"
+                    " output: 'All checks passed!' }")
+    await _fire(pg, "{ type: 'tool_start', tool_call_id: 'k2', name: 'read',"
+                    " args: { path: 'agent_server/agent.py' } }")
+    for i in range(5):
+        await pg.evaluate("(t) => handleEvent({ type: 'reasoning', text: t }, window._s)",
+                          f"Considering option {i}.\n")
+    await pg.wait_for_timeout(350)
+
+
+async def test_nothing_is_cut_off_by_its_own_scroll_box(page):
+    """A streaming block is drawn in `.msg-content`, which has `overflow-y:
+    auto` -- and CSS computes the other axis to `auto` as soon as one is not
+    `visible`. So the box has a hard left edge, and a block given a negative
+    margin to pull it into the gutter was silently sliced down its left side.
+    """
+    await _busy_transcript(page)
+    clipped = await page.evaluate("""
+    () => {
+      const bad = [];
+      for (const box of document.querySelectorAll('#messages .msg-content, #messages .tool-raw')) {
+        if (getComputedStyle(box).overflowX === 'visible') continue;
+        const bb = box.getBoundingClientRect();
+        for (const child of box.querySelectorAll('*')) {
+          const cr = child.getBoundingClientRect();
+          if (!cr.width || !cr.height) continue;
+          if (cr.left < bb.left - 0.5)
+            bad.push({ el: String(child.className) || child.tagName,
+                       cutBy: Math.round(bb.left - cr.left) });
+        }
+      }
+      return bad;
+    }
+    """)
+    assert clipped == [], f"cut off at the left edge of a scroll box: {clipped}"
+
+
+async def test_the_activity_marker_touches_nothing(page):
+    """At the full gutter offset the dot overlapped the role label, which fades
+    in on hover. Moved in to clear it, it sat 2px from the tool's own name and
+    read as jammed against it. It lives at the right-hand end now."""
+    await _busy_transcript(page)
+    await page.hover("#messages .message.tool[data-tool-call-id='k2'] .tool-summary")
+    await page.wait_for_timeout(250)
+
+    crowding = await page.evaluate("""
+    () => {
+      const out = [];
+      for (const dot of document.querySelectorAll('#messages .spinner-dot')) {
+        if (getComputedStyle(dot).visibility === 'hidden') continue;
+        const dr = dot.getBoundingClientRect();
+        if (!dr.width) continue;
+        const row = dot.closest('.message');
+        for (const other of row.querySelectorAll('.msg-role, .tool-label, .status-text,'
+                                                 + ' .tool-elapsed, .status-elapsed')) {
+          const r = other.getBoundingClientRect();
+          if (!r.width || !r.height) continue;
+          if (getComputedStyle(other).opacity === '0') continue;
+          const vertical = Math.min(dr.bottom, r.bottom) - Math.max(dr.top, r.top);
+          if (vertical <= 0) continue;
+          const gap = dr.left >= r.right ? dr.left - r.right
+                    : r.left >= dr.right ? r.left - dr.right
+                    : -1;                                  // overlapping outright
+          if (gap < 4) out.push({ neighbour: String(other.className), gap: Math.round(gap) });
+        }
+      }
+      return out;
+    }
+    """)
+    assert crowding == [], f"the marker is crowding its neighbours: {crowding}"
+
+
+async def test_the_tool_label_owns_the_left_edge_of_its_row(page):
+    """Whatever else a row carries, the thing you read starts at the margin."""
+    await _busy_transcript(page)
+    order = await page.evaluate("""
+    () => {
+      const s = document.querySelector(
+        "#messages .message.tool[data-tool-call-id='k2'] .tool-summary");
+      const kids = [...s.children].filter(c => c.getBoundingClientRect().width > 0);
+      return kids.map(c => ({ cls: String(c.className),
+                              left: Math.round(c.getBoundingClientRect().left) }));
+    }
+    """)
+    assert order, "the running call has no summary contents"
+    assert "tool-label" in order[0]["cls"], (
+        f"something sits left of the label: {order}")

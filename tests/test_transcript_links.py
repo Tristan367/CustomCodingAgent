@@ -127,19 +127,29 @@ async def test_the_ordinary_cases_still_work(render):
     assert await render("visit https://example.com/a b") == []
 
 
-async def test_an_abbreviated_path_still_links_the_part_that_is_real(render):
-    """The regression this rescanning exists for.
+async def test_an_abbreviated_path_is_not_linked_at_all(render):
+    """A truncated link is worse than no link.
 
-    "`.../encounter tables/extracted/`" is how an agent writes a shortened path.
-    The match swallowed " tables/extracted/" as a trailing segment, then gave up
-    because ".../encounter" is not a path -- and because the global pass had
-    already moved past what it swallowed, the part that *was* a path never got
-    its own turn. The result was no link at all where there had been one.
+    "`.../encounter tables/extracted/`" is an agent writing a shortened path.
+    Matching from "tables/" gives a link to a directory that has never existed:
+    it looks clickable, and clicking it says the file is not found. There is
+    nothing real here to link, so nothing is linked.
+
+    The rule is context, not spelling: a bare path directly after a word that
+    itself contains a "/" is a piece of something longer. Rooted paths are
+    exempt, because a leading "/" says what it is without needing context.
     """
-    assert await render("`.../encounter tables/extracted/`") == ["tables/extracted/"]
-    assert await render(".../encounter tables/extracted/") == ["tables/extracted/"]
-    assert await render("saved to `.../encounter tables/extracted/` now") == [
-        "tables/extracted/"]
+    assert await render("In `.../encounter tables/extracted/` next to your images:") == []
+    assert await render("`.../encounter tables/extracted/`") == []
+    assert await render(".../encounter tables/extracted/") == []
+
+
+async def test_a_bare_relative_path_in_ordinary_prose_still_links(render):
+    """The other side of that rule -- nothing before it claims it."""
+    assert await render("see tables/extracted/ for output") == ["tables/extracted/"]
+    assert await render(
+        "edited agent_server/routes/context.py and web_ui/static/js/app.js") == [
+        "agent_server/routes/context.py", "web_ui/static/js/app.js"]
 
 
 async def test_a_path_inside_backticks_is_still_a_link(render):

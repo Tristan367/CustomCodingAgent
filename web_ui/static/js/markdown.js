@@ -60,6 +60,16 @@
   // becomes a single path with a comma in the middle of it.
   const SPACE_INSIDE = `(?<![,;:!?)\\]}"'\`]) ${''
     }(?=${PATH_CHAR}*(?:\\/|\\.[A-Za-z0-9]{1,6}(?!${PATH_CHAR})))`;
+  /* A bare path directly after a word that itself contains a "/" is a piece of
+     something longer, not a path of its own. "`.../encounter tables/extracted/`"
+     is an agent writing an abbreviated path; matching from "tables/" gives a
+     link to a directory that has never existed, and clicking it says "file not
+     found". A truncated link is worse than no link, so there is none.
+
+     Rooted paths are exempt: "/tmp/one.txt, /tmp/two.txt" is two real paths,
+     and a leading "/" says so without needing context. */
+  const NOT_A_FRAGMENT = '(?<!\\/\\S*\\s)';
+
   // ...and one last case the "does it carry on" rule cannot see: a path whose
   // final directory has a space in it and which ends the line, like
   // "…/AI-Fantasy-Images/encounter tables". Nothing follows to prove the path
@@ -72,7 +82,7 @@
     `(?:( (?!${ROOTED})${PATH_CHAR}+)(?=[.,;:!?)\\]}"'\`]*\\s*$))?`;
   const FILE_REF_SOURCE =
     '(?<![=">])(^|[\\s(["\'`])'
-    + `(${ROOTED}(?:${PATH_CHAR}|${SPACE_INSIDE})+|${BARE}${PATH_CHAR}+)`
+    + `(${ROOTED}(?:${PATH_CHAR}|${SPACE_INSIDE})+|${NOT_A_FRAGMENT}${BARE}${PATH_CHAR}+)`
     + TRAILING_SEGMENT;
 
   /* A fresh regex per pass. `fileRefReplacer` re-runs this on any text it
@@ -93,14 +103,14 @@
 
   function fileRefReplacer(full, pre, tok, tail) {
     tail = tail || '';
-    /* Anything this match consumed and did not turn into a link has to be
-       scanned again by hand: the global pass has moved past it and will not
-       come back. Without this, `.../encounter tables/extracted/` produced no
-       link at all -- the match swallowed " tables/extracted/" as a trailing
-       segment, then gave up because ".../encounter" is not a path, and the
-       part that *was* a path never got its own turn. */
-    const giveBack = () => pre + tok + (tail ? linkPaths(tail) : '');
-    if (/^(https?:\/\/|www\.|mailto:)/i.test(tok)) return giveBack();
+    /* The trailing segment is deliberately *not* re-scanned when it goes
+       unused. It was consumed as a possible last part of this path, so it is
+       either the prose after the path or a piece of the same abbreviated path
+       -- and linkifying a piece produces "tables/extracted/" out of
+       "`.../encounter tables/extracted/`", a link to a directory that has never
+       existed. Rooted paths are excluded from being taken as a tail at all, so
+       nothing real is lost here. */
+    if (/^(https?:\/\/|www\.|mailto:)/i.test(tok)) return full;
     // See TRAILING_SEGMENT. Taken only when this is already a spaced path;
     // otherwise it is the next word of the sentence and goes back untouched.
     if (tail && tok.includes(' ')) { tok += tail; tail = ''; }
@@ -108,14 +118,14 @@
     const core = trail ? tok.slice(0, -trail.length) : tok;
     const m = /^(.+?)(?::(\d+)(?:-(\d+))?)?$/.exec(core);
     const path = m ? m[1] : '';
-    if (!path || !looksLikePath(path)) return giveBack();
+    if (!path || !looksLikePath(path)) return full;
     const line = m[2], end = m[3];
     const display = path + (line ? ':' + line + (end ? '-' + end : '') : '');
     let attrs = 'data-path="' + path + '"';
     if (line) attrs += ' data-line="' + line + '"';
     if (end) attrs += ' data-line-end="' + end + '"';
     return pre + '<a class="file-ref" href="#" ' + attrs + '>' + display + '</a>'
-      + trail + (tail ? linkPaths(tail) : '');
+      + trail + tail;
   }
 
   function inline(text) {

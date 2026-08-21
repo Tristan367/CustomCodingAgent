@@ -1147,8 +1147,17 @@ function ensureStatusRow() {
   statusTimer = setInterval(() => {
     const label = statusEl && statusEl.querySelector('.status-elapsed');
     if (!label) return;
+    // Silent while something else owns the slot. The row stays for its height,
+    // but a second clock next to the running call's own elapsed time is just
+    // confusing: two numbers, counting from different moments, disagreeing.
+    // Clearing it once in syncLiveLine was not enough -- this fires every
+    // second and wrote it straight back.
+    if (statusEl.classList.contains('idle')) {
+      if (label.textContent) label.textContent = '';
+      return;
+    }
     const secs = Math.floor((performance.now() - statusBegan) / 1000);
-    label.textContent = secs >= 2 ? ` \u00b7 ${secs}s` : '';
+    label.textContent = secs >= 2 ? `${secs}s` : '';
   }, 1000);
   return node;
 }

@@ -451,6 +451,32 @@ hr { border: 0; border-top: 1px solid var(--border); margin: 6px 0; }
   display: block;
 }
 
+/* Expanded blocks put their *text* on the same left edge as everything else.
+ *
+ * Aligning the one-line states was only half of it. An open block is an inset
+ * box -- background, border, padding -- and all of that pushed its first
+ * character 11 to 13px right of the prose above it, so a transcript of
+ * alternating sentences and tool output read as a ragged left margin. Measured
+ * on a live session: prose 122, tool output 134, thinking 135.
+ *
+ * The box keeps its inset; it is pulled left by the same amount instead, into
+ * the marker gutter the spinner dot already hangs in. Text lines up, the box
+ * still reads as a box. Each figure below is that element's own border plus
+ * padding, so changing either means changing the pull to match. */
+.message.tool > .msg-content .tool-raw,
+.message.tool > .msg-content .diff-block,
+.message.thinking > .msg-content > .reasoning-details[open] > .reasoning-summary {
+  margin-left: calc(-1 * var(--live-marker));
+}
+/* 1px border + 11px padding = 12px */
+.message.tool > .msg-content .tool-raw { padding-left: 11px; }
+/* 1px border + 10px row padding = 11px, so one more of padding on the box */
+.message.tool > .msg-content .diff-block { padding-left: 1px; }
+/* 2px border + 10px padding = 12px */
+.message.thinking > .msg-content > .reasoning-details[open] > .reasoning-summary {
+  padding-left: 10px;
+}
+
 .msg-role {
   font-size: 10.5px;
   font-family: var(--mono);
@@ -1785,15 +1811,25 @@ body.dragging-files::after {
   font-size: 11.5px;
   color: var(--text-faint);
 }
+/* The dots animate by swapping their own content between '', '.', '..' and
+   '...'. In the flow that changes the width of the line four times a second, so
+   whatever sits after them dances left and right. Reserve the full three
+   characters and let the animation fill them. */
 .status-text::after {
   content: '';
   animation: dots 1.4s steps(4, end) infinite;
+  display: inline-block;
+  width: 3ch;
+  text-align: left;
 }
 .status-elapsed {
   color: var(--text-faint);
   font-family: var(--mono);
   font-size: 11px;
   font-variant-numeric: tabular-nums;
+  /* "4.0s" is one word. Left to wrap, the `s` drops to a line of its own in the
+     narrow right-hand column. */
+  white-space: nowrap;
 }
 @keyframes dots {
   0%   { content: ''; }
@@ -1891,6 +1927,10 @@ input:disabled, textarea:disabled, select:disabled {
   color: var(--text-faint);
   font-variant-numeric: tabular-nums;
   font-size: 10.5px;
+  /* "12.4s" is one word -- without this the `s` wraps onto a line of its own,
+     which also makes the row two lines tall and moves everything below it. */
+  white-space: nowrap;
+  flex: 0 0 auto;
 }
 .tool-label { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 

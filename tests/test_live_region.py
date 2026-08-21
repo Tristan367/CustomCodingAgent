@@ -121,6 +121,37 @@ async def _fire(pg, event: str) -> None:
     await pg.wait_for_timeout(140)
 
 
+async def _glyph_left(pg, selector):
+    """Where the first character actually lands, not where its box starts.
+
+    These differ, and the difference is the bug. An expanded block is an inset
+    box: border, padding and a line-number gutter all sit between its left edge
+    and its first character. Aligning the boxes is not the same as aligning the
+    text, and it is the text the eye follows down the page -- so the boxes are
+    pulled left by their own inset and it is the glyphs that must line up.
+
+    Skips hidden rows: with past tool calls hidden, a plain `querySelector`
+    finds one of those first and measures a rect of zero size.
+    """
+    return await pg.evaluate("""
+    (sel) => {
+      for (const el of document.querySelectorAll(sel)) {
+        if (el.closest('[hidden]')) continue;
+        const w = document.createTreeWalker(el, NodeFilter.SHOW_TEXT);
+        let n;
+        while ((n = w.nextNode())) {
+          if (!n.textContent.trim()) continue;
+          const r = document.createRange();
+          r.selectNodeContents(n);
+          const b = r.getBoundingClientRect();
+          if (b.width || b.height) return Math.round(b.left);
+        }
+      }
+      return null;
+    }
+    """, selector)
+
+
 # ── One height for every transient row ───────────────────────────────────────
 
 async def test_every_transient_row_is_the_same_height(page):
@@ -180,18 +211,12 @@ async def test_every_row_starts_its_text_at_the_same_left_edge(page):
     await page.evaluate("() => showStatus('Waiting for the model')")
     await page.wait_for_timeout(140)
 
-    lefts = await page.evaluate("""
-    () => {
-      const at = (sel) => { const n = document.querySelector(sel);
-                            return n ? n.getBoundingClientRect().left : null; };
-      return {
-        assistant: at('.message.assistant .content-text'),
-        toolLabel: at('.message.tool .tool-label'),
-        thinking:  at('.message.thinking .reasoning-summary'),
-        liveLine:  at('.message.status-line .status-text'),
-      };
+    lefts = {
+        "assistant": await _glyph_left(page, ".message.assistant .content-text"),
+        "toolLabel": await _glyph_left(page, ".message.tool .tool-label"),
+        "thinking": await _glyph_left(page, ".message.thinking .reasoning-summary"),
+        "liveLine": await _glyph_left(page, ".message.status-line .status-text"),
     }
-    """)
     assert all(v is not None for v in lefts.values()), lefts
     spread = max(lefts.values()) - min(lefts.values())
     assert spread <= TOLERANCE, f"rows start their text at different x: {lefts}"
@@ -348,3 +373,94 @@ async def test_the_page_raises_no_console_errors_driving_all_of_this(page):
     await _fire(page, "{ type: 'tool_end', tool_call_id: 'z1', title: 'bash ls', output: 'a' }")
     await _fire(page, "{ type: 'done', changes: null }")
     assert page._console_errors == []
+
+
+# ── Expanded blocks share the left edge too ──────────────────────────────────
+
+async def test_expanded_blocks_line_up_with_the_prose(page):
+    """Measured on a live session before the fix: prose 122, tool output 134,
+    thinking 135. A transcript of alternating sentences and tool output read
+    with a ragged left margin."""
+    await page.evaluate("() => { App.expandTools = ['bash', 'edit']; }")
+    await _fire(page, "{ type: 'tool_start', tool_call_id: 'x1', name: 'bash',"
+                      " args: { command: 'pytest -q' } }")
+    await _fire(page, "{ type: 'tool_end', tool_call_id: 'x1', title: 'bash pytest',"
+                      " output: 'collected 40 items\\nall passed' }")
+    await _fire(page, "{ type: 'tool_start', tool_call_id: 'x2', name: 'edit',"
+                      " args: { path: 'a.py' } }")
+    await page.evaluate("(d) => handleEvent({ type: 'tool_end', tool_call_id: 'x2',"
+                        " title: 'edit a.py', diff: d, lang: 'python' }, window._s)", DIFF)
+    await page.wait_for_timeout(250)
+    for i in range(6):
+        await page.evaluate("(t) => handleEvent({ type: 'reasoning', text: t }, window._s)",
+                            f"Thinking line {i}.\n")
+    await page.wait_for_timeout(300)
+
+    edges = {
+        "prose": await _glyph_left(page, ".message.assistant .content-text"),
+        "tool summary": await _glyph_left(page, ".message.tool .tool-summary"),
+        "tool output": await _glyph_left(page, ".message.tool .tool-raw"),
+        "diff": await _glyph_left(page, ".message.tool .diff-block"),
+        "thinking": await _glyph_left(page, ".message.thinking .reasoning-summary"),
+    }
+    present = {k: v for k, v in edges.items() if v is not None}
+    assert len(present) >= 4, f"not enough blocks rendered to compare: {edges}"
+    spread = max(present.values()) - min(present.values())
+    assert spread <= TOLERANCE, f"blocks start their text at different x: {present}"
+
+
+# ── The clocks ───────────────────────────────────────────────────────────────
+
+async def test_the_live_line_shows_no_clock_while_something_else_is_running(page):
+    """Two elapsed times, counting from different moments and disagreeing by a
+    few seconds, next to each other. The row stays for its height; its clock
+    does not. Clearing it once was not enough -- the interval fires every second
+    and wrote it straight back."""
+    await _fire(page, "{ type: 'turn_start', user_message_id: null }")
+    await _fire(page, "{ type: 'tool_start', tool_call_id: 'c1', name: 'bash',"
+                      " args: { command: 'sleep 30' } }")
+    # Long enough for the interval to fire several times.
+    await page.wait_for_timeout(3400)
+    state = await page.evaluate("""
+    () => { const s = document.querySelector('.message.status-line');
+            return { idle: s.classList.contains('idle'),
+                     elapsed: s.querySelector('.status-elapsed').textContent,
+                     text: s.querySelector('.status-text').textContent }; }
+    """)
+    assert state["idle"], "a running call should own the slot"
+    assert state["elapsed"] == "", (
+        f"the live line is running a second clock: {state['elapsed']!r}")
+    assert state["text"] == ""
+
+
+async def test_the_animated_dots_do_not_move_the_elapsed_time(page):
+    """They animate by swapping their own content between '', '.', '..' and
+    '...', which changed the width of the line four times a second and made
+    whatever followed dance left and right."""
+    await _fire(page, "{ type: 'turn_start', user_message_id: null }")
+    await page.wait_for_timeout(2200)  # past the 2s threshold, so it has a value
+    positions = []
+    for _ in range(12):
+        positions.append(await page.evaluate("""
+        () => { const e = document.querySelector('.status-elapsed');
+                return Math.round(e.getBoundingClientRect().left * 100) / 100; }
+        """))
+        await page.wait_for_timeout(160)
+    spread = max(positions) - min(positions)
+    assert spread <= TOLERANCE, (
+        f"the elapsed time moved {spread:.1f}px across the dot animation: {sorted(set(positions))}")
+
+
+async def test_an_elapsed_time_never_wraps_onto_a_second_line(page):
+    """"12.4s" is one word. Wrapped, the `s` dropped to a line of its own and
+    made the row two lines tall, moving everything below it."""
+    await _fire(page, "{ type: 'tool_start', tool_call_id: 'w1', name: 'bash',"
+                      " args: { command: 'a command with a long enough name to crowd the row' } }")
+    await page.wait_for_timeout(2400)
+    lines = await page.evaluate("""
+    () => { const e = document.querySelector('.message.tool[data-tool-call-id="w1"] .tool-elapsed');
+            return { rects: e.getClientRects().length, text: e.textContent,
+                     rowHeight: e.closest('.message').getBoundingClientRect().height }; }
+    """)
+    assert lines["rects"] == 1, f"the elapsed time wrapped: {lines}"
+    assert lines["rowHeight"] <= 34, f"the row grew past one line: {lines}"

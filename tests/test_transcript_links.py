@@ -155,3 +155,34 @@ async def test_a_bare_relative_path_in_ordinary_prose_still_links(render):
 async def test_a_path_inside_backticks_is_still_a_link(render):
     assert await render("`/tmp/report.txt`") == ["/tmp/report.txt"]
     assert await render("see `./tools/run.sh` for it") == ["./tools/run.sh"]
+
+
+# ── A slash is also how people write a list ──────────────────────────────────
+
+async def test_a_short_list_of_numbers_is_not_a_path(render):
+    """"col1/2/3", "8345/8347/8352", "L/F/R" each have two slashes, so each was
+    a link to a file that has never existed. What separates them from
+    `agent_server/routes` is their segments: a directory name is a word, and
+    these are bare digits and single letters."""
+    assert await render("col1/2/3") == []
+    assert await render("8345/8347/8352") == []
+    assert await render("L/F/R") == []
+    assert await render("images 8345/8347/8352 are the spreads") == []
+    assert await render("crop L/F/R from each page") == []
+
+
+async def test_a_nested_path_of_real_names_still_links(render):
+    assert await render("look in agent_server/routes for it") == ["agent_server/routes"]
+    assert await render("src/v2/api") == ["src/v2/api"]
+
+
+async def test_an_extension_or_a_trailing_slash_speaks_for_itself(render):
+    """Either is a strong enough claim to skip the name check, which keeps a
+    path with a numeric directory in it."""
+    assert await render("dist/1/index.html") == ["dist/1/index.html"]
+    assert await render("see tables/extracted/ for output") == ["tables/extracted/"]
+
+
+async def test_a_rooted_path_is_never_second_guessed(render):
+    """A leading "/" is a claim in itself, and "/1/2/3" is a fine path."""
+    assert await render("/1/2/3") == ["/1/2/3"]

@@ -94,11 +94,31 @@
   }
 
   /* "n/a", "and/or", "AC/DC" are prose, not paths. A path is absolute or
-   * explicitly relative, nested, or ends in a filename extension. */
+   * explicitly relative, nested, or ends in a filename extension.
+   *
+   * "Nested" alone was too generous. A slash is also how people write a short
+   * list -- "col1/2/3", "8345/8347/8352", "L/F/R" -- and each of those has two
+   * slashes, so each became a link to a file that has never existed. What
+   * separates them from `agent_server/routes` is their *segments*: a real
+   * directory name is a word, and these are bare digits and single letters.
+   *
+   * So a bare nested path with nothing else to recommend it has to be made of
+   * name-like parts. A filename extension or a trailing slash still speaks for
+   * itself and skips the check, which keeps `dist/1/index.html` and
+   * `tables/extracted/`. Rooted paths are never asked: a leading "/" is a claim
+   * in itself, and "/1/2/3" is a perfectly good path.
+   *
+   * Nothing here touches the filesystem. Checking would be exact and would mean
+   * a round trip per candidate on every message rendered, which is not a trade
+   * worth making for a link that is occasionally wrong. */
   function looksLikePath(p) {
     if (/^(\/|~\/|\.{1,2}\/)/.test(p)) return true;
-    if ((p.match(/\//g) || []).length >= 2) return true;
-    return /\.[A-Za-z0-9]{1,6}$/.test(p);
+    if (/\.[A-Za-z0-9]{1,6}$/.test(p)) return true;
+    if (p.endsWith('/')) return true;
+    const parts = p.split('/').filter(Boolean);
+    if (parts.length < 2) return false;
+    // A name: at least two characters, and at least one of them a letter.
+    return parts.every((part) => part.length >= 2 && /[A-Za-z]/.test(part));
   }
 
   function fileRefReplacer(full, pre, tok, tail) {

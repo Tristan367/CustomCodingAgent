@@ -270,6 +270,30 @@ async def _summariser_messages(
 def _context_limit(session: dict) -> int:
     return model_info(session.get("model", ""))["context"]
 
+async def adopt_deferred_updates(session_id: str, session: dict) -> None:
+    """Take the prompt and tool changes that have been waiting for this moment.
+
+    Both sit at the front of every request, so changing either mid-conversation
+    moves the first byte of the cached prefix and re-bills everything at the
+    miss rate. That is why a change is queued rather than applied. Compaction is
+    where the debt is settled: the prefix is being rewritten regardless, so the
+    swap is close to free, and this is the only place it happens.
+
+    A queued prompt that is never adopted is worse than one never queued -- the
+    session goes on using the old text forever with nothing to show for it -- so
+    this is a named function with a test against it rather than a few lines
+    buried in the middle of the compaction generator.
+    """
+    pending = session.get("pending_system_prompt")
+    if pending:
+        await db.update_session(
+            session_id, system_prompt=pending, pending_system_prompt=None
+        )
+    # The tool array is frozen per session like the prompt; drop it so the next
+    # turn re-freezes from whatever the tools are now.
+    await db.update_session(session_id, tool_schemas=None, tool_descriptions=None)
+
+
 
 async def drop_closed_reasoning(kept: list[dict]) -> int:
     """Stop echoing reasoning for tool turns the user has already moved past.
@@ -468,18 +492,7 @@ async def compact_session_events(
     # it does not need while the prefix is being rebuilt regardless.
     reasoning_freed = await drop_closed_reasoning(kept)
 
-    # Compaction rewrites the prefix anyway, so this is the cheap moment to
-    # adopt a shared prompt that changed while the conversation was running.
-    pending = session.get("pending_system_prompt")
-    if pending:
-        await db.update_session(
-            session_id, system_prompt=pending, pending_system_prompt=None
-        )
-
-    # The tool array is frozen per session like the prompt; drop it so the next
-    # turn re-freezes from what the tools are now. Same cheap moment as the
-    # prompt swap: the prefix is being rewritten anyway.
-    await db.update_session(session_id, tool_schemas=None, tool_descriptions=None)
+    await adopt_deferred_updates(session_id, session)
 
     yield {
         "type": "compact_done",

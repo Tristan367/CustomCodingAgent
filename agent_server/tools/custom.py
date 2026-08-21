@@ -29,6 +29,9 @@ def _arg_summary(name: str, kwargs: dict[str, Any]) -> str:
     """
     parts = []
     for key, value in kwargs.items():
+        # `None` is an argument that was not given; "None" is not what it says.
+        if value is None:
+            continue
         first = str(value).split("\n")[0].strip()
         if not first:
             continue
@@ -36,9 +39,11 @@ def _arg_summary(name: str, kwargs: dict[str, Any]) -> str:
     line = "   ".join(parts)
     if not line:
         return name
-    if len(line) > 90:
-        line = line[:89] + "…"
-    return f"{name}  {line}"
+    # Trimmed as a whole, not just the arguments: the name and its separator are
+    # part of the row, and trimming only the tail let a long argument produce a
+    # 96-character label from a 90-character budget.
+    title = f"{name}  {line}"
+    return title if len(title) <= 90 else title[:89] + "…"
 
 
 def _make_handler(name: str, script: str):

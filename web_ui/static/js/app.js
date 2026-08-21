@@ -1885,6 +1885,13 @@ const BUILT_IN_SUMMARY = {
   webfetch: (a) => `Fetching ${truncate(a.url, 80)}`,
   task: (a) => `Subagent: ${a.description || ''}`,
   send_message: (a) => `To ${a.session || ''}: ${truncate(a.message, 70)}`,
+  websearch: (a) => `Searching the web for ${truncate(a.query, 70)}`,
+  capture: (a) => `Capturing ${a.region || 'the screen'}`
+    + (a.count > 1 ? ` \u00d7${a.count}` : ''),
+  browser: (a) => `Browser: ${truncate(
+    Array.isArray(a.steps) ? a.steps.map((x) => x && (x.action || x.url || x.text))
+                                    .filter(Boolean).join(' \u2192 ')
+                           : String(a.steps ?? ''), 80)}`,
 };
 
 /* What the model actually passed, on one line.

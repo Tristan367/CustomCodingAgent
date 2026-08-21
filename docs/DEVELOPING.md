@@ -87,6 +87,44 @@ There is deliberately *no* compensation for an auto-expanded result arriving at
 full height. `edit` and `write` ship collapsed; asking them to open is asking to
 watch the page move.
 
+### The app must not know the name of a tool it does not ship
+
+`toolSummary` in app.js once had a `case 'vision'` phrasing a call as "Looking
+at <url>" -- a tool the user wrote, whose name and argument shape the front end
+had somehow absorbed, and was wrong about: it takes `paths`, not `url`, so the
+line rendered "Looking at undefined". A built-in gets prose; anything else gets
+shown exactly what was sent, on the summary line and in full when expanded, from
+the moment the call starts rather than when it ends.
+
+Two lists have to stay in step with the registry -- `BUILT_IN_SUMMARY` in app.js
+and `_BUILT_IN_TOOLS` in routes/context.py -- and the authority is
+`tools.registry`, not either list. A test that compared the two lists *to each
+other* passed while both omitted `browser`, `capture` and `websearch`, so three
+shipped tools were presented as somebody's private ones. Compare against the
+registry.
+
+### A modal dialog cannot be covered by anything with a z-index
+
+`showModal()` puts an element in the browser's *top layer*, which no z-index
+reaches. The file manager is a dialog, so the image preview at `z-index: 10000`
+opened behind it and could only be seen by closing the manager. Anything that
+must appear over the manager has to be a dialog too; two dialogs stack in the
+order they were opened.
+
+Two things come with that. The UA's dialog defaults -- border, padding, a white
+ground, auto margins, a viewport max-width -- have to be cleared for a full-bleed
+overlay. And Escape closes a modal dialog *natively*, without running the
+dismiss handler, so any teardown belongs on the `close` event: otherwise closing
+a picture with the keyboard leaves the bitmap decoded, and closing a sound
+leaves it playing.
+
+### Serving a video needs byte ranges
+
+Chrome will not scrub, and often will not start, a `<video>` whose source cannot
+answer a `Range` request with a 206. `FileResponse` does; a hand-rolled
+`Response(bytes)` does not. `/api/files/media` is the route, and its suffix
+allowlist is the only thing keeping it from being a general file read.
+
 ### `enabled` on a custom tool is a fact about this machine
 
 Not about the profile. `apply_bundle` switches every imported tool off on

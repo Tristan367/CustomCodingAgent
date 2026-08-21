@@ -26,6 +26,19 @@ from agent_server.routes.context import _BUILT_IN_TOOLS, _tool_input_text
 REPO = Path(__file__).resolve().parent.parent
 
 
+def _summary_table_names() -> set[str]:
+    """The keys of BUILT_IN_SUMMARY in app.js.
+
+    Matched as "two spaces, a name, a colon" rather than by splitting on the
+    first colon in every line: an entry can span lines and contain a ternary,
+    and a looser parse read `? x : y` as a tool called "+ (a.count > 1 ?".
+    """
+    source = (REPO / "web_ui" / "static" / "js" / "app.js").read_text()
+    start = source.index("const BUILT_IN_SUMMARY")
+    table = source[start:source.index("\n};", start)]
+    return set(re.findall(r"^  (\w+):", table, re.M))
+
+
 # ── The input a custom tool's author needs to see ────────────────────────────
 
 def test_a_custom_tool_shows_everything_it_was_sent():
@@ -79,14 +92,7 @@ def test_the_front_end_names_no_tool_it_does_not_ship():
     summary table means the app has learned about somebody's private tool
     again, and will be confidently wrong about it the moment they change it.
     """
-    source = (REPO / "web_ui" / "static" / "js" / "app.js").read_text()
-    start = source.index("const BUILT_IN_SUMMARY")
-    table = source[start:source.index("};", start)]
-    named = {
-        line.split(":", 1)[0].strip()
-        for line in table.splitlines()[1:]
-        if ":" in line and not line.strip().startswith("//")
-    }
+    named = _summary_table_names()
     assert named, "the summary table could not be read"
     unknown = named - _BUILT_IN_TOOLS
     assert not unknown, (
@@ -97,16 +103,40 @@ def test_the_front_end_names_no_tool_it_does_not_ship():
 def test_both_sides_agree_on_what_is_built_in():
     """The server renders these rows on reload and the client renders them while
     they stream. If the two lists drift, a row changes when you refresh."""
-    source = (REPO / "web_ui" / "static" / "js" / "app.js").read_text()
-    start = source.index("const BUILT_IN_SUMMARY")
-    table = source[start:source.index("};", start)]
-    named = {
-        line.split(":", 1)[0].strip()
-        for line in table.splitlines()[1:]
-        if ":" in line and not line.strip().startswith("//")
-    }
+    named = _summary_table_names()
     assert named == set(_BUILT_IN_TOOLS), (
         f"app.js has {sorted(named)}, context.py has {sorted(_BUILT_IN_TOOLS)}")
+
+
+def test_every_tool_the_app_ships_is_treated_as_one():
+    """The registry is the authority on what MyriadCode ships, and neither of
+    the two lists above is.
+
+    They agreed with each other while both omitted `browser`, `capture` and
+    `websearch` -- three tools that ship with the app and were therefore being
+    presented as somebody's private ones: raw arguments on the summary line and
+    their whole input dumped underneath. A test comparing two hand-kept lists to
+    each other confirms only that they were written by the same hand.
+    """
+    from agent_server.tools.registry import tool_schemas
+
+    shipped = {(t.get("function") or t)["name"] for t in tool_schemas()}
+    assert shipped, "the registry returned no tools"
+
+    treated_as_custom = shipped - set(_BUILT_IN_TOOLS)
+    assert not treated_as_custom, (
+        f"{sorted(treated_as_custom)} ship with the app but are handled as "
+        "custom tools, so their rows show raw arguments")
+
+    claimed = set(_BUILT_IN_TOOLS) - shipped
+    assert not claimed, (
+        f"{sorted(claimed)} are claimed as built-in but the registry does not "
+        "ship them")
+
+    unphrased = shipped - _summary_table_names()
+    assert not unphrased, (
+        f"{sorted(unphrased)} ship with the app but have no phrasing in app.js, "
+        "so they fall through to showing their arguments")
 
 
 def _without_comments(source: str) -> str:

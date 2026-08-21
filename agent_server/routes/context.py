@@ -305,9 +305,10 @@ async def _pending_prompt(session: dict, messages: list[dict]) -> dict | None:
 # Anything not here is a tool the user wrote, and its input is always shown --
 # see `_tool_input_text`. Kept in step with BUILT_IN_SUMMARY in app.js, which is
 # what the same rows look like while they stream.
-_BUILT_IN_TOOLS = frozenset(
-    {"read", "edit", "write", "bash", "grep", "glob", "webfetch", "task", "send_message"}
-)
+_BUILT_IN_TOOLS = frozenset({
+    "read", "edit", "write", "bash", "grep", "glob", "webfetch", "task",
+    "send_message", "websearch", "capture", "browser",
+})
 
 
 def _tool_input_text(name: str, args: dict) -> str | None:

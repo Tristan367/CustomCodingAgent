@@ -1527,6 +1527,11 @@ function appendToolCall(event) {
   if (event.name === 'task' && event.args && event.args.prompt) {
     details.appendChild(el('pre', 'tool-raw subagent-prompt', event.args.prompt));
   }
+  // A tool this app did not ship gets its input immediately, for the same
+  // reason: while it runs, what was sent is the only thing there is to look at,
+  // and the person who wrote the tool is the one who needs it. Waiting for the
+  // call to finish is no use to someone watching a two-minute call.
+  if (!BUILT_IN_SUMMARY[event.name]) appendToolInput(details, event.name, event.args);
   body.appendChild(details);
   node.appendChild(body);
   node.appendChild(el('span', 'msg-time', clockTime()));
@@ -1860,33 +1865,85 @@ function langForPath(path) {
   return EXT_LANG[name.slice(dot + 1)] || '';
 }
 
+/* One line of prose per built-in tool. Nothing else may be added here.
+ *
+ * There was a `case 'vision'` in this switch, phrasing a call as "Looking at
+ * <url>". `vision` is not a built-in -- it is a tool the user wrote, and this
+ * front end had somehow learned its name and the shape of its arguments. That
+ * is backwards: MyriadCode does not ship it, cannot know what it does, and
+ * would be wrong about it the moment the user changed it. It also meant the one
+ * tool whose author most needs to see what was sent showed the least.
+ *
+ * Only tools that arrive with the app belong in here. */
+const BUILT_IN_SUMMARY = {
+  read: (a) => `Reading ${truncateStart(a.filePath, 60)}`,
+  edit: (a) => `Editing ${truncateStart(a.filePath, 60)}`,
+  write: (a) => `Writing ${truncateStart(a.filePath, 60)}`,
+  bash: (a) => `Running ${truncate(a.command, 90)}`,
+  grep: (a) => `Searching for ${truncate(a.pattern, 70)}`,
+  glob: (a) => `Finding ${a.pattern || ''}`,
+  webfetch: (a) => `Fetching ${truncate(a.url, 80)}`,
+  task: (a) => `Subagent: ${a.description || ''}`,
+  send_message: (a) => `To ${a.session || ''}: ${truncate(a.message, 70)}`,
+};
+
+/* What the model actually passed, on one line.
+ *
+ * For a tool this app did not ship there is nothing honest to say about what
+ * the call *means*, so it says what was sent instead: the arguments, each
+ * flattened to its first line. That is more useful than a name on its own --
+ * a tool called with a long prompt showed nothing at all before, so a call
+ * that ran for two minutes was two words on screen the whole time. The full
+ * arguments are one click away; see `toolInputText`. */
+function argSummary(args) {
+  return Object.entries(args)
+    .map(([key, value]) => {
+      const first = String(value ?? '').split('\n')[0].trim();
+      if (!first) return null;
+      // A lone argument speaks for itself; several need naming to tell apart.
+      return Object.keys(args).length === 1 ? first : `${key}: ${first}`;
+    })
+    .filter(Boolean)
+    .join('   ');
+}
+
 function toolSummary(name, args) {
   args = args || {};
-  switch (name) {
-    case 'read': return `Reading ${truncateStart(args.filePath, 60)}`;
-    case 'edit': return `Editing ${truncateStart(args.filePath, 60)}`;
-    case 'write': return `Writing ${truncateStart(args.filePath, 60)}`;
-    case 'bash': return `Running ${truncate(args.command, 90)}`;
-    case 'grep': return `Searching for ${truncate(args.pattern, 70)}`;
-    case 'glob': return `Finding ${args.pattern || ''}`;
-    case 'webfetch': return `Fetching ${truncate(args.url, 80)}`;
-    case 'vision': return `Looking at ${truncate(args.url, 70)}`;
-    case 'task': return `Subagent: ${args.description || ''}`;
-    case 'send_message': return `To ${args.session || ''}: ${truncate(args.message, 70)}`;
-    default: return name;
-  }
+  const phrase = BUILT_IN_SUMMARY[name];
+  if (phrase) return phrase(args);
+  const detail = argSummary(args);
+  return detail ? `${name}  ${truncate(detail, 90)}` : name;
 }
 
 /* The arguments the model passed to the tool, shown in the expanded row.
-   Only tools whose input is not already obvious from the summary line show it:
-   the bash command and the send_message body. Everything else (read, edit,
-   write, grep, ...) already names its input in the summary, so repeating it is
-   noise. */
+ *
+ * For a built-in, only where the summary line does not already carry it: the
+ * bash command and the send_message body. `read`, `edit`, `grep` and the rest
+ * name their input in the summary, so repeating it is noise.
+ *
+ * For anything else -- a tool the user wrote -- always. Whoever wrote it is the
+ * person who needs to see exactly what the model sent and exactly what came
+ * back, and they are debugging something this app knows nothing about. Every
+ * argument, in full, laid out to be read rather than parsed. */
 function toolInputText(name, args) {
   args = args || {};
   if (name === 'bash') return args.command || '';
   if (name === 'send_message') return args.message || '';
-  return null;
+  if (BUILT_IN_SUMMARY[name]) return null;
+
+  const entries = Object.entries(args);
+  if (!entries.length) return null;
+  if (entries.length === 1 && typeof entries[0][1] === 'string') {
+    return entries[0][1];
+  }
+  return entries
+    .map(([key, value]) => {
+      const text = typeof value === 'string' ? value : JSON.stringify(value, null, 2);
+      // A value with newlines in it -- a prompt, a script -- reads as a block
+      // under its name rather than jammed onto the same line as it.
+      return String(text).includes('\n') ? `${key}:\n${text}` : `${key}: ${text}`;
+    })
+    .join('\n\n');
 }
 
 function formatToolInput(name, args) {
@@ -1899,6 +1956,13 @@ function formatToolInput(name, args) {
 function appendToolInput(details, name, args) {
   const text = formatToolInput(name, args);
   if (!text) return false;
+  // A custom tool's input is added when the call starts, so the finishing pass
+  // must not add a second copy of it.
+  if (details.querySelector(':scope > .tool-result > .tool-result-label')) {
+    const already = [...details.querySelectorAll(':scope > .tool-result > .tool-result-label')]
+      .some((n) => n.textContent === 'input');
+    if (already) return true;
+  }
   const block = el('div', 'tool-result');
   block.appendChild(el('div', 'tool-result-label', 'input'));
   block.appendChild(el('pre', 'tool-raw', text));
@@ -3131,6 +3195,17 @@ const Dictation = {
     // on every partial would clear any selection the user is dragging and stop
     // them from typing alongside the recording.
     if (text === this.lastInserted) return;
+
+    // The first words of a segment: if the caret was sitting straight after a
+    // word, put a space in rather than gluing the transcript onto it. The
+    // "user edited it" branch below has always done this; the ordinary path
+    // never did, so dictating with the caret at the end of a sentence ran the
+    // first word into the last one.
+    if (!this.lastInserted && this.insertAt > 0
+        && !/\s$/.test(ta.value.slice(0, this.insertAt))) {
+      ta.value = ta.value.slice(0, this.insertAt) + ' ' + ta.value.slice(this.insertAt);
+      this.insertAt += 1;
+    }
 
     const start = this.insertAt;
     const end = this.insertAt + this.insertedLen;
@@ -5302,7 +5377,15 @@ const FileBrowser = (() => {
   /* The API scopes writes to a session; the picker has none, and the server
    * gates it on protected paths instead. Everything else here is shared. */
   function sid() { return App.sessionId || ''; }
-  function memKey() { return App.sessionId || ' picker'; }
+  const SHOW_ALL_KEY = 'fb-show-all';
+  let showAllEl = null;
+
+  function showAll() {
+    try { return localStorage.getItem(SHOW_ALL_KEY) === '1'; }
+    catch { return false; }
+  }
+
+  function memKey() { return App.sessionId || '\u0000picker'; }
 
   function here() { return lastDirs[memKey()] || workingDir(); }
 
@@ -5320,6 +5403,8 @@ const FileBrowser = (() => {
         '<button type="button" class="fe-btn" data-fb="home" title="Working directory">&#127968;</button>' +
         '<button type="button" class="fe-btn" data-fb="newfile" title="New file in this folder">New file</button>' +
         '<button type="button" class="fe-btn" data-fb="newdir" title="New folder here">New folder</button>' +
+        '<label class="fb-showall" title="Include dotfiles and dot-directories">' +
+          '<input type="checkbox" data-fb="showall"> Show all</label>' +
         '<button type="button" class="fe-btn" data-fb="close" title="Close">&times;</button>' +
       '</div>' +
       '<div class="fb-list"></div>' +
@@ -5354,6 +5439,21 @@ const FileBrowser = (() => {
 
     pathEl = dlg.querySelector('.fb-path');
     listEl = dlg.querySelector('.fb-list');
+    showAllEl = dlg.querySelector('[data-fb=showall]');
+    showAllEl.checked = showAll();
+    showAllEl.addEventListener('change', () => {
+      try { localStorage.setItem(SHOW_ALL_KEY, showAllEl.checked ? '1' : '0'); }
+      catch { /* private browsing: the toggle still works for this session */ }
+      // Re-list where we are. `record: false` keeps the toggle out of the
+      // back/forward history -- it is a view setting, not a navigation.
+      open(basePath, { record: false });
+    });
+    /* Double-clicking a row opens it, and on the way there the browser selects
+       the word under the pointer -- so the name flashes highlighted for the
+       instant before the directory changes. Cancelling selection on the second
+       click of a double leaves click-and-drag selection working, which
+       `user-select: none` on the row would not. */
+    listEl.addEventListener('mousedown', (e) => { if (e.detail > 1) e.preventDefault(); });
     upBtn = dlg.querySelector('[data-fb=up]');
     backBtn = dlg.querySelector('[data-fb=back]');
     fwdBtn = dlg.querySelector('[data-fb=fwd]');
@@ -5480,7 +5580,12 @@ const FileBrowser = (() => {
     basePath = data.path;
     lastDirs[memKey()] = data.path;
     if (recordIt) record(data.path);
-    entries = data.entries;
+    /* Hidden entries are hidden. A project root is mostly dot-directories and
+       they crowd out everything worth clicking. Filtered here rather than at
+       the server so the toggle costs no round trip, and before anything indexes
+       `entries`, so shift-select still spans exactly what is on screen. */
+    entries = showAll() ? data.entries
+                        : data.entries.filter((e) => !String(e.name).startsWith('.'));
     selected.clear();
     lastIndex = null;
     pathEl.value = data.path;

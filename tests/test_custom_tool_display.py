@@ -1,0 +1,140 @@
+"""What the transcript shows for a tool the user wrote.
+
+MyriadCode ships nine tools. Anything else in a transcript was written by
+whoever is using it, and the app knows nothing about it: not what it does, not
+what its arguments mean, not what a good answer looks like.
+
+It had learned one anyway. `toolSummary` in app.js carried a `case 'vision'`
+phrasing a call as "Looking at <url>" -- a tool the app does not ship, whose
+name and argument shape it had somehow absorbed. It was wrong in both
+directions: wrong to know, and wrong in detail, since that tool takes `paths`
+rather than `url` and so the summary rendered "Looking at undefined". A call
+that ran for two minutes was two words on screen the whole time.
+
+The rule these tests hold: built-ins get prose, everything else gets shown
+exactly what was sent.
+"""
+
+import json
+import re
+from pathlib import Path
+
+import pytest
+
+from agent_server.routes.context import _BUILT_IN_TOOLS, _tool_input_text
+
+REPO = Path(__file__).resolve().parent.parent
+
+
+# ── The input a custom tool's author needs to see ────────────────────────────
+
+def test_a_custom_tool_shows_everything_it_was_sent():
+    args = {"paths": ["/photos/a.jpg"], "prompt": "Transcribe every table row."}
+    text = _tool_input_text("vision", args)
+    assert text, "a custom tool must show its input"
+    assert "Transcribe every table row." in text, "the prompt is the point"
+    assert "/photos/a.jpg" in text
+
+
+def test_a_single_string_argument_is_shown_as_itself():
+    """No key, no JSON punctuation: there is nothing to disambiguate it from."""
+    assert _tool_input_text("summarise", {"text": "the whole document"}) == (
+        "the whole document")
+
+
+def test_a_multi_line_argument_is_laid_out_as_a_block():
+    text = _tool_input_text("deploy", {"env": "staging", "script": "set -e\necho hi"})
+    assert "env: staging" in text
+    assert "script:\nset -e\necho hi" in text, (
+        "a value with newlines belongs under its name, not jammed beside it")
+
+
+def test_a_non_string_argument_survives():
+    text = _tool_input_text("resize", {"box": [0, 0, 100, 100]})
+    assert "[" in text and "100" in text
+
+
+def test_a_custom_tool_with_no_arguments_shows_nothing():
+    assert _tool_input_text("ping", {}) is None
+
+
+# ── Built-ins keep their existing behaviour ──────────────────────────────────
+
+@pytest.mark.parametrize("name", sorted(_BUILT_IN_TOOLS - {"bash", "send_message"}))
+def test_a_built_in_does_not_repeat_what_its_summary_already_says(name):
+    assert _tool_input_text(name, {"filePath": "/a/b.py", "pattern": "x"}) is None
+
+
+def test_bash_and_send_message_still_show_their_body():
+    assert _tool_input_text("bash", {"command": "pytest -q"}) == "pytest -q"
+    assert _tool_input_text("send_message", {"session": "x", "message": "hi"}) == "hi"
+
+
+# ── The app must not know any custom tool's name ─────────────────────────────
+
+def test_the_front_end_names_no_tool_it_does_not_ship():
+    """A guard against the `case 'vision'` coming back in any form.
+
+    The built-in list is the app's own; a name outside it appearing in the
+    summary table means the app has learned about somebody's private tool
+    again, and will be confidently wrong about it the moment they change it.
+    """
+    source = (REPO / "web_ui" / "static" / "js" / "app.js").read_text()
+    start = source.index("const BUILT_IN_SUMMARY")
+    table = source[start:source.index("};", start)]
+    named = {
+        line.split(":", 1)[0].strip()
+        for line in table.splitlines()[1:]
+        if ":" in line and not line.strip().startswith("//")
+    }
+    assert named, "the summary table could not be read"
+    unknown = named - _BUILT_IN_TOOLS
+    assert not unknown, (
+        f"app.js has phrasing for {sorted(unknown)}, which MyriadCode does not "
+        "ship. A tool it did not write is one it cannot describe.")
+
+
+def test_both_sides_agree_on_what_is_built_in():
+    """The server renders these rows on reload and the client renders them while
+    they stream. If the two lists drift, a row changes when you refresh."""
+    source = (REPO / "web_ui" / "static" / "js" / "app.js").read_text()
+    start = source.index("const BUILT_IN_SUMMARY")
+    table = source[start:source.index("};", start)]
+    named = {
+        line.split(":", 1)[0].strip()
+        for line in table.splitlines()[1:]
+        if ":" in line and not line.strip().startswith("//")
+    }
+    assert named == set(_BUILT_IN_TOOLS), (
+        f"app.js has {sorted(named)}, context.py has {sorted(_BUILT_IN_TOOLS)}")
+
+
+def _without_comments(source: str) -> str:
+    """Code only. The comments here explain *why* the app must not know these
+    names, so searching the raw text finds the explanation and calls it the
+    offence."""
+    source = re.sub(r"/\*.*?\*/", "", source, flags=re.S)      # JS block
+    source = re.sub(r"^\s*//.*$", "", source, flags=re.M)      # JS line
+    source = re.sub(r'"""(?:.|\n)*?"""', "", source)           # Python docstring
+    source = re.sub(r"^\s*#.*$", "", source, flags=re.M)       # Python line
+    return source
+
+
+def test_the_example_tool_is_not_special_cased_anywhere():
+    """`examples/vision-tool.sh` ships as a worked example of a *custom* tool.
+    Nothing in the app may treat it as anything else -- not a summary phrasing,
+    not a branch, not a lookup key."""
+    for path in ("web_ui/static/js/app.js", "agent_server/routes/context.py"):
+        code = _without_comments((REPO / path).read_text())
+        for quoted in ("'vision'", '"vision"'):
+            assert quoted not in code, (
+                f"{path} refers to the example custom tool by name, in code")
+
+
+# ── Round trip: what the server stores is what the row shows ─────────────────
+
+def test_the_input_survives_a_json_round_trip():
+    args = {"paths": ["/a b/c.jpg"], "prompt": "line one\nline two"}
+    text = _tool_input_text("vision", json.loads(json.dumps(args)))
+    assert "line one\nline two" in text
+    assert "/a b/c.jpg" in text

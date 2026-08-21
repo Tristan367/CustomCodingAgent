@@ -511,6 +511,23 @@ async def stt_stream(websocket: WebSocket):
         return
 
     session = whisper_streaming.WhisperSession(engine)
+
+    # Partials are cumulative -- finalized text plus the current hypothesis --
+    # so they should only ever grow. They do not: re-decoding the rolling buffer
+    # sometimes returns a short or empty hypothesis for one step, and the client
+    # replaces its whole segment with what arrives, so the dictation on screen
+    # collapsed to a couple of words and came back a second later. An interim
+    # that would shrink the text is dropped instead of sent; the next one is
+    # along in a step, and the final is authoritative and always sent.
+    sent = 0
+
+    async def send_interim(text: str) -> None:
+        nonlocal sent
+        if not text or len(text) < sent:
+            return
+        await websocket.send_json({"text": text, "partial": True})
+        sent = len(text)
+
     try:
         should_finalize = True
         while True:
@@ -531,12 +548,11 @@ async def stt_stream(websocket: WebSocket):
                         if session.should_finalize:
                             # A long pause: commit the sentence (period added).
                             await session.commit_pause()
-                            await websocket.send_json({"text": session.finalized_text(), "partial": True})
+                            await send_interim(session.finalized_text())
                         elif session.new_seconds >= whisper_streaming.STEP_SECONDS:
                             partial = await session.current_partial()
-                            text = (session.finalized_text() + " " + partial).strip()
-                            if text:
-                                await websocket.send_json({"text": text, "partial": True})
+                            await send_interim(
+                                (session.finalized_text() + " " + partial).strip())
                     except Exception:
                         pass  # a failed partial is dropped; the final still runs
                     finally:

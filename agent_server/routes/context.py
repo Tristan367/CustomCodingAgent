@@ -301,13 +301,40 @@ async def _pending_prompt(session: dict, messages: list[dict]) -> dict | None:
     }
 
 
+# Tools that ship with the app, whose transcript line already names their input.
+# Anything not here is a tool the user wrote, and its input is always shown --
+# see `_tool_input_text`. Kept in step with BUILT_IN_SUMMARY in app.js, which is
+# what the same rows look like while they stream.
+_BUILT_IN_TOOLS = frozenset(
+    {"read", "edit", "write", "bash", "grep", "glob", "webfetch", "task", "send_message"}
+)
+
+
 def _tool_input_text(name: str, args: dict) -> str | None:
-    """The input worth repeating, only for tools whose summary does not name it."""
+    """The input worth repeating in the transcript.
+
+    For a built-in, only where the summary line does not already carry it. For a
+    tool the user wrote, always: they are debugging something this app knows
+    nothing about, and what the model sent is half of what they need to see.
+    """
     if name == "bash":
         return args.get("command")
     if name == "send_message":
         return args.get("message")
-    return None
+    if name in _BUILT_IN_TOOLS:
+        return None
+
+    if not args:
+        return None
+    if len(args) == 1:
+        (only,) = args.values()
+        if isinstance(only, str):
+            return only
+    parts = []
+    for key, value in args.items():
+        text = value if isinstance(value, str) else json.dumps(value, indent=2)
+        parts.append(f"{key}:\n{text}" if "\n" in str(text) else f"{key}: {text}")
+    return "\n\n".join(parts) or None
 
 
 def _tool_inputs(messages: list[dict]) -> dict[str, str]:

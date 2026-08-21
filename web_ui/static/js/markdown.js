@@ -32,12 +32,39 @@
     return escapeHtml(code);
   }
 
-  /* A path starts with /, ~/, ./, ../, or a directory segment, then runs to the
-   * next whitespace/quote/angle. The negative lookbehind stops the pass from
-   * re-linkifying a href value the link pass just wrote. Trailing sentence
-   * punctuation is split back out so it is not swallowed by the link. The line
-   * (and optional range) ride in data attributes the app reads on click. */
-  const FILE_REF_TOKEN = /(?<![=">])(^|[\s(["'`])((?:\/|~\/|\.{1,2}\/|[\w@.~\-]+\/)[^\s<>"'`]+)/g;
+  /* A path starts with /, ~/, ./, ../, or a directory segment, then runs on.
+   *
+   * It used to run to the next whitespace, which breaks every path containing a
+   * space: a drive called "Gaming Beast" produced two links, one ending at
+   * "Gaming" and another starting at "Beast/". Directory names with spaces in
+   * them are entirely normal on removable media and on macOS.
+   *
+   * So a space is allowed *inside* a path, but only where the path visibly
+   * carries on past it -- the run after the space has to reach a "/" or end in
+   * a file extension. That is what separates "…/Gaming Beast/data.txt" from
+   * "…/env and then stop", where the word after the space is just prose and the
+   * path ends. Each branch consumes exactly one character, so there is no
+   * nested quantifier here to backtrack over.
+   *
+   * The negative lookbehind stops the pass from re-linkifying a href value the
+   * link pass just wrote. Trailing sentence punctuation is split back out so it
+   * is not swallowed by the link. The line (and optional range) ride in data
+   * attributes the app reads on click. */
+  const PATH_CHAR = '[^\\s<>"\'`]';
+  // Rooted: /x, ~/x, ./x, ../x. Only these may contain spaces -- "n/a and/or
+  // AC/DC" is a bare segment away from being a path, and allowing spaces there
+  // swallowed the lot as one link.
+  const ROOTED = '(?:\\/|~\\/|\\.{1,2}\\/)';
+  const BARE = '[\\w@.~\\-]+\\/';
+  // ...and not across sentence punctuation, or "/tmp/one.txt, /tmp/two.txt"
+  // becomes a single path with a comma in the middle of it.
+  const SPACE_INSIDE = `(?<![,;:!?)\\]}"'\`]) ${''
+    }(?=${PATH_CHAR}*(?:\\/|\\.[A-Za-z0-9]{1,6}(?!${PATH_CHAR})))`;
+  const FILE_REF_TOKEN = new RegExp(
+    '(?<![=">])(^|[\\s(["\'`])'
+    + `(${ROOTED}(?:${PATH_CHAR}|${SPACE_INSIDE})+|${BARE}${PATH_CHAR}+)`,
+    'g',
+  );
 
   /* "n/a", "and/or", "AC/DC" are prose, not paths. A path is absolute or
    * explicitly relative, nested, or ends in a filename extension. */

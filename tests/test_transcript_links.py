@@ -71,6 +71,26 @@ async def test_a_directory_with_a_space_stays_one_link(render):
     ]
 
 
+async def test_a_final_directory_with_a_space_is_not_cut_short(render):
+    """The reported message ended "…/AI-Fantasy-Images/encounter tables".
+
+    Nothing follows to prove the path carries on, so the "does it continue"
+    rule stopped at "encounter" -- one link, but pointing at a directory that
+    does not exist. A last segment is taken when the path already contains a
+    space and the line ends there.
+    """
+    got = await render(
+        "and those files can be found here: "
+        "/run/media/tristan/OS/Users/GAMING BEAST/Pictures/encounter tables")
+    assert got == ["/run/media/tristan/OS/Users/GAMING BEAST/Pictures/encounter tables"]
+
+
+async def test_a_path_without_spaces_does_not_swallow_the_next_word(render):
+    """The other side of that rule: "done" is prose, not a directory."""
+    assert await render("open /tmp/x done") == ["/tmp/x"]
+    assert await render("the file is /tmp/report.txt") == ["/tmp/report.txt"]
+
+
 async def test_a_trailing_directory_with_a_space_stays_one_link(render):
     got = await render("look in /media/tristan/Gaming Beast/ for it")
     assert got == ["/media/tristan/Gaming Beast/"]

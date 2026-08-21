@@ -138,3 +138,47 @@ def test_the_input_survives_a_json_round_trip():
     text = _tool_input_text("vision", json.loads(json.dumps(args)))
     assert "line one\nline two" in text
     assert "/a b/c.jpg" in text
+
+
+# ── The row's title, which is what a reload shows ────────────────────────────
+
+def test_a_custom_tool_row_is_titled_by_its_arguments():
+    """Custom tools run through `run_bash` with the script as the command, and
+    bash titles a row with the command's first line -- so every custom call in
+    the transcript was titled "#!/usr/bin/env bash", identically, saying nothing
+    about what was asked. Measured on a real session: 19 calls, 19 identical
+    shebang titles."""
+    from agent_server.tools.custom import _arg_summary
+
+    title = _arg_summary("vision", {"paths": ["/a/b.jpg"], "prompt": "Read the left column."})
+    assert title.startswith("vision"), "the tool's own name comes first"
+    assert "Read the left column." in title, "the title must say what was asked"
+    assert "#!" not in title
+
+
+def test_a_single_argument_needs_no_key():
+    from agent_server.tools.custom import _arg_summary
+
+    assert _arg_summary("echo", {"msg": "hello"}) == "echo  hello"
+
+
+def test_a_long_title_is_cut_to_one_line():
+    from agent_server.tools.custom import _arg_summary
+
+    title = _arg_summary("x", {"prompt": "word " * 200})
+    assert len(title) <= 95
+    assert "\n" not in title
+
+
+def test_a_tool_called_with_nothing_is_just_its_name():
+    from agent_server.tools.custom import _arg_summary
+
+    assert _arg_summary("ping", {}) == "ping"
+
+
+def test_only_the_first_line_of_a_multi_line_argument_reaches_the_title():
+    from agent_server.tools.custom import _arg_summary
+
+    title = _arg_summary("deploy", {"script": "set -e\nrm -rf /"})
+    assert "set -e" in title
+    assert "rm -rf" not in title, "a title is one line; the rest is in the body"

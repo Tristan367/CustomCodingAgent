@@ -60,10 +60,21 @@
   // becomes a single path with a comma in the middle of it.
   const SPACE_INSIDE = `(?<![,;:!?)\\]}"'\`]) ${''
     }(?=${PATH_CHAR}*(?:\\/|\\.[A-Za-z0-9]{1,6}(?!${PATH_CHAR})))`;
+  // ...and one last case the "does it carry on" rule cannot see: a path whose
+  // final directory has a space in it and which ends the line, like
+  // "…/AI-Fantasy-Images/encounter tables". Nothing follows to prove the path
+  // continues, so it is taken only when the path already contains a space --
+  // otherwise "open /tmp/x done" would swallow "done".
+  // The tail must not itself be the start of a path, or "/tmp/one.txt,
+  // /tmp/two.txt" consumes the second one as the first one's last segment and
+  // it never gets scanned on its own.
+  const TRAILING_SEGMENT =
+    `(?:( (?!${ROOTED})${PATH_CHAR}+)(?=[.,;:!?)\\]}"'\`]*\\s*$))?`;
   const FILE_REF_TOKEN = new RegExp(
     '(?<![=">])(^|[\\s(["\'`])'
-    + `(${ROOTED}(?:${PATH_CHAR}|${SPACE_INSIDE})+|${BARE}${PATH_CHAR}+)`,
-    'g',
+    + `(${ROOTED}(?:${PATH_CHAR}|${SPACE_INSIDE})+|${BARE}${PATH_CHAR}+)`
+    + TRAILING_SEGMENT,
+    'gm',
   );
 
   /* "n/a", "and/or", "AC/DC" are prose, not paths. A path is absolute or
@@ -74,8 +85,12 @@
     return /\.[A-Za-z0-9]{1,6}$/.test(p);
   }
 
-  function fileRefReplacer(full, pre, tok) {
+  function fileRefReplacer(full, pre, tok, tail) {
     if (/^(https?:\/\/|www\.|mailto:)/i.test(tok)) return full;
+    // See TRAILING_SEGMENT. Taken only when this is already a spaced path;
+    // otherwise it is the next word of the sentence and goes back untouched.
+    tail = tail || '';
+    if (tail && tok.includes(' ')) { tok += tail; tail = ''; }
     const trail = (tok.match(/[.,;:!?)\]}"'`]+$/) || [''])[0];
     const core = trail ? tok.slice(0, -trail.length) : tok;
     const m = /^(.+?)(?::(\d+)(?:-(\d+))?)?$/.exec(core);
@@ -86,7 +101,7 @@
     let attrs = 'data-path="' + path + '"';
     if (line) attrs += ' data-line="' + line + '"';
     if (end) attrs += ' data-line-end="' + end + '"';
-    return pre + '<a class="file-ref" href="#" ' + attrs + '>' + display + '</a>' + trail;
+    return pre + '<a class="file-ref" href="#" ' + attrs + '>' + display + '</a>' + trail + tail;
   }
 
   function inline(text) {

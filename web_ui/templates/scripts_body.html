@@ -31,6 +31,26 @@
     </div>
 
     <script>
+        /* Picking a script navigates -- `/?script=name` re-renders the page with
+           the editor in it -- and a navigation lands at the top, which on a long
+           home page means scrolling all the way back down to the panel you were
+           already looking at. Saving, deleting and creating come back the same
+           way, so this covers those too.
+
+           Swapping the panel in place instead was the other option and is worse:
+           the panel's own <script> blocks attach the handlers for the secrets
+           list and the Run button, and scripts inserted with innerHTML do not
+           execute, so the panel would arrive inert.
+
+           Only when a script is named: a plain visit to the home page should
+           start where it always did. */
+        if (new URLSearchParams(location.search).has('script')) {
+          requestAnimationFrame(() => {
+            document.getElementById('scripts-panel')
+              ?.scrollIntoView({ block: 'start' });
+          });
+        }
+
         /* Defined out here, not inside the "a script is selected" block: the
            New button is always on screen, and with nothing saved yet that was
            the only way to create the first script. */

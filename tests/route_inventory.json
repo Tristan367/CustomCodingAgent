@@ -364,6 +364,13 @@
     "name": "serve_image"
   },
   {
+    "path": "/api/files/media",
+    "methods": [
+      "GET"
+    ],
+    "name": "serve_media"
+  },
+  {
     "path": "/api/files/list",
     "methods": [
       "GET"

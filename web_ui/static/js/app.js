@@ -4362,13 +4362,16 @@ document.addEventListener('click', (e) => {
   }
 });
 
-/* A path can be three things, and each has its own surface: a directory opens
- * the file manager, an image opens the preview, anything else opens the text
- * editor. Ask the server which it is; if the lookup fails, fall through to the
- * editor, which reports a clear "does not exist" for anything that is not a
- * file. */
+/* A path has a surface that suits it: a directory opens the file manager, a
+ * picture opens the preview, a sound or a video opens the player, a PDF opens
+ * in a tab of its own because the browser renders one better than we could, and
+ * anything else opens the text editor. Ask the server which it is; if the
+ * lookup fails, fall through to the editor, which reports a clear "does not
+ * exist" for anything that is not a file. */
 async function openAnyPath(path, opts = {}) {
   if (isImagePath(path)) { ImagePreview.open(path); return; }
+  if (isAudioPath(path) || isVideoPath(path)) { MediaPreview.open(path); return; }
+  if (isOwnTabPath(path)) { window.open(mediaUrl(path), '_blank', 'noopener'); return; }
   try {
     const resp = await fetch(
       `/api/files/stat?session_id=${encodeURIComponent(App.sessionId)}&path=${encodeURIComponent(path)}`);
@@ -4387,14 +4390,93 @@ function openFileRef(ref) {
   });
 }
 
+/* Where the browser fetches a file it is going to play or display itself. */
+function mediaUrl(path) {
+  return `/api/files/media?path=${encodeURIComponent(path)}`
+    + `&session_id=${encodeURIComponent(App.sessionId || '')}`;
+}
+
+const AUDIO_EXTS = new Set(
+  ['.mp3', '.wav', '.ogg', '.oga', '.opus', '.m4a', '.aac', '.flac', '.weba']);
+const VIDEO_EXTS = new Set(['.mp4', '.webm', '.ogv', '.mov', '.m4v', '.mkv']);
+/* Things the browser renders better than we could, and which therefore get a
+   tab of their own rather than a surface in here. */
+const OWN_TAB_EXTS = new Set(['.pdf']);
+
+function isAudioPath(path) { return AUDIO_EXTS.has(attachExt(path)); }
+function isVideoPath(path) { return VIDEO_EXTS.has(attachExt(path)); }
+function isOwnTabPath(path) { return OWN_TAB_EXTS.has(attachExt(path)); }
+
+/* Sound and video, in the same overlay a picture gets.
+ *
+ * A <dialog> for the same reason ImagePreview is one -- it has to be able to
+ * open above the file manager. The element is rebuilt per file rather than
+ * reused: switching an <audio> to a <video> is not something a single tag does,
+ * and a stale one keeps its old buffered data. */
+const MediaPreview = (() => {
+  let node = null;
+  let media = null;
+  let caption = null;
+
+  function ensure() {
+    if (node) return;
+    node = document.createElement('dialog');
+    node.className = 'media-preview';
+    caption = el('div', 'image-preview-caption');
+    node.appendChild(caption);
+    // Clicking the ground closes; clicking the player does not, or the controls
+    // would be unusable.
+    node.addEventListener('click', (e) => { if (e.target === node) hide(); });
+    node.addEventListener('close', onClosed);
+    document.body.appendChild(node);
+  }
+
+  function open(path) {
+    ensure();
+    teardown();
+    media = document.createElement(isVideoPath(path) ? 'video' : 'audio');
+    media.controls = true;
+    media.autoplay = true;
+    media.preload = 'metadata';
+    media.src = mediaUrl(path);
+    node.insertBefore(media, caption);
+    caption.textContent = path;
+    caption.title = path;
+    if (!node.open) node.showModal();
+  }
+
+  function hide() { if (node && node.open) node.close(); }
+
+  /* Escape closes a modal dialog by itself, so this hangs off `close` rather
+     than off `hide` -- otherwise dismissing with the keyboard left the sound
+     playing to an empty screen. */
+  function onClosed() { teardown(); }
+
+  function teardown() {
+    if (!media) return;
+    media.pause();
+    media.removeAttribute('src');
+    // Without this the element goes on holding the decoded buffer.
+    media.load();
+    media.remove();
+    media = null;
+  }
+
+  function isOpen() { return !!node && node.open; }
+
+  return { open, hide, isOpen };
+})();
+
+
 /* Clicking an image path shows the image rather than sending it to a text
  * editor that would refuse it.
  *
  * The image gets the whole viewport: no frame, no padding, nothing to shrink it
  * but its own aspect ratio. Scroll to zoom about the pointer, drag to pan, Esc
- * or a click beside it to close. Deliberately a lightweight overlay and not a
- * <dialog>, so it sits above the editor and the file manager without joining
- * their Escape-unwinding chain. */
+ * or a click beside it to close. A <dialog>, because the file manager is one
+ * too: a modal dialog is painted in the browser's top layer and nothing with a
+ * z-index can be drawn above it, so an ordinary overlay opened from the manager
+ * appeared behind it. */
 const ImagePreview = (() => {
   const MIN_SCALE = 0.05;
   const MAX_SCALE = 40;
@@ -5683,6 +5765,10 @@ const FileBrowser = (() => {
     if (entry.is_dir) open(child);
     else if (attachMode) attachPath(child);
     else if (isImagePath(child)) ImagePreview.open(child);
+    else if (isAudioPath(child) || isVideoPath(child)) MediaPreview.open(child);
+    // The browser renders a PDF better than anything here would, so it gets a
+    // tab rather than a surface. The manager stays open behind it.
+    else if (isOwnTabPath(child)) window.open(mediaUrl(child), '_blank', 'noopener');
     // The editor belongs to a session -- it saves through one, and remembers
     // its tabs per session. From the picker a file has nowhere to open into,
     // so double-clicking one does nothing beyond leaving it selected.

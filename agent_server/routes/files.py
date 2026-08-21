@@ -33,6 +33,17 @@ IMAGE_SUFFIXES = {
     ".png", ".jpg", ".jpeg", ".gif", ".webp", ".bmp", ".tif", ".tiff", ".avif", ".heic",
 }
 
+# Everything else a browser can play or display on its own. Serving these is the
+# same bargain as serving an image: the agent already reads arbitrary files, so
+# this is no wider a surface than the app itself -- and the allowlist is what
+# keeps it from becoming a general file read.
+AUDIO_SUFFIXES = {
+    ".mp3", ".wav", ".ogg", ".oga", ".opus", ".m4a", ".aac", ".flac", ".weba",
+}
+VIDEO_SUFFIXES = {".mp4", ".webm", ".ogv", ".mov", ".m4v", ".mkv"}
+DOCUMENT_SUFFIXES = {".pdf"}
+MEDIA_SUFFIXES = IMAGE_SUFFIXES | AUDIO_SUFFIXES | VIDEO_SUFFIXES | DOCUMENT_SUFFIXES
+
 # The editor refuses to load a file past this many bytes; a 40MB minified bundle
 # is not something anyone edits by hand, and it would freeze the page.
 MAX_READ_BYTES = 2 * 1024 * 1024
@@ -144,6 +155,40 @@ async def serve_image(path: str, session_id: str = ""):
     if not resolved.is_file():
         raise HTTPException(404, "Not found")
     return FileResponse(resolved)
+
+
+@router.get("/media")
+async def serve_media(path: str, session_id: str = ""):
+    """Serve a sound, a video, a picture or a PDF for the in-app preview.
+
+    Separate from `/image` only in which suffixes it accepts; the path handling
+    and the reasoning behind it are identical.
+
+    `FileResponse` answers a `Range` request with a 206, which is not optional
+    for video: Chrome will not scrub, and often will not start, a `<video>` from
+    a source that cannot serve ranges.
+    """
+    resolved = _resolve_media_path(path, await _session(session_id) if session_id else None)
+    if resolved.suffix.lower() not in MEDIA_SUFFIXES:
+        raise HTTPException(403, "Not a media path")
+    if not resolved.is_file():
+        raise HTTPException(404, "Not found")
+    # `inline` so the browser plays or displays it rather than downloading it.
+    return FileResponse(
+        resolved,
+        headers={"Content-Disposition": f'inline; filename="{resolved.name}"'},
+    )
+
+
+def _resolve_media_path(path: str, session: dict | None):
+    """A relative path resolves against the session's project directory, the
+    same as everywhere else."""
+    try:
+        if session is not None and not Path(path).expanduser().is_absolute():
+            return _resolve(session, path).resolve()
+        return Path(path).expanduser().resolve()
+    except OSError:
+        raise HTTPException(400, "Bad path") from None
 
 
 @router.get("/list")

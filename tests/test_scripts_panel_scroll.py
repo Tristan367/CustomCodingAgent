@@ -7,7 +7,6 @@ back to where you already were. Saving, deleting and creating a script come back
 through the same URL, so they had it too.
 """
 
-import asyncio
 import contextlib
 import os
 import socket

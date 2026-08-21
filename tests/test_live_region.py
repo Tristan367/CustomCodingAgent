@@ -533,3 +533,101 @@ async def test_a_server_rendered_call_is_the_same_height_as_a_streamed_one(page)
     assert heights["rendered"] is not None, "the seeded call did not render"
     assert abs(heights["streamed"] - heights["rendered"]) <= TOLERANCE, (
         f"the two templates disagree on row height: {heights}")
+
+
+# ── What a reload restores ───────────────────────────────────────────────────
+
+async def test_a_reattached_call_carries_on_the_servers_clock(page):
+    """The elapsed figure was counted from when the row was drawn, so after a
+    refresh three subagents that had been working for minutes all read "5.0s"
+    five seconds later. The server says how long it has really been."""
+    await _fire(page, "{ type: 'attached', inflight: [{ tool_call_id: 'far',"
+                      " name: 'task', args: { description: 'corpora' },"
+                      " elapsed_ms: 92000 }], queued: [] }")
+    await page.wait_for_timeout(400)
+    shown = await page.evaluate(
+        "() => document.querySelector('.message.tool[data-tool-call-id=\"far\"]"
+        " .tool-elapsed').textContent")
+    seconds = float(shown.rstrip("s"))
+    assert 91 <= seconds <= 96, (
+        f"a call the server says is 92s old is showing {shown} -- the page is "
+        "timing it from the reload")
+
+
+async def test_reattaching_does_not_reset_a_clock_that_is_already_right(page):
+    await _fire(page, "{ type: 'attached', inflight: [{ tool_call_id: 'dup',"
+                      " name: 'bash', args: { command: 'ls' }, elapsed_ms: 40000 }],"
+                      " queued: [] }")
+    await page.wait_for_timeout(300)
+    first = await page.evaluate(
+        "() => document.querySelector('.message.tool[data-tool-call-id=\"dup\"]"
+        " .tool-elapsed').textContent")
+    await _fire(page, "{ type: 'attached', inflight: [{ tool_call_id: 'dup',"
+                      " name: 'bash', args: { command: 'ls' }, elapsed_ms: 40000 }],"
+                      " queued: [] }")
+    await page.wait_for_timeout(300)
+    rows = await page.evaluate(
+        "() => document.querySelectorAll('.message.tool[data-tool-call-id=\"dup\"]').length")
+    assert rows == 1, "reattaching drew the call twice"
+    assert float(first.rstrip("s")) >= 39
+
+
+async def test_a_queued_message_comes_back_after_a_reload(page):
+    """It lives on the server until the turn can take it. The page held the only
+    copy, so a refresh looked like it had thrown the message away."""
+    await _fire(page, "{ type: 'attached', inflight: [], queued: ["
+                      "{ id: 'q9', content: 'Also make them public domain.' }] }")
+    await page.wait_for_timeout(300)
+    shown = await page.evaluate("""
+    () => { const n = document.querySelector('.message.user.queued[data-queue-id="q9"]');
+            if (!n) return null;
+            return { text: n.innerText,
+                     undo: !!n.querySelector('.msg-actions button'),
+                     visible: n.getBoundingClientRect().height > 0 }; }
+    """)
+    assert shown, "the queued message was not restored"
+    assert "public domain" in shown["text"]
+    assert shown["visible"]
+    assert shown["undo"], "a restored queued message must still be cancellable"
+
+
+async def test_a_restored_queued_message_is_not_duplicated(page):
+    event = ("{ type: 'attached', inflight: [], queued: ["
+             "{ id: 'q7', content: 'Twice?' }] }")
+    await _fire(page, event)
+    await _fire(page, event)
+    await page.wait_for_timeout(200)
+    count = await page.evaluate(
+        "() => document.querySelectorAll('.message.user.queued[data-queue-id=\"q7\"]').length")
+    assert count == 1, f"the queued message was drawn {count} times"
+
+
+async def test_a_queued_message_is_not_painted_over_by_a_streaming_block(page):
+    """An overlay paints over every row that follows it. You type while the
+    agent is working, the bubble is added below the live block, and it is simply
+    not there."""
+    await _fire(page, "{ type: 'tool_start', tool_call_id: 'ov', name: 'task',"
+                      " args: { description: 'corpora' } }")
+    await _fire(page, "{ type: 'tool_output', tool_call_id: 'ov',"
+                      " text: 'searching\\nfound 3 candidates\\nreading them' }")
+    await _fire(page, "{ type: 'attached', inflight: [], queued: ["
+                      "{ id: 'q5', content: 'And public domain only, please.' }] }")
+    await page.wait_for_timeout(400)
+
+    clash = await page.evaluate("""
+    () => {
+      const q = document.querySelector('.message.user.queued[data-queue-id="q5"]');
+      const live = document.querySelector('.message.live .msg-content');
+      if (!q) return { missing: true };
+      const qr = q.getBoundingClientRect();
+      if (!live) return { overlap: 0, height: qr.height };
+      const lr = live.getBoundingClientRect();
+      const y = Math.min(qr.bottom, lr.bottom) - Math.max(qr.top, lr.top);
+      const x = Math.min(qr.right, lr.right) - Math.max(qr.left, lr.left);
+      return { overlap: (x > 1 && y > 1) ? Math.round(y) : 0, height: qr.height };
+    }
+    """)
+    assert not clash.get("missing"), "the queued message never rendered"
+    assert clash["height"] > 0, "the queued message has no height"
+    assert clash["overlap"] == 0, (
+        f"a streaming block is painted over {clash['overlap']}px of the queued message")

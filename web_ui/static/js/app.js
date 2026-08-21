@@ -713,6 +713,16 @@ function handleEvent(event, stream) {
 
     case 'attached':
       for (const call of event.inflight || []) appendToolCall(call);
+      // Anything typed mid-run lives on the server until the turn can take it.
+      // The page used to hold the only copy, so a refresh silently discarded a
+      // message the run was still going to deliver.
+      for (const queued of event.queued || []) {
+        if (App.els.messages.querySelector(
+            `.message.user.queued[data-queue-id="${cssEscape(queued.id)}"]`)) continue;
+        // The same bubble the composer builds, so the restored one can still be
+        // taken back -- half of it would be a message you cannot undo.
+        addQueuedBubble(queued.content, queued.id);
+      }
       break;
 
     case 'tool_progress':
@@ -1515,7 +1525,7 @@ function appendToolCall(event) {
   node.appendChild(body);
   node.appendChild(el('span', 'msg-time', clockTime()));
   appendRow(node);
-  startElapsed(node, elapsed);
+  startElapsed(node, elapsed, event.elapsed_ms || 0);
   autoscroll();
   return node;
 }
@@ -1529,8 +1539,13 @@ function appendToolCall(event) {
  * detached element. They accumulate for the life of the page. */
 const ELAPSED_GUARD_MS = 60 * 60 * 1000;
 
-function startElapsed(node, target) {
-  const began = performance.now();
+function startElapsed(node, target, alreadyMs = 0) {
+  // `alreadyMs` is what the server says has passed already. A page that
+  // reloads while calls are running gets it from the `attached` event, so the
+  // clock carries on from where the run actually is instead of restarting at
+  // zero -- three subagents that had been working for minutes all read "5.0s"
+  // five seconds after a refresh, because the only clock was this one.
+  const began = performance.now() - alreadyMs;
   const id = setInterval(() => {
     const age = performance.now() - began;
     if (!node.isConnected || age > ELAPSED_GUARD_MS) {

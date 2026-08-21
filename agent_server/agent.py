@@ -252,6 +252,21 @@ async def _flush_mailbox(session_id: str) -> list[dict]:
     return out
 
 
+def _inflight_snapshot(run: _Run) -> list[dict]:
+    """The still-running calls, each with how long it has been running.
+
+    Elapsed rather than a start time, so it does not matter whether the two
+    clocks agree -- the client only has to keep counting from here.
+    """
+    now = time.monotonic()
+    out = []
+    for call in run.inflight.values():
+        event = {key: value for key, value in call.items() if key != "_started"}
+        event["elapsed_ms"] = int(max(0.0, now - call["_started"]) * 1000)
+        out.append(event)
+    return out
+
+
 def mail_content(from_name: str, body: str) -> str:
     """The model-facing text of an incoming message."""
     return (
@@ -262,7 +277,12 @@ def mail_content(from_name: str, body: str) -> str:
 
 def _publish(run: _Run, event: dict):
     if event["type"] == "tool_start":
-        run.inflight[event["tool_call_id"]] = event
+        # `_started` is kept beside the event rather than in it: the wire copy
+        # goes to clients, and a monotonic reading means nothing on another
+        # machine. It is turned into an elapsed figure at attach time, so a
+        # browser that reloads mid-call is told how long the call has really
+        # been running instead of starting its own clock from zero.
+        run.inflight[event["tool_call_id"]] = {**event, "_started": time.monotonic()}
     elif event["type"] == "tool_end":
         run.inflight.pop(event["tool_call_id"], None)
     run.events.append(event)
@@ -421,8 +441,14 @@ async def subscribe(session_id: str, replay: bool = True) -> AsyncIterator[dict]
     try:
         if not replay:
             # A reattaching client already has the persisted transcript; it just
-            # needs to know which calls are still outstanding.
-            yield {"type": "attached", "inflight": list(run.inflight.values())}
+            # needs to know which calls are still outstanding, how long each has
+            # actually been running, and what the user typed that has not been
+            # sent yet. The last two used to live only in the page: a reload
+            # restarted every clock from zero and threw the queued message away,
+            # even though the server had both the whole time.
+            yield {"type": "attached", "inflight": _inflight_snapshot(run),
+                   "queued": [{"id": entry["id"], "content": entry["text"]}
+                              for entry in _queued.get(session_id) or []]}
         for event in backlog:
             yield event
             if event["type"] == "stream_end":

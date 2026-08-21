@@ -459,23 +459,29 @@ hr { border: 0; border-top: 1px solid var(--border); margin: 6px 0; }
  * alternating sentences and tool output read as a ragged left margin. Measured
  * on a live session: prose 122, tool output 134, thinking 135.
  *
- * The box keeps its inset; it is pulled left by the same amount instead, into
- * the marker gutter the spinner dot already hangs in. Text lines up, the box
- * still reads as a box. Each figure below is that element's own border plus
- * padding, so changing either means changing the pull to match. */
+ * The inset is removed on the left rather than the box being pulled left by it.
+ * Pulling was tried and clipped: a streaming block is drawn in `.msg-content`,
+ * which has `overflow-y: auto`, and CSS computes the other axis to `auto` as
+ * soon as one axis is not `visible` -- so the box has a hard left edge and
+ * anything given a negative margin is cut off at it, which is what happened to
+ * the thinking block. Nothing here may sit outside its own box.
+ *
+ * The background, the right-hand padding and the vertical padding all stay, so
+ * these still read as blocks; they just start where the text starts. */
 .message.tool > .msg-content .tool-raw,
-.message.tool > .msg-content .diff-block,
 .message.thinking > .msg-content > .reasoning-details[open] > .reasoning-summary {
-  margin-left: calc(-1 * var(--live-marker));
+  margin-left: 0;
+  padding-left: 0;
+  border-left: none;
+  border-top-left-radius: 0;
+  border-bottom-left-radius: 0;
 }
-/* 1px border + 11px padding = 12px */
-.message.tool > .msg-content .tool-raw { padding-left: 11px; }
-/* 1px border + 10px row padding = 11px, so one more of padding on the box */
-.message.tool > .msg-content .diff-block { padding-left: 1px; }
-/* 2px border + 10px padding = 12px */
-.message.thinking > .msg-content > .reasoning-details[open] > .reasoning-summary {
-  padding-left: 10px;
+.message.tool > .msg-content .diff-block {
+  margin-left: 0;
+  padding-left: 0;
+  border-left: none;
 }
+.message.tool > .msg-content .diff-block .row { padding-left: 0; }
 
 .msg-role {
   font-size: 10.5px;
@@ -713,6 +719,27 @@ a.file-ref:hover { border-bottom-style: solid; color: var(--text); background: v
   border-radius: 4px;
 }
 
+/* An overlay paints over whatever is under it, and "under it" is every row that
+   comes after -- so anything appended while a block is streaming disappears
+   behind it. A message queued mid-run is the case that bites: you type, it is
+   added below the live block, and it is simply not there. Permission cards and
+   notices had the same problem.
+ *
+ * So the overlay is given up the moment a real row follows. The block drops
+ * into the flow, still capped and still scrollable, and the row below it is
+ * visible where it belongs. The transcript grows by up to the cap at that
+ * moment, which is fine: it happens because the user typed, or because
+ * something needs their attention, and both are moments where movement is
+ * expected rather than mysterious.
+ *
+ * The live line is excluded. It is the reserved slot, it is blank whenever a
+ * block holds the overlay, and it exists precisely to be sat on. */
+.message.live:has(~ .message:not(.status-line):not([hidden])) > .msg-content {
+  position: static;
+  max-height: 22vh;
+  overflow-y: auto;
+}
+
 /* The thinking summary is the thinking itself: clamped to one line while
    collapsed so the first line is always visible, expanded into the full block. */
 .reasoning-summary {
@@ -762,9 +789,13 @@ a.file-ref:hover { border-bottom-style: solid; color: var(--text); background: v
      it. The role column to the left is empty until hover, so there is room. */
   position: relative;
 }
+/* Centred in the 10px grid gap, not at the full marker offset. At -12px the
+   6px dot started at the last 2px of the role column, and the role label fades
+   in on hover -- so hovering a running call drew the tool's name on top of its
+   own spinner. The gap is the only strip here that belongs to nobody. */
 .tool-summary > .spinner-dot {
   position: absolute;
-  left: calc(-1 * var(--live-marker));
+  left: -8px;
   top: 50%;
   margin-top: -3px;
 }
@@ -1802,7 +1833,7 @@ body.dragging-files::after {
 .status-line .spinner-dot {
   display: inline-block;
   position: absolute;
-  left: calc(-1 * var(--live-marker));
+  left: -8px;
   top: 50%;
   margin-top: -3px;
 }

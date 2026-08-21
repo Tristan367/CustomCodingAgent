@@ -551,7 +551,7 @@ function showToolProgress(event, stream) {
     const body = el('div', 'msg-content');
     body.appendChild(el('div', 'content-text'));
     stream.progressEl.appendChild(body);
-    App.els.messages.appendChild(stream.progressEl);
+    appendRow(stream.progressEl);
     autoscroll();
   }
   const text = calls
@@ -607,9 +607,6 @@ function resetStream(stream) {
 }
 
 function handleEvent(event, stream) {
-  // Any event means the request landed; the placeholder has done its job.
-  if (event.type !== 'turn_start') clearStatus();
-
   switch (event.type) {
     case 'turn_start':
       setStatusText('Waiting for the model');
@@ -629,10 +626,12 @@ function handleEvent(event, stream) {
         stream.reasoningEl = appendReasoning();
       }
       stream.reasoningEl.textContent += event.text;
-      // The overlay has its own scroll, so follow the newest thinking inside it
-      // rather than moving the page.
-      stream.reasoningEl.scrollTop = stream.reasoningEl.scrollHeight;
-      autoscroll();
+      // Left at the top on purpose. Thinking arrives faster than anyone can
+      // read it, so chasing the newest token showed a blur of text with the
+      // block's own label scrolled off above it. Showing the top means the
+      // first thing on screen is what the block *is*; the reader scrolls down
+      // if they want the rest, and it follows once they reach the bottom.
+      followIfRequested(stream.reasoningEl);
       break;
 
     case 'content':
@@ -770,6 +769,11 @@ function handleEvent(event, stream) {
       setupMessageSide();
       break;
   }
+
+  // Who owns the "happening now" row, decided once, after the event has been
+  // applied. See syncLiveLine.
+  if (['done', 'error', 'aborted'].includes(event.type)) clearStatus();
+  else syncLiveLine(stream);
 }
 
 /* Re-rendering markdown on every token is O(n^2): each token re-parses and
@@ -1110,42 +1114,97 @@ function roleEl(text) {
   return node;
 }
 
-/* A transient "Sending / Waiting" line, so there is feedback in the second or
- * two before the first token arrives. */
+/* The live line: one row at the foot of the transcript that exists for the whole
+ * turn and never changes height.
+ *
+ * It used to be created and destroyed constantly -- every event that was not
+ * `turn_start` removed it and a few of them put it back. Between a tool
+ * finishing and the next round starting, the row was gone for a frame or two
+ * and the transcript dropped by its height and rose again: the "jumps up a
+ * little and comes back down" that made a working turn feel unstable.
+ *
+ * So it is created once and only removed when the turn ends. Between phases its
+ * text is blanked rather than the row being taken away -- see `syncLiveLine` -- which
+ * keeps the foot of the transcript at a constant height from `turn_start` to
+ * `done`. The blank line is deliberate: it is the reserved slot that stops
+ * everything above it moving. */
 let statusEl = null;
 let statusTimer = null;
 let statusBegan = 0;
 
-function showStatus(text) {
-  clearStatus();
+function ensureStatusRow() {
+  if (statusEl && statusEl.isConnected) return statusEl;
   const node = el('div', 'message status-line');
   node.appendChild(el('div', 'msg-role', ''));
   const body = el('div', 'msg-content');
-  body.append(el('span', 'spinner-dot'), el('span', 'status-text', text),
+  body.append(el('span', 'spinner-dot'), el('span', 'status-text', ''),
               el('span', 'status-elapsed', ''));
   node.appendChild(body);
   App.els.messages.appendChild(node);
   statusEl = node;
   statusBegan = performance.now();
+  if (statusTimer) clearInterval(statusTimer);
   statusTimer = setInterval(() => {
     const label = statusEl && statusEl.querySelector('.status-elapsed');
     if (!label) return;
     const secs = Math.floor((performance.now() - statusBegan) / 1000);
     label.textContent = secs >= 2 ? ` \u00b7 ${secs}s` : '';
   }, 1000);
-  autoscroll();
+  return node;
+}
+
+function showStatus(text) {
+  const node = ensureStatusRow();
+  node.classList.remove('idle');
+  statusBegan = performance.now();
+  node.querySelector('.status-text').textContent = text;
+  node.querySelector('.status-elapsed').textContent = '';
   return { remove: clearStatus };
 }
 
 function setStatusText(text) {
-  const label = statusEl && statusEl.querySelector('.status-text');
-  if (label) label.textContent = text;
+  showStatus(text);
+}
+
+/* The foot of the transcript holds exactly one "what is happening now" row, and
+ * this decides who it is.
+ *
+ * That slot is the live line when nothing else claims it, and the running tool
+ * call or streaming thinking block when one does. Run after every event, so the
+ * handover happens inside a single handler and there is never a frame with
+ * neither -- which is the whole bug. The old code cleared the line on *every*
+ * event and only some of them put it back, so after a tool finished the slot
+ * was empty until the next round began: the transcript dropped a row and got it
+ * back a moment later, several times a turn.
+ *
+ * Combined with keeping the most recent finished call on screen, the foot is
+ * two rows of the same height from the start of a turn to the end of it, so
+ * the last thing the agent said only moves when it actually says more. */
+function syncLiveLine(stream) {
+  const claimed = !!(stream.assistantEl || stream.reasoningEl
+                     || App.els.messages?.querySelector('.message.tool.pending'));
+  const node = ensureStatusRow();
+  // Never hidden mid-turn, only blanked. Its height *is* the reserved slot: if
+  // it could vanish while a tool ran and come back when the tool finished, the
+  // foot would oscillate by a row several times a turn, which is the thing this
+  // whole arrangement exists to stop.
+  node.classList.toggle('idle', claimed);
+  node.querySelector('.status-text').textContent = claimed ? '' : 'Waiting for the model';
+  if (claimed) node.querySelector('.status-elapsed').textContent = '';
 }
 
 function clearStatus() {
   if (statusEl) statusEl.remove();
   statusEl = null;
   if (statusTimer) { clearInterval(statusTimer); statusTimer = null; }
+}
+
+/* Append a transcript row, keeping the live line last so the reserved slot
+ * stays at the foot of the transcript where the reader is looking. */
+function appendRow(node) {
+  if (statusEl && statusEl.isConnected) App.els.messages.insertBefore(node, statusEl);
+  else App.els.messages.appendChild(node);
+  return node;
 }
 
 function appendMessage(role, text) {
@@ -1158,7 +1217,7 @@ function appendMessage(role, text) {
   body.appendChild(content);
   node.appendChild(body);
   node.appendChild(el('span', 'msg-time', clockTime()));
-  App.els.messages.appendChild(node);
+  appendRow(node);
   autoscroll();
   return node;
 }
@@ -1180,7 +1239,7 @@ function appendCompactionDraft() {
   const text = el('pre', 'reasoning-text');
   body.appendChild(text);
   node.appendChild(body);
-  App.els.messages.appendChild(node);
+  appendRow(node);
   autoscroll();
   return text;
 }
@@ -1272,7 +1331,7 @@ function appendMailMessage(fromName, text) {
   body.appendChild(content);
   node.appendChild(body);
   node.appendChild(el('span', 'msg-time', clockTime()));
-  App.els.messages.appendChild(node);
+  appendRow(node);
   autoscroll();
   return node;
 }
@@ -1298,7 +1357,10 @@ function appendReasoning() {
   body.appendChild(details);
   node.appendChild(body);
   node.appendChild(el('span', 'msg-time', clockTime()));
-  App.els.messages.appendChild(node);
+  appendRow(node);
+  // Through the same single slot as tool blocks. Appending with `.live` already
+  // set would leave whatever held it still overlaid underneath.
+  takeLive(node);
   return summary;
 }
 
@@ -1323,6 +1385,16 @@ function hideAllThinking() {
 function hideAllToolCalls() {
   // Only completed calls are "past"; parallel ones that are still running stay
   // visible so the user can see every subagent that is still working.
+  // A finished call is hidden only when the *next* one starts, which is the
+  // one moment its row is replaced rather than removed: this runs from
+  // `tool_start`, so the row going out and the row coming in cancel and the
+  // foot of the transcript holds its height.
+  //
+  // That is also why the most recent completed call needs no special case to
+  // stay on screen -- nothing hides it until there is something to put in its
+  // place. Keeping it explicitly was tried and was worse: the call being kept
+  // sits above everything written since, so hiding it a round later pulled the
+  // rows beneath it up by 34px, including the last thing the agent said.
   App.els.messages?.querySelectorAll('.message.tool:not(.pending)').forEach((n) => {
     n.classList.remove('live');
     n.hidden = true;
@@ -1350,31 +1422,59 @@ function showToolOutput(event) {
     pre = el('pre', 'tool-raw tool-stream');
     details.appendChild(pre);
     details.open = true;
-    promoteLiveTool(node);
+    takeLive(node);
   }
   pre.textContent = event.text;
-  // Follow the newest line inside the output box, not by moving the page -- the
-  // same rule the streaming thinking block follows. Only this box scrolls: the
-  // summary above it is the label for what is running and has to stay put, so
-  // the block around it is `overflow: hidden` rather than a second scroller.
-  pre.scrollTop = pre.scrollHeight;
+  // Only this box scrolls: the summary above it is the label for what is
+  // running and has to stay put, so the block around it is `overflow: hidden`
+  // rather than a second scroller. And it starts at the top -- see
+  // `followIfRequested`.
+  followIfRequested(pre);
 }
 
-/* Hand the overlay to the newest auto-expanded result.
+/* Streaming content is anchored to the top of its box and stays there, unless
+ * the reader has scrolled that box to the bottom themselves -- then it follows.
  *
- * Only one block can hold it: two overlays are both positioned from their own
- * row's top, so they would paint over each other. The one being replaced drops
- * back into the flow *collapsed*, which is the same single line it was already
- * occupying out of it -- so the handover costs no movement either.
+ * A box that simply chased its newest line was wrong in both directions: while
+ * it was short the view sat below the label, and once it was long the reader
+ * got a window into the middle of a log that moved every frame. Starting at the
+ * top means what is on screen is always the beginning of the thing, which is
+ * the part that says what it is. */
+function followIfRequested(box) {
+  if (!box) return;
+  if (box.dataset.follow === undefined) {
+    box.dataset.follow = '0';
+    box.addEventListener('scroll', () => {
+      const atBottom = box.scrollHeight - box.scrollTop - box.clientHeight < 24;
+      box.dataset.follow = atBottom ? '1' : '0';
+    });
+  }
+  if (box.dataset.follow === '1') box.scrollTop = box.scrollHeight;
+}
+
+/* Hand the overlay to whatever the agent is doing right now.
  *
- * This only runs when the user has asked for past tool calls to be hidden.
- * Without that setting an expanded result is meant to stay in the scrollback at
- * full height, and nothing later takes it away, so there is no jump to avoid. */
-function promoteLiveTool(node) {
-  App.els.messages?.querySelectorAll('.message.tool.live').forEach((n) => {
+ * **Exactly one block may hold it.** Every overlay is positioned from its own
+ * row's top and can grow to `--live-body`, so two of them 30px apart paint over
+ * each other almost completely. That is not theoretical: an auto-expanded
+ * `edit` took the overlay, the model started thinking, the thinking block took
+ * one too, and it covered 86% of the diff -- the edit block never moved or
+ * closed, it was simply painted over.
+ *
+ * So this clears `.live` from *every* holder regardless of kind, which is why
+ * it is not `promoteLiveTool` any more: thinking blocks and tool blocks compete
+ * for the same single slot and both have to go through here.
+ *
+ * The one being replaced drops back into the flow *collapsed*, which is the
+ * same single line it was already occupying out of it -- so the handover costs
+ * no movement either. */
+function takeLive(node) {
+  App.els.messages?.querySelectorAll('.message.live').forEach((n) => {
     if (n === node) return;
     n.classList.remove('live');
     const open = n.querySelector('details[open]');
+    // A thinking block's summary *is* its text, so closing it leaves the first
+    // line -- the same one line the row costs while overlaid.
     if (open) open.open = false;
   });
   node.classList.add('live');
@@ -1405,7 +1505,7 @@ function appendToolCall(event) {
   body.appendChild(details);
   node.appendChild(body);
   node.appendChild(el('span', 'msg-time', clockTime()));
-  App.els.messages.appendChild(node);
+  appendRow(node);
   startElapsed(node, elapsed);
   autoscroll();
   return node;
@@ -1486,20 +1586,28 @@ function completeToolCall(event) {
       || (['read', 'write', 'edit'].includes(node._name) ? toolFilePath(event.title) : null);
     if (path) { node.dataset.path = path; node.classList.add('fe-openable'); }
   }
+  // Hidden, not removed. Removing it took 12px out of the row and every label
+  // to the left of where it had been, so a call finishing shifted its own text
+  // sideways and left finished calls misaligned with running ones.
   const dot = node.querySelector('.spinner-dot');
-  if (dot) dot.remove();
+  if (dot) dot.classList.add('spent');
 
   const details = node.querySelector('.tool-details');
   // The live tail is replaced by the real result, which is complete rather than
   // the last few thousand characters.
   details.querySelector('.tool-raw.tool-stream')?.remove();
   details.open = shouldExpand(node._name);
-  // A result that opens itself is the thing the user is watching right now, so
-  // it takes the overlay rather than taking height off the transcript. Once the
-  // call is over, a block that streamed gives the overlay back unless that rule
-  // says to keep it.
-  if (details.open && App.hideToolCalls) promoteLiveTool(node);
-  else node.classList.remove('live');
+  // A finished call always drops back into the flow. It used to keep the
+  // overlay when it had opened itself and past calls were hidden, purely to
+  // hide the fact that an auto-expanded result arrives at full height in one
+  // frame and is taken away at full height in the next. That compensation is
+  // gone on purpose: the honest fix for that jump is to leave the block
+  // collapsed by default, which is now what ships. Ask for `edit` to open
+  // itself and you are asking to watch diffs arrive, which moves the page --
+  // that is the trade, and it is the user's to make rather than ours to paper
+  // over. The overlay still belongs to whatever is *streaming*, which is where
+  // it earns its keep.
+  node.classList.remove('live');
 
   // The input the model passed, above the result, so a call reads like
   // "here is what it was asked, here is what came back".
@@ -1593,7 +1701,7 @@ function renderChangeSummary(changes) {
 
   node.appendChild(body);
   node.appendChild(el('span', 'msg-time', clockTime()));
-  App.els.messages.appendChild(node);
+  appendRow(node);
   autoscroll();
 }
 
@@ -1774,7 +1882,7 @@ function appendNotice(kind, text) {
   const body = el('div', 'msg-content');
   body.appendChild(el('div', 'content-text', text));
   node.appendChild(body);
-  App.els.messages.appendChild(node);
+  appendRow(node);
   autoscroll();
 }
 
@@ -1789,7 +1897,7 @@ function appendCompactingNotice() {
               el('span', 'tool-elapsed', '0.0s'));
   body.appendChild(text);
   node.appendChild(body);
-  App.els.messages.appendChild(node);
+  appendRow(node);
   startElapsed(node, node.querySelector('.tool-elapsed'));
   autoscroll();
 }
@@ -1900,7 +2008,7 @@ function appendPermissionCard(event) {
   }
 
   node.append(head, detail, sub, ...(pwWrap ? [pwWrap] : []), actions);
-  App.els.messages.appendChild(node);
+  appendRow(node);
   autoscroll();
   actions.querySelector('button')?.focus();
 }

@@ -301,15 +301,17 @@ async def test_collapsing_a_streamed_thinking_block_moves_nothing(page):
     assert _worst_shift(before, after) <= TOLERANCE
 
 
-async def test_an_auto_expanded_result_appears_and_vanishes_without_moving_anything(page):
-    """The case that used to lurch twice per tool call.
+async def test_a_finished_result_costs_one_line_with_the_shipped_defaults(page):
+    """The case that used to lurch twice per tool call, solved by not opening.
 
     A tool result cannot stream -- the diff only exists once the call has
-    finished -- so an auto-expanded `edit` arrives at full height in one frame,
-    and `hide_tool_calls` takes it away at full height in the next.
+    finished -- so an *auto-expanded* `edit` arrives at full height in one frame
+    and `hide_tool_calls` takes it away at full height in the next. There used
+    to be machinery to hide that; it was removed in favour of shipping `edit`
+    and `write` collapsed, which is this test.
     """
     await page.evaluate("""
-    () => { App.expandTools = ['write', 'edit']; App.hideToolCalls = true;
+    () => { App.expandTools = []; App.hideToolCalls = true;
             window._s = { assistantEl: null, contentEl: null, text: '', reasoningEl: null };
             handleEvent({ type: 'tool_start', tool_call_id: 'e1', name: 'edit',
                           args: { path: 'agent_server/permissions.py' } }, window._s); }
@@ -319,29 +321,85 @@ async def test_an_auto_expanded_result_appears_and_vanishes_without_moving_anyth
 
     before, height_before = await _tops(page), await _page_height(page)
 
-    # The diff lands, auto-expanded.
     await page.evaluate("(d) => handleEvent({ type: 'tool_end', tool_call_id: 'e1',"
                         " title: 'edit permissions.py', diff: d, lang: 'python' }, window._s)", DIFF)
     await page.wait_for_timeout(300)
-    expanded, height_expanded = await _tops(page), await _page_height(page)
+    landed, height_landed = await _tops(page), await _page_height(page)
 
     shown = await page.evaluate("""
     () => { const n = document.querySelector('.message.tool[data-tool-call-id="e1"]');
             return { open: n.querySelector('details').open,
-                     painted: n.querySelector('.msg-content').getBoundingClientRect().height,
                      rowHeight: n.getBoundingClientRect().height }; }
     """)
-    assert shown["open"], "an auto-expanded tool should open itself"
-    assert shown["painted"] > 100, "the diff should still be visible at a readable size"
-    assert shown["rowHeight"] <= 40, "but it should cost about one line of layout"
-    assert abs(height_expanded - height_before) <= TOLERANCE
-    assert _worst_shift(before, expanded) <= TOLERANCE
+    assert not shown["open"], "with the shipped defaults a result stays collapsed"
+    assert shown["rowHeight"] <= 40, "a collapsed result is one line"
+    assert abs(height_landed - height_before) <= TOLERANCE
+    assert _worst_shift(before, landed) <= TOLERANCE
 
-    # The next call starts, and the diff is hidden.
+    # The next call starts and the finished one is hidden. It is the most recent
+    # completed call, so it stays on screen -- and either way nothing moves.
     await page.evaluate("() => handleEvent({ type: 'tool_start', tool_call_id: 'b1',"
                         " name: 'bash', args: { command: 'pytest -q' } }, window._s)")
     await page.wait_for_timeout(300)
-    assert abs(await _page_height(page) - height_expanded) <= TOLERANCE
+    assert _worst_shift(landed, await _tops(page)) <= TOLERANCE
+
+
+async def test_the_foot_holds_one_tool_row_and_one_live_line(page):
+    """With past calls hidden the foot of the transcript is two rows of the same
+    height for the whole turn: the most recent call, and what is happening now.
+
+    A finished call is not hidden when it finishes -- only when the next one
+    starts, in the same handler that adds the replacement. So the row going out
+    and the row coming in cancel, and the height never changes. Rounds are
+    driven here one at a time and the foot measured after each.
+    """
+    await page.evaluate("""
+    () => { App.expandTools = []; App.hideToolCalls = true;
+            window._s = { assistantEl: null, contentEl: null, text: '', reasoningEl: null };
+            handleEvent({ type: 'turn_start', user_message_id: null }, window._s); }
+    """)
+    await page.wait_for_timeout(150)
+
+    async def foot():
+        return await page.evaluate("""
+        () => {
+          const rows = [...document.querySelectorAll('#messages .message')].filter(r => !r.hidden);
+          const tools = rows.filter(r => r.classList.contains('tool'));
+          return { tools: tools.length,
+                   newest: tools.length ? tools[tools.length - 1].dataset.toolCallId : null,
+                   liveLine: rows.filter(r => r.classList.contains('status-line')).length,
+                   height: Math.round(document.getElementById('chat-container').scrollHeight) };
+        }
+        """)
+
+    heights = []
+    for n in range(1, 4):
+        await page.evaluate("""
+        (n) => handleEvent({ type: 'tool_start', tool_call_id: `t${n}`, name: 'read',
+                             args: { path: `f${n}.py` } }, window._s)
+        """, n)
+        await page.wait_for_timeout(160)
+        running = await foot()
+        assert running["tools"] == 1, f"round {n}: {running['tools']} tool rows on screen, want 1"
+        assert running["newest"] == f"t{n}"
+        assert running["liveLine"] == 1, "the live line must never leave mid-turn"
+
+        await page.evaluate("""
+        (n) => handleEvent({ type: 'tool_end', tool_call_id: `t${n}`,
+                             title: `read f${n}.py`, output: 'ok' }, window._s)
+        """, n)
+        await page.wait_for_timeout(160)
+        finished = await foot()
+        assert finished["tools"] == 1, "the call that just finished stays on screen"
+        assert finished["newest"] == f"t{n}"
+        assert finished["liveLine"] == 1
+        assert finished["height"] == running["height"], (
+            f"round {n}: finishing a call changed the page height by "
+            f"{finished['height'] - running['height']}px")
+        heights.append(finished["height"])
+
+    assert len(set(heights)) == 1, (
+        f"the foot changed height between rounds: {heights}")
 
 
 async def test_streaming_command_output_does_not_move_the_page(page):
@@ -380,33 +438,38 @@ async def test_streaming_command_output_does_not_move_the_page(page):
     assert shown["painted"] > 100, "but it should be visible while it runs"
     assert shown["text"] == "running check 119", "the newest frame should be what is shown"
 
-    # Present in the DOM is not the same as on the screen. The overlay caps the
-    # block's height and `.tool-raw` used to cap its own as well, so the newest
-    # line sat at the bottom of an inner scroller that was itself below the
-    # bottom of the outer one -- the transcript showed the middle of the log and
-    # stayed there while the command ran.
-    visible = await page.evaluate("""
-    () => {
-      const n = document.querySelector('.message.tool[data-tool-call-id="b9"]');
-      const box = n.querySelector('.msg-content').getBoundingClientRect();
-      const pre = n.querySelector('.tool-stream');
-      // Measure the last line by putting a marker around it.
-      const text = pre.textContent;
-      const cut = text.trimEnd().lastIndexOf('\\n') + 1;
-      const span = document.createElement('span');
-      span.textContent = text.slice(cut);
-      pre.textContent = text.slice(0, cut);
-      pre.appendChild(span);
-      const last = span.getBoundingClientRect();
-      return { lastBottom: last.bottom, boxBottom: box.bottom, boxTop: box.top,
-               lastTop: last.top };
+    # The output starts at the top and stays there. It used to chase its newest
+    # line, which put the reader in the middle of a log that moved every frame
+    # and pushed the block's own first line off the top. The beginning of the
+    # thing is what says what the thing is, so that is what stays on screen.
+    anchored = await page.evaluate("""
+    () => { const pre = document.querySelector('.message.tool[data-tool-call-id="b9"] .tool-stream');
+            return { scrollTop: pre.scrollTop, scrollable: pre.scrollHeight > pre.clientHeight,
+                     firstLine: pre.textContent.split('\\n')[0] }; }
+    """)
+    assert anchored["scrollable"], "the output should have overflowed its box by now"
+    assert anchored["scrollTop"] == 0, (
+        "the streaming box scrolled away from the top on its own")
+    assert anchored["firstLine"] == "running check 0"
+
+    # ...unless the reader scrolls it to the bottom themselves, which opts into
+    # following. Anything else leaves the view where they put it.
+    followed = await page.evaluate("""
+    async () => {
+      const pre = document.querySelector('.message.tool[data-tool-call-id="b9"] .tool-stream');
+      pre.scrollTop = pre.scrollHeight;                       // the reader asks to follow
+      pre.dispatchEvent(new Event('scroll'));
+      let text = '';
+      for (let i = 0; i < 160; i++) text += `running check ${i}\\n`;
+      handleEvent({ type: 'tool_output', tool_call_id: 'b9', text }, window._s);
+      await new Promise(r => setTimeout(r, 120));
+      return { atBottom: pre.scrollHeight - pre.scrollTop - pre.clientHeight < 24 };
     }
     """)
-    assert visible["lastTop"] >= visible["boxTop"] - 2, "the newest line is above the window"
-    assert visible["lastBottom"] <= visible["boxBottom"] + 2, (
-        "the newest line is below the visible window -- the block is not following its output")
+    assert followed["atBottom"], (
+        "a box the reader scrolled to the bottom should keep following the output")
 
-    # And the label stays put while the output moves under it. Scrolling the
+    # And the label stays put while the output arrives under it. Scrolling the
     # whole overlay to follow the output took the summary -- which command is
     # running, and for how long -- off the top of the block.
     label = await page.evaluate("""
@@ -525,13 +588,19 @@ async def test_a_new_turn_still_lands_at_the_bottom_of_a_windowed_transcript(pag
                     content: 'a\\nb\\n' }, window._s);
       await new Promise(r => requestAnimationFrame(r));
       const rows = [...document.querySelectorAll('#messages .message')];
-      return { added: rows.length - before,
-               lastIsNew: rows[rows.length - 1].dataset.toolCallId === 'nw',
+      // The live line is a row of its own and sits below the transcript for the
+      // whole turn, so the streamed call is the last *message* row rather than
+      // the last row outright.
+      const messages = rows.filter(r => !r.classList.contains('status-line'));
+      return { added: messages.length - before,
+               lastIsNew: messages[messages.length - 1].dataset.toolCallId === 'nw',
+               liveLineIsLast: rows[rows.length - 1].classList.contains('status-line'),
                control: !!document.querySelector('.load-earlier') };
     }
     """)
     assert state["added"] == 1
     assert state["lastIsNew"], "a streamed row did not land at the end"
+    assert state["liveLineIsLast"], "the live line must stay at the foot of the transcript"
     assert state["control"], "streaming removed the way back to the rest of the session"
 
 

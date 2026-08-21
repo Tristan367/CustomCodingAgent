@@ -59,6 +59,14 @@
   --s5: 24px;
   --s6: 32px;
 
+  /* The height of every one-line transient row -- the live line, a running tool
+     call, a collapsed thinking block, the progress counter. They swap for each
+     other many times a turn, so they share one height and the transcript never
+     moves when one becomes another. --live-marker is the gutter their labels
+     start after, so those labels line up with each other too. */
+  --live-row: 30px;
+  --live-marker: 12px;
+
   /* Type. Five steps, and --fs-body is the default. There were fifteen sizes
      between 8px and 24px, most of them a half-pixel apart and indistinguishable
      on purpose from nothing. */
@@ -404,10 +412,44 @@ hr { border: 0; border-top: 1px solid var(--border); margin: 6px 0; }
   align-items: start;
   overflow: visible;
 }
-.message.tool { padding: 2px 0; }
-.message.thinking { padding: 2px 0; }
 .message.assistant { padding: 10px 0; }
 .message.user { padding: 10px 0; }
+
+/* Every transient row is exactly one --live-row tall.
+ *
+ * These four states replace each other constantly during a turn: the live line
+ * becomes a running tool, which becomes a thinking block, which becomes the
+ * progress counter, and back. They used to measure 28, 31, 30 and 40px, so
+ * every one of those swaps moved the whole transcript by the difference -- a
+ * 12px spread, several times a second, which is most of what "it jumps all over
+ * the place" was. Making them identical costs nothing and the movement is
+ * simply gone.
+ *
+ * The height is on the row and the header inside it is centred, so an *expanded*
+ * block still grows below its header as normal -- only the one-line state is
+ * pinned. Change one of these and you have to change all of them. */
+.message.tool,
+.message.thinking,
+.message.status-line,
+.message.tool-progress { padding: 0; margin-bottom: var(--s1); }
+/* The gap between rows belongs to the row, not to the block inside it. As an
+   inner margin it counted toward the tool row's height and made it 4px taller
+   than the other three, which is exactly the kind of difference this section
+   exists to remove. */
+.message.tool > .msg-content > .tool-details { margin-bottom: 0; }
+.message.tool > .msg-content > .tool-details > .tool-summary,
+.message.thinking > .msg-content > .reasoning-details > .reasoning-summary,
+.message.status-line > .msg-content,
+.message.tool-progress > .msg-content > .content-text {
+  min-height: var(--live-row);
+  box-sizing: border-box;
+  display: flex;
+  align-items: center;
+}
+/* An open thinking block is a text box, not a row: it has to lay out as one. */
+.message.thinking > .msg-content > .reasoning-details[open] > .reasoning-summary {
+  display: block;
+}
 
 .msg-role {
   font-size: 10.5px;
@@ -688,6 +730,17 @@ a.file-ref:hover { border-bottom-style: solid; color: var(--text); background: v
   display: flex;
   align-items: center;
   gap: 6px;
+  /* For the marker, which hangs in the gutter rather than pushing the label.
+     In the flow it indented every tool row 12px past the assistant text beside
+     it, so a running command did not line up with the sentence that introduced
+     it. The role column to the left is empty until hover, so there is room. */
+  position: relative;
+}
+.tool-summary > .spinner-dot {
+  position: absolute;
+  left: calc(-1 * var(--live-marker));
+  top: 50%;
+  margin-top: -3px;
 }
 .tool-summary::-webkit-details-marker { display: none; }
 .tool-summary:hover { color: var(--text); }
@@ -715,6 +768,9 @@ a.file-ref:hover { border-bottom-style: solid; color: var(--text); background: v
   text-transform: uppercase;
   color: var(--text-faint);
 }
+
+/* Keeps its space when it stops spinning -- see `completeToolCall`. */
+.spinner-dot.spent { visibility: hidden; animation: none; }
 
 .spinner-dot {
   width: 6px;
@@ -1694,8 +1750,28 @@ body.dragging-files::after {
 
 /* ── Transient status line ───────────────────────────────────────────────── */
 
-.status-line .msg-content { display: flex; align-items: center; gap: 8px; }
-.status-line .spinner-dot { display: inline-block; }
+/* The live line holds its height when it has nothing to say. Blanking the text
+   instead of removing the row is what stops the foot of the transcript
+   collapsing and springing back between phases; if this row could shrink, that
+   would be pointless. The dot goes because nothing is spinning, not the space
+   it sits in. */
+.status-line.idle .spinner-dot { visibility: hidden; }
+.status-line.idle .status-text::after { content: none; animation: none; }
+
+/* Marker in the gutter, text at the same left edge as every other row. */
+.status-line .msg-content {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  position: relative;
+}
+.status-line .spinner-dot {
+  display: inline-block;
+  position: absolute;
+  left: calc(-1 * var(--live-marker));
+  top: 50%;
+  margin-top: -3px;
+}
 .status-text {
   font-family: var(--mono);
   font-size: 11.5px;

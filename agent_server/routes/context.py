@@ -71,7 +71,20 @@ async def _sound_enabled() -> bool:
     return await db.get_setting("sound_enabled", "1") != "0"
 
 
-DEFAULT_EXPAND_TOOLS = ["write", "edit"]
+# Nothing opens itself.
+#
+# `edit` and `write` used to, so that diffs were visible without a click. The
+# cost only shows up with past tool calls hidden: a result cannot stream -- the
+# diff exists only once the call has finished -- so it arrives at full height in
+# one frame and is taken away at full height in the next, and the transcript
+# moves twice per call. There was code to hide that; it is gone, because the
+# honest answer is not to open the block.
+#
+# Collapsed, every finished call is one line, the foot of the transcript holds a
+# steady height, and the thing currently streaming is still shown in full. A
+# user who would rather watch diffs land can turn these back on and accept the
+# movement -- an informed trade rather than a default.
+DEFAULT_EXPAND_TOOLS: list[str] = []
 
 
 async def _expand_tools() -> list[str]:

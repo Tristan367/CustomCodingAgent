@@ -455,6 +455,12 @@
             for (const tool of summary.tools) {
                 const wrap = document.createElement('details');
                 wrap.className = 'schema-details';
+                /* Open. The warning under this list tells the user to read the
+                   scripts before importing, and they cannot read what is behind
+                   a disclosure triangle they have no reason to click. A bundle
+                   carries shell that will run on this machine; showing it is
+                   the entire point of this screen. */
+                wrap.open = true;
                 const head2 = document.createElement('summary');
                 head2.textContent =
                     `${tool.name}${tool.exists ? ' — replaces a tool you already have' : ''}`
@@ -476,7 +482,20 @@
                   + 'importing. They arrive switched off, so nothing can call them until you '
                   + 'enable each one on the Tools page.'
                 : '';
-            document.getElementById('bundle-rename').value = summary.profile.name;
+            /* Default away from the destructive answer. Pre-filling the name
+               that already exists makes "replace the profile I have" the thing
+               that happens if you press the button the modal has focused, which
+               is the wrong way round for an action that cannot be undone. */
+            const taken = new Set(
+                [...document.querySelectorAll('#prompt-picker option')]
+                    .map((o) => o.value.split(':').slice(1).join(':')));
+            let name = summary.profile.name;
+            if (summary.profile.exists) {
+                let n = 2;
+                name = `${summary.profile.name} (copy)`;
+                while (taken.has(name)) name = `${summary.profile.name} (copy ${n++})`;
+            }
+            document.getElementById('bundle-rename').value = name;
             document.getElementById('bundle-modal').hidden = false;
         }
 

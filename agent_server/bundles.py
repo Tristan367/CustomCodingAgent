@@ -8,9 +8,15 @@ an import that fails later, mysteriously, which is worse than not importing.
 
 Which tools "belong" to a profile is not something the data says outright. A
 profile records the tools it *disables*, not the ones it uses, so the honest
-answer -- and the only one the schema supports -- is every enabled custom tool
-the profile does not disable. That is exactly the set a session on this profile
-would actually have.
+answer -- and the only one the schema supports -- is every custom tool the
+profile does not disable.
+
+Note "every", not "every enabled". A tool's `enabled` flag is a fact about this
+machine, and `apply_bundle` deliberately clears it on the way in so nothing can
+run before a person has read it. Filtering the export by it therefore made
+bundles lossy in exactly one step: import a bundle and export it again, and the
+scripts were gone, because importing had switched them off. Whether a tool is
+switched on here says nothing about whether the profile needs it there.
 
 The asymmetry that matters on the way back in: a profile is text, and a custom
 tool is a shell script that will run on the importing machine. So a bundle is
@@ -78,10 +84,12 @@ async def build_bundle(name: str) -> dict | None:
 
     rows = await db.list_custom_tools()
     off = _disabled(profile, {row["name"] for row in rows})
+    # Not filtered by `row["enabled"]` -- see the module docstring. That made a
+    # bundle lossy the moment it had been imported once.
     tools = [
         {field: row[field] for field in TOOL_FIELDS}
         for row in rows
-        if row["enabled"] and row["name"] not in off
+        if row["name"] not in off
     ]
 
     # The summarising prompt is part of how a profile behaves and is edited on

@@ -1399,6 +1399,14 @@ input[type="checkbox"]:disabled { cursor: not-allowed; opacity: 0.55; }
   background: var(--bg-raised);
   border: 1px solid var(--border-strong);
   border-radius: 8px;
+  /* Never taller than the window. A modal whose content varies -- the import
+     review shows every shell script in the bundle -- grew past the viewport on
+     a short screen and had no scroll of its own, so it hung off both ends at
+     once: the heading above the top, the Import and Cancel buttons below the
+     bottom, and no way to reach either. A 120-line script did it at 680px. */
+  max-height: 92vh;
+  overflow-y: auto;
+  overscroll-behavior: contain;
 }
 .modal-content h3 { font-size: var(--fs-lead); color: var(--text); margin-bottom: var(--s2); }
 .modal-content textarea { width: 100%; resize: vertical; }

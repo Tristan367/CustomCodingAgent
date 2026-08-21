@@ -53,6 +53,47 @@ enforcing it (`tests/test_transcript_anchoring.py`).
   scroll position. Windowing the *number of rows drawn* is the approach that
   works.
 
+### The foot of the transcript is two rows, and they are the same height
+
+While a turn runs, everything below the last thing the agent said is: the most
+recent tool call, and the live line. Both are `--live-row` tall, and so is every
+state either can take.
+
+- **Any new transient row must use that height.** The live line, the progress
+  counter, a running call and a one-line thinking block once measured 28, 31, 30
+  and 40px. They replace each other several times a second, so each swap moved
+  the whole transcript by the difference. `tests/test_live_region.py` measures
+  all four and fails on a spread over 1px.
+- **The live line is blanked, never removed, mid-turn.** It used to be cleared
+  by every event and restored by only some, so between a call finishing and the
+  next round starting the foot lost a row and got it back. `syncLiveLine` runs
+  once after each event and decides who owns the slot, so the handover happens
+  inside a single handler and there is never a frame with neither.
+- **A finished call is hidden only when the next one starts** -- in the same
+  handler that appends the replacement, so the row going out and the row coming
+  in cancel. Do not hide it when it finishes.
+- **Only one block may hold the `.live` overlay.** Overlays are positioned from
+  their own row's top and grow to the same height, so two of them 30px apart
+  cover each other almost entirely -- a streaming thinking block once painted
+  over 86% of an open diff. `takeLive` is the only way in, and it clears every
+  other holder regardless of kind.
+- **Markers hang in the gutter.** A spinner dot in the flow indents its row past
+  the assistant text beside it, and removing it when the call ends moves the
+  label sideways. Position it, and hide it rather than removing it.
+- **Streaming content is anchored to the top of its box**, and follows only if
+  the reader scrolled that box to the bottom themselves.
+
+There is deliberately *no* compensation for an auto-expanded result arriving at
+full height. `edit` and `write` ship collapsed; asking them to open is asking to
+watch the page move.
+
+### `enabled` on a custom tool is a fact about this machine
+
+Not about the profile. `apply_bundle` switches every imported tool off on
+purpose, so filtering an export by `enabled` made bundles lossy in one step: a
+bundle that had been imported once exported without its scripts, and whoever it
+was passed to next got a profile referring to tools that did not exist.
+
 ### Windowing the view must never narrow what the model sees
 
 The transcript draws the last N messages. The model's request is assembled from

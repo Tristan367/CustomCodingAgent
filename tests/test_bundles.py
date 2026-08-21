@@ -65,14 +65,42 @@ async def test_a_tool_the_profile_disables_does_not_travel(store):
     assert {t["name"] for t in bundle["tools"]} == {"deploy_check"}
 
 
-async def test_a_disabled_tool_does_not_travel(store):
-    """Switched off here means it is not part of what this profile does."""
+async def test_a_tool_travels_even_when_it_is_switched_off_here(store):
+    """`enabled` is a fact about this machine, not about the profile.
+
+    This used to assert the opposite, on the reading that switched-off means
+    "not part of what this profile does". The reading does not survive contact
+    with the round trip: importing a bundle deliberately switches every tool it
+    carries off, so under the old rule a bundle that had been imported once
+    exported without its scripts. Whoever it was passed to next got a profile
+    referring to tools that were not there -- the exact failure this module
+    exists to prevent, reintroduced by the export side.
+    """
     await db.save_prompt("p", "body", "system", disabled_tools="")
     await _tool("live_one")
     await _tool("shelved", enabled=False)
 
     bundle = await bundles.build_bundle("p")
-    assert {t["name"] for t in bundle["tools"]} == {"live_one"}
+    assert {t["name"] for t in bundle["tools"]} == {"live_one", "shelved"}
+
+
+async def test_a_bundle_survives_being_imported_and_exported_again(store):
+    """Sharing a profile you were given must pass on what you were given."""
+    await db.save_prompt("origin", "body", "system", disabled_tools="")
+    await _tool("deploy_check")
+
+    first = await bundles.build_bundle("origin")
+    assert {t["name"] for t in first["tools"]} == {"deploy_check"}
+
+    # Arrives disabled, by design -- it is shell that has not been read yet.
+    await bundles.apply_bundle(first, rename="passed_on")
+    row = next(r for r in await db.list_custom_tools() if r["name"] == "deploy_check")
+    assert not row["enabled"], "imported tools must land switched off"
+
+    second = await bundles.build_bundle("passed_on")
+    assert {t["name"] for t in second["tools"]} == {"deploy_check"}, (
+        "re-exporting an imported profile dropped its tools")
+    assert second["tools"][0]["script"] == first["tools"][0]["script"]
 
 
 async def test_the_summarising_prompt_travels_too(store):

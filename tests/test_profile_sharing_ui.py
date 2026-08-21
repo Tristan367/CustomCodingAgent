@@ -208,7 +208,11 @@ async def test_importing_shows_the_scripts_before_writing_anything(page, tmp_pat
         "the script was not put on screen before importing it"
     )
     assert "run on this machine" in shown["warning"]
-    assert shown["rename"] == "shipper"
+    # Not "shipper": the name is pre-filled away from the one that already
+    # exists, so pressing the button does not silently replace it. See
+    # test_importing_over_an_existing_profile_is_not_the_default.
+    assert shown["rename"].startswith("shipper")
+    assert shown["rename"] != "shipper"
 
 
 async def test_importing_under_a_new_name_leaves_the_original_alone(page):
@@ -254,3 +258,90 @@ async def test_the_page_raises_no_errors_doing_any_of_this(page):
     await caught.value
     # The deliberate 400 above is a console message on other tests, not here.
     assert page._errors == []
+
+
+# ── Through the real file chooser, and the shape of the review ───────────────
+#
+# The earlier tests here feed the bundle to the endpoints with `fetch`. That
+# proves the endpoints. It does not open the file chooser the Import button
+# opens, and it never looks at what the review actually renders -- which is
+# where the next three faults were.
+
+async def _exported(pg, tmp_path, name="shipper"):
+    await _select(pg, name)
+    async with pg.expect_download() as caught:
+        await pg.click("button:has-text('Export')")
+    target = tmp_path / f"{name}.json"
+    await (await caught.value).save_as(target)
+    return target
+
+
+async def test_import_works_through_the_file_chooser_the_button_opens(page, tmp_path):
+    saved = await _exported(page, tmp_path)
+    async with page.expect_file_chooser() as caught:
+        await page.click("button:has-text('Import')")
+    await (await caught.value).set_files(str(saved))
+    await page.wait_for_selector("#bundle-modal:not([hidden])", timeout=10000)
+    heading = await page.inner_text("#bundle-summary p")
+    assert "shipper" in heading
+
+
+async def test_the_scripts_are_readable_without_clicking_anything(page, tmp_path):
+    """The warning tells the user to read the scripts before importing. They
+    were behind a collapsed disclosure, so following that instruction required
+    knowing to click a triangle nobody had a reason to click."""
+    saved = await _exported(page, tmp_path)
+    async with page.expect_file_chooser() as caught:
+        await page.click("button:has-text('Import')")
+    await (await caught.value).set_files(str(saved))
+    await page.wait_for_selector("#bundle-modal:not([hidden])", timeout=10000)
+    shown = await page.evaluate("""
+    () => [...document.querySelectorAll('#bundle-summary details')].map(d => ({
+            open: d.open,
+            visible: d.querySelector('pre')
+                     ? d.querySelector('pre').getBoundingClientRect().height > 0 : false }))
+    """)
+    assert shown, "no tool was listed in the review"
+    assert all(s["open"] and s["visible"] for s in shown), (
+        f"a script the user is told to read is not on screen: {shown}")
+
+
+async def test_importing_over_an_existing_profile_is_not_the_default(page, tmp_path):
+    """The name field was pre-filled with the name that already exists, making
+    "replace what I have" the outcome of pressing the focused button."""
+    saved = await _exported(page, tmp_path)
+    async with page.expect_file_chooser() as caught:
+        await page.click("button:has-text('Import')")
+    await (await caught.value).set_files(str(saved))
+    await page.wait_for_selector("#bundle-modal:not([hidden])", timeout=10000)
+    proposed = await page.input_value("#bundle-rename")
+    assert proposed != "shipper", "the default answer replaces the existing profile"
+    taken = await page.evaluate(
+        "() => [...document.querySelectorAll('#prompt-picker option')]"
+        ".map(o => o.value.split(':').slice(1).join(':'))")
+    assert proposed not in taken, f"the proposed name {proposed!r} is already taken"
+
+
+async def test_the_review_fits_a_short_window(page, tmp_path):
+    """A bundle's review is as tall as the scripts in it. At 680px a 120-line
+    script pushed the heading above the top of the window and the Import and
+    Cancel buttons below the bottom, with nothing scrollable to reach them."""
+    saved = await _exported(page, tmp_path)
+    await page.set_viewport_size({"width": 1100, "height": 680})
+    async with page.expect_file_chooser() as caught:
+        await page.click("button:has-text('Import')")
+    await (await caught.value).set_files(str(saved))
+    await page.wait_for_selector("#bundle-modal:not([hidden])", timeout=10000)
+    await page.wait_for_timeout(200)
+    fit = await page.evaluate("""
+    () => { const c = document.querySelector('#bundle-modal .modal-content');
+            const r = c.getBoundingClientRect();
+            return { top: r.top, bottom: r.bottom, view: window.innerHeight,
+                     scrolls: c.scrollHeight > c.clientHeight,
+                     buttons: [...c.querySelectorAll('button')].every(
+                         b => b.getBoundingClientRect().bottom <= window.innerHeight + 1) }; }
+    """)
+    assert fit["top"] >= -1, f"the review hangs {-fit['top']:.0f}px above the window"
+    assert fit["bottom"] <= fit["view"] + 1, (
+        f"the review hangs {fit['bottom'] - fit['view']:.0f}px below the window")
+    assert fit["buttons"], "the Import and Cancel buttons are off screen"

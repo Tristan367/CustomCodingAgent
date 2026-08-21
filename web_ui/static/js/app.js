@@ -4424,8 +4424,14 @@ const ImagePreview = (() => {
 
   function ensure() {
     if (node) return;
-    node = el('div', 'image-preview');
-    node.hidden = true;
+    /* A <dialog>, not a div, because the file manager is one too. A modal
+        dialog is painted in the browser's top layer, which no z-index can reach
+        past -- so opening a picture from the file manager put it *behind* the
+        manager, and it could only be seen by closing the manager first. Two
+        dialogs stack in the order they were opened, which is the order the user
+        opened them in. */
+    node = document.createElement('dialog');
+    node.className = 'image-preview';
     img = document.createElement('img');
     img.alt = '';
     img.draggable = false;
@@ -4435,6 +4441,7 @@ const ImagePreview = (() => {
     document.body.appendChild(node);
 
     img.addEventListener('load', () => { measure(); reset(); });
+    node.addEventListener('close', onClosed);
 
     // Clicking beside the picture closes; clicking the picture does not, or
     // double-click-to-zoom could never land. The caption is exempt so it can be
@@ -4484,7 +4491,7 @@ const ImagePreview = (() => {
     node.addEventListener('pointercancel', endDrag);
 
     window.addEventListener('resize', () => {
-      if (node.hidden) return;
+      if (!node.open) return;
       measure();
       apply();
     });
@@ -4536,18 +4543,24 @@ const ImagePreview = (() => {
     img.alt = path;
     caption.textContent = path;
     caption.title = path;
-    node.hidden = false;
+    if (!node.open) node.showModal();
   }
 
   function hide() {
-    if (!node || node.hidden) return;
-    node.hidden = true;
+    if (!node || !node.open) return;
+    node.close();
+  }
+
+  /* Esc closes a modal dialog on its own, so the tidying happens on `close`
+     rather than in `hide` -- otherwise dismissing with the keyboard would leave
+     a full-resolution bitmap decoded and the drag state set. */
+  function onClosed() {
     dragging = false;
     // Drop the decoded bitmap; a full-resolution screenshot is not small.
     img.removeAttribute('src');
   }
 
-  function isOpen() { return !!node && !node.hidden; }
+  function isOpen() { return !!node && node.open; }
 
   return { open, hide, isOpen };
 })();
@@ -5377,6 +5390,36 @@ const FileBrowser = (() => {
   /* The API scopes writes to a session; the picker has none, and the server
    * gates it on protected paths instead. Everything else here is shared. */
   function sid() { return App.sessionId || ''; }
+  /* One glyph per kind of file, so a directory listing can be read at a glance
+     instead of by squinting at extensions. Kinds, not formats: everything that
+     opens in a picture viewer gets the same mark, everything that plays gets
+     another. An extension nobody listed gets the plain-document mark rather
+     than nothing, so the column stays aligned and an unknown file still reads
+     as a file. Directories keep their arrow. */
+  const FILE_GLYPHS = [
+    ['\u25A3', 'png jpg jpeg gif webp bmp svg ico tif tiff avif heic'],   // image
+    ['\u266A', 'mp3 wav flac ogg oga opus m4a aac wma aiff'],             // sound
+    ['\u25B6', 'mp4 mkv webm mov avi wmv flv m4v mpg mpeg'],              // video
+    ['\u25A4', 'zip tar gz tgz bz2 xz 7z rar zst jar'],                   // archive
+    ['\u2328', 'py js mjs cjs ts tsx jsx sh bash zsh rb go rs c h cpp cc hpp '
+              + 'java kt swift lua php pl r sql vim el'],                  // code
+    ['\u2261', 'json yaml yml toml ini cfg conf env lock xml plist'],     // config
+    ['\u25CE', 'pdf epub mobi djvu'],                                     // document
+    ['\u25A6', 'csv tsv xlsx xls ods parquet db sqlite sqlite3'],         // table/data
+    ['\u2691', 'ttf otf woff woff2 eot'],                                 // font
+  ];
+  const GLYPH_BY_EXT = new Map();
+  for (const [glyph, exts] of FILE_GLYPHS) {
+    for (const ext of exts.split(' ')) GLYPH_BY_EXT.set(ext, glyph);
+  }
+  const PLAIN_FILE_GLYPH = '\u25AB';
+
+  function fileGlyph(name) {
+    const dot = String(name || '').lastIndexOf('.');
+    if (dot <= 0) return PLAIN_FILE_GLYPH;      // no extension, or a dotfile
+    return GLYPH_BY_EXT.get(name.slice(dot + 1).toLowerCase()) || PLAIN_FILE_GLYPH;
+  }
+
   const SHOW_ALL_KEY = 'fb-show-all';
   let showAllEl = null;
 
@@ -5599,7 +5642,7 @@ const FileBrowser = (() => {
       row.dataset.path = path;
       row.dataset.isDir = entry.is_dir ? '1' : '0';
       if (selected.has(path)) row.classList.add('selected');
-      const icon = el('span', 'fb-icon', entry.is_dir ? '\u25B8' : '');
+      const icon = el('span', 'fb-icon', entry.is_dir ? '\u25B8' : fileGlyph(entry.name));
       const name = el('span', 'fb-name', entry.name);
       if (entry.size != null) row.appendChild(el('span', 'fb-size', fmtSize(entry.size)));
       row.prepend(icon, name);

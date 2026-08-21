@@ -125,3 +125,23 @@ async def test_the_ordinary_cases_still_work(render):
     assert await render("see ./tools/run.sh now") == ["./tools/run.sh"]
     assert await render("path is /a/b/c.py.") == ["/a/b/c.py"]
     assert await render("visit https://example.com/a b") == []
+
+
+async def test_an_abbreviated_path_still_links_the_part_that_is_real(render):
+    """The regression this rescanning exists for.
+
+    "`.../encounter tables/extracted/`" is how an agent writes a shortened path.
+    The match swallowed " tables/extracted/" as a trailing segment, then gave up
+    because ".../encounter" is not a path -- and because the global pass had
+    already moved past what it swallowed, the part that *was* a path never got
+    its own turn. The result was no link at all where there had been one.
+    """
+    assert await render("`.../encounter tables/extracted/`") == ["tables/extracted/"]
+    assert await render(".../encounter tables/extracted/") == ["tables/extracted/"]
+    assert await render("saved to `.../encounter tables/extracted/` now") == [
+        "tables/extracted/"]
+
+
+async def test_a_path_inside_backticks_is_still_a_link(render):
+    assert await render("`/tmp/report.txt`") == ["/tmp/report.txt"]
+    assert await render("see `./tools/run.sh` for it") == ["./tools/run.sh"]

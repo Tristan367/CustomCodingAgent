@@ -70,12 +70,18 @@
   // it never gets scanned on its own.
   const TRAILING_SEGMENT =
     `(?:( (?!${ROOTED})${PATH_CHAR}+)(?=[.,;:!?)\\]}"'\`]*\\s*$))?`;
-  const FILE_REF_TOKEN = new RegExp(
+  const FILE_REF_SOURCE =
     '(?<![=">])(^|[\\s(["\'`])'
     + `(${ROOTED}(?:${PATH_CHAR}|${SPACE_INSIDE})+|${BARE}${PATH_CHAR}+)`
-    + TRAILING_SEGMENT,
-    'gm',
-  );
+    + TRAILING_SEGMENT;
+
+  /* A fresh regex per pass. `fileRefReplacer` re-runs this on any text it
+     decided not to link, and a global regex carries `lastIndex` on the object
+     itself -- sharing one between an outer replace and a nested one corrupts
+     the outer iteration. */
+  function linkPaths(text) {
+    return text.replace(new RegExp(FILE_REF_SOURCE, 'gm'), fileRefReplacer);
+  }
 
   /* "n/a", "and/or", "AC/DC" are prose, not paths. A path is absolute or
    * explicitly relative, nested, or ends in a filename extension. */
@@ -86,22 +92,30 @@
   }
 
   function fileRefReplacer(full, pre, tok, tail) {
-    if (/^(https?:\/\/|www\.|mailto:)/i.test(tok)) return full;
+    tail = tail || '';
+    /* Anything this match consumed and did not turn into a link has to be
+       scanned again by hand: the global pass has moved past it and will not
+       come back. Without this, `.../encounter tables/extracted/` produced no
+       link at all -- the match swallowed " tables/extracted/" as a trailing
+       segment, then gave up because ".../encounter" is not a path, and the
+       part that *was* a path never got its own turn. */
+    const giveBack = () => pre + tok + (tail ? linkPaths(tail) : '');
+    if (/^(https?:\/\/|www\.|mailto:)/i.test(tok)) return giveBack();
     // See TRAILING_SEGMENT. Taken only when this is already a spaced path;
     // otherwise it is the next word of the sentence and goes back untouched.
-    tail = tail || '';
     if (tail && tok.includes(' ')) { tok += tail; tail = ''; }
     const trail = (tok.match(/[.,;:!?)\]}"'`]+$/) || [''])[0];
     const core = trail ? tok.slice(0, -trail.length) : tok;
     const m = /^(.+?)(?::(\d+)(?:-(\d+))?)?$/.exec(core);
     const path = m ? m[1] : '';
-    if (!path || !looksLikePath(path)) return full;
+    if (!path || !looksLikePath(path)) return giveBack();
     const line = m[2], end = m[3];
     const display = path + (line ? ':' + line + (end ? '-' + end : '') : '');
     let attrs = 'data-path="' + path + '"';
     if (line) attrs += ' data-line="' + line + '"';
     if (end) attrs += ' data-line-end="' + end + '"';
-    return pre + '<a class="file-ref" href="#" ' + attrs + '>' + display + '</a>' + trail + tail;
+    return pre + '<a class="file-ref" href="#" ' + attrs + '>' + display + '</a>'
+      + trail + (tail ? linkPaths(tail) : '');
   }
 
   function inline(text) {
@@ -137,20 +151,19 @@
       return '\u0000LINK' + (links.length - 1) + '\u0000' + tail;
     });
 
-    out = out
+    // File paths (absolute or relative) and file:line references become links
+    // that open the in-app editor. URLs are stashed above, so anything left
+    // starting with / or a dir/ segment is a path, not a link.
+    out = linkPaths(out
       .replace(/(\*\*|__)(?=\S)([\s\S]*?\S)\1/g, '<strong>$2</strong>')
       .replace(/(^|[\s(])(\*|_)(?=\S)([^*_]*?\S)\2/g, '$1<em>$3</em>')
-      .replace(/~~(?=\S)([\s\S]*?\S)~~/g, '<del>$1</del>')
-      // File paths (absolute or relative) and file:line references become links
-      // that open the in-app editor. URLs are stashed above, so anything left
-      // starting with / or a dir/ segment is a path, not a link.
-      .replace(FILE_REF_TOKEN, fileRefReplacer);
+      .replace(/~~(?=\S)([\s\S]*?\S)~~/g, '<del>$1</del>'));
 
     return out
       .replace(/\u0000LINK(\d+)\u0000/g, (_, i) => links[+i])
       .replace(/\u0000CODE(\d+)\u0000/g,
         (_, i) => '<code>' +
-          codes[+i].replace(FILE_REF_TOKEN, fileRefReplacer) +
+          linkPaths(codes[+i]) +
           '</code>');
   }
 

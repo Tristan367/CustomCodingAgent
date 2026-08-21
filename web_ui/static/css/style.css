@@ -443,9 +443,12 @@ hr { border: 0; border-top: 1px solid var(--border); margin: 6px 0; }
    inner margin it counted toward the tool row's height and made it 4px taller
    than the other three, which is exactly the kind of difference this section
    exists to remove. */
-.message.tool > .msg-content > .tool-details { margin-bottom: 0; }
+/* A reasoning block carries `.tool-details` too, so it needs this as much as a
+   tool row does -- without it the 4px counted toward the row and collapsed
+   thinking measured 37px against everything else's 30. */
+.message.tool > .msg-content > .tool-details,
+.message.thinking > .msg-content > .reasoning-details { margin-bottom: 0; }
 .message.tool > .msg-content > .tool-details > .tool-summary,
-.message.thinking > .msg-content > .reasoning-details > .reasoning-summary,
 .message.status-line > .msg-content,
 .message.tool-progress > .msg-content > .content-text {
   min-height: var(--live-row);
@@ -453,9 +456,24 @@ hr { border: 0; border-top: 1px solid var(--border); margin: 6px 0; }
   display: flex;
   align-items: center;
 }
-/* An open thinking block is a text box, not a row: it has to lay out as one. */
-.message.thinking > .msg-content > .reasoning-details[open] > .reasoning-summary {
-  display: block;
+/* The thinking summary reaches the same height *without* being given a display.
+ *
+ * It has to stay `display: -webkit-box`, because that is what makes
+ * `-webkit-line-clamp` work, and the clamp is the only thing keeping a
+ * collapsed block down to one line. Adding it to the flex rule above -- which
+ * outranks the clamp on specificity -- meant every collapsed thinking block
+ * rendered its entire text, unclamped and without the box styling that only
+ * applies when open. It read as permanently expanded, and clicking it looked
+ * like it was *becoming* expanded when it was really just gaining its border. */
+.message.thinking > .msg-content > .reasoning-details:not([open]) > .reasoning-summary {
+  min-height: var(--live-row);
+  box-sizing: border-box;
+  /* Centred by its own line box rather than by padding. A -webkit-box ignores
+     `align-items`, and padding that adds up to the right total by eye does not
+     survive a font change -- this is exact, and it is the same one line the
+     clamp allows. */
+  line-height: var(--live-row);
+  padding: 0;
 }
 
 /* Expanded blocks start their text on the same margin as the prose.
@@ -500,6 +518,21 @@ hr { border: 0; border-top: 1px solid var(--border); margin: 6px 0; }
   transition: opacity 120ms ease;
 }
 .message:hover .msg-role { opacity: 1; }
+
+/* On a transient row the label is centred in the --live-row box, so a role
+   pinned to the top of the row sits above the line it names. Give it the same
+   box and the same centring and the two sit on one line. */
+.message.tool > .msg-role,
+.message.thinking > .msg-role,
+.message.status-line > .msg-role,
+.message.tool-progress > .msg-role {
+  min-height: var(--live-row);
+  box-sizing: border-box;
+  padding-top: 0;
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+}
 .message.user     .msg-role { color: var(--role-user); }
 .message.mail     .msg-role { color: var(--role-mail); }
 .message.assistant .msg-role { visibility: hidden; }

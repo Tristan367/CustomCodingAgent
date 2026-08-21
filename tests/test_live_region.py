@@ -73,8 +73,16 @@ async def _seed(data_dir: Path) -> str:
             session["id"], "tool", "edited", tool_call_id="seed-edit", tool_name="edit",
             tool_title="edit agent_server/agent.py", diff=DIFF, lang="python",
             duration_ms=800)
-        await db.add_message(session["id"], "assistant", "That is done.",
-                             reasoning_content="I considered several options.\nThen chose one.")
+        await db.add_message(
+            session["id"], "assistant", "That is done.",
+            reasoning_content=(
+                "I considered several options, at enough length that the block "
+                "has more than one line to clamp away.\nThen chose one of them.\n"
+                "And then checked it twice."))
+        # `hide_thinking` defaults to on, and the server then renders no thinking
+        # row at all -- so the tests that measure one would have nothing to look
+        # at and would pass by finding nothing.
+        await db.set_setting("hide_thinking", "0")
         return session["id"]
     finally:
         await db.close()
@@ -196,7 +204,8 @@ async def test_every_transient_row_is_the_same_height(page):
 
     await _fire(page, "{ type: 'reasoning', text: 'Thinking about it.' }")
     heights["thinking, one line"] = await page.evaluate(
-        "() => document.querySelector('.message.thinking').getBoundingClientRect().height")
+        "() => document.querySelector('.message.thinking.live')"
+        ".getBoundingClientRect().height")
 
     spread = max(heights.values()) - min(heights.values())
     assert spread <= TOLERANCE, f"transient rows differ in height: {heights}"
@@ -295,10 +304,10 @@ async def test_a_streaming_thinking_block_does_not_cover_the_block_above_it(page
                            return { top: b.top, bottom: b.bottom, height: b.height }; };
       const edit = document.querySelector('.message.tool[data-tool-call-id="e1"]');
       return { edit: r('.message.tool[data-tool-call-id="e1"] .msg-content'),
-               thinking: r('.message.thinking .msg-content'),
+               thinking: r('.message.thinking.live .msg-content'),
                editLive: edit.classList.contains('live'),
                editOpen: !!edit.querySelector('details[open]'),
-               thinkingLive: document.querySelector('.message.thinking').classList.contains('live') };
+               thinkingLive: !!document.querySelector('.message.thinking.live') };
     }
     """)
     overlap = (min(boxes["edit"]["bottom"], boxes["thinking"]["bottom"])
@@ -385,8 +394,8 @@ async def test_a_streaming_thinking_block_shows_its_beginning(page):
                             f"Thought number {i}.\n")
     await page.wait_for_timeout(300)
     shown = await page.evaluate("""
-    () => { const box = document.querySelector('.message.thinking .msg-content');
-            const sum = document.querySelector('.message.thinking .reasoning-summary');
+    () => { const box = document.querySelector('.message.thinking.live .msg-content');
+            const sum = document.querySelector('.message.thinking.live .reasoning-summary');
             return { boxScroll: box.scrollTop, sumScroll: sum.scrollTop,
                      first: sum.textContent.split('\\n')[0] }; }
     """)
@@ -784,7 +793,7 @@ async def test_the_timestamp_stays_out_of_the_content_column(page):
     """
     await _fire(page, "{ type: 'reasoning', text: 'Thinking about it at length.' }")
     await page.wait_for_timeout(250)
-    row = ".message.thinking"
+    row = ".message.thinking.live"
     assert await page.evaluate(f"() => document.querySelector('{row}')"
                                ".classList.contains('live')"), "expected a live block"
     await page.hover(f"{row} .reasoning-summary")
@@ -792,7 +801,7 @@ async def test_the_timestamp_stays_out_of_the_content_column(page):
 
     placement = await page.evaluate("""
     () => {
-      const row = document.querySelector('.message.thinking');
+      const row = document.querySelector('.message.thinking.live');
       const time = row.querySelector(':scope > .msg-time');
       const content = row.querySelector(':scope > .msg-content');
       if (!time) return { missing: true };
@@ -818,8 +827,108 @@ async def test_a_streaming_block_is_not_pushed_out_of_place(page):
     streaming block jumped 60px right."""
     await _fire(page, "{ type: 'reasoning', text: 'Weighing it up.' }")
     await page.wait_for_timeout(250)
-    live = await _glyph_left(page, ".message.thinking .reasoning-summary")
+    live = await _glyph_left(page, ".message.thinking.live .reasoning-summary")
     prose = await _glyph_left(page, ".message.assistant .content-text")
     assert live is not None and prose is not None
     assert abs(live - prose) <= TOLERANCE, (
         f"a streaming block sits {live - prose}px off the margin")
+
+
+# ── The collapsed thinking block, and the role beside it ─────────────────────
+
+async def test_a_collapsed_thinking_block_is_one_line(page):
+    """It is a `<summary>` whose text is the whole thought, kept to one line by
+    `-webkit-line-clamp` -- which only works on `display: -webkit-box`.
+
+    Giving it `display: flex` for the sake of the row height outranked that on
+    specificity and silently disabled the clamp, so every collapsed block
+    rendered its entire text, unclamped and without the box styling that only
+    applies when open. It read as permanently expanded, and clicking it looked
+    like it was becoming expanded when it was really only gaining its border.
+    """
+    # The fixture runs with past thinking hidden, which is the right default and
+    # the wrong thing here: a hidden row has no box to measure.
+    await page.evaluate(
+        "() => document.querySelectorAll('#messages .message').forEach(m => { m.hidden = false; })")
+    await page.wait_for_timeout(150)
+    summaries = await page.evaluate("""
+    () => [...document.querySelectorAll('#messages .reasoning-details')]
+            .filter(d => !d.open && !d.closest('[hidden]'))
+            .map(d => { const s = d.querySelector('.reasoning-summary');
+                        const cs = getComputedStyle(s);
+                        return { height: Math.round(s.getBoundingClientRect().height),
+                                 display: cs.display,
+                                 clamp: cs.webkitLineClamp || cs.getPropertyValue('-webkit-line-clamp'),
+                                 lines: s.textContent.split('\\n').length }; })
+    """)
+    assert summaries, "the seeded transcript has no collapsed thinking block"
+    for s in summaries:
+        # The height is the assertion, not the mechanism. `<summary>` computes to
+        # `flow-root` whatever display is asked for, and current Chrome clamps a
+        # block container directly, so checking for `-webkit-box` would fail on a
+        # page that is behaving perfectly.
+        assert s["lines"] > 1, "this block has nothing to clamp; the test proves nothing"
+        assert s["height"] <= 34, (
+            f"a collapsed thinking block is {s['height']}px tall -- it is showing "
+            f"more than one line of a {s['lines']}-line thought (display: {s['display']})")
+
+
+async def test_a_collapsed_thinking_row_is_the_same_height_as_a_tool_row(page):
+    """Both are one-line rows in the same stack, so a difference between them
+    moves the transcript every time one follows the other. Reasoning blocks
+    carry `.tool-details` as well, and its bottom margin counted toward the row:
+    37px against everything else's 30."""
+    await page.evaluate(
+        "() => document.querySelectorAll('#messages .message').forEach(m => { m.hidden = false; })")
+    await page.wait_for_timeout(150)
+    heights = await page.evaluate("""
+    () => {
+      const one = (sel) => { for (const n of document.querySelectorAll(sel)) {
+          if (n.hidden || n.closest('[hidden]')) continue;
+          const h = n.getBoundingClientRect().height;
+          if (h > 0) return Math.round(h); } return null; };
+      return { thinking: one('#messages .message.thinking'),
+               tool: one('#messages .message.tool') };
+    }
+    """)
+    assert heights["thinking"] and heights["tool"], f"rows missing: {heights}"
+    assert abs(heights["thinking"] - heights["tool"]) <= TOLERANCE, (
+        f"a collapsed thinking row and a tool row differ in height: {heights}")
+
+
+async def test_the_role_label_sits_on_the_line_it_names(page):
+    """The role is pinned to the top of its row; the line it labels is centred
+    in a 30px box. Left alone the label floated above the thing it named."""
+    await page.evaluate(
+        "() => document.querySelectorAll('#messages .message').forEach(m => { m.hidden = false; })")
+    await page.wait_for_timeout(150)
+    offsets = await page.evaluate("""
+    () => {
+      const mid = (el) => {
+        const w = document.createTreeWalker(el, NodeFilter.SHOW_TEXT);
+        let n;
+        while ((n = w.nextNode())) {
+          if (!n.textContent.trim()) continue;
+          const r = document.createRange(); r.selectNodeContents(n);
+          const b = r.getBoundingClientRect();
+          if (b.height) return b.top + b.height / 2;
+        }
+        return null;
+      };
+      const out = [];
+      for (const row of document.querySelectorAll('#messages .message.tool, '
+                                                  + '#messages .message.thinking')) {
+        if (row.hidden || row.closest('[hidden]')) continue;
+        const role = row.querySelector(':scope > .msg-role');
+        const line = row.querySelector('.tool-label, .reasoning-summary');
+        if (!role || !line || !role.textContent.trim()) continue;
+        const a = mid(role), b = mid(line);
+        if (a === null || b === null) continue;
+        out.push({ role: role.textContent.trim().slice(0, 8), off: Math.round(a - b) });
+      }
+      return out;
+    }
+    """)
+    assert offsets, "no labelled transient row to measure"
+    bad = [o for o in offsets if abs(o["off"]) > 2]
+    assert not bad, f"role labels are off the line they name: {bad}"

@@ -2869,13 +2869,122 @@ function micGainDb() {
 }
 function saveMicGain(db) { localStorage.setItem('micGain', String(db)); }
 function micDeviceId() { return localStorage.getItem('micDeviceId') || ''; }
-function saveMicDeviceId(id) {
-  if (id) localStorage.setItem('micDeviceId', id);
-  else localStorage.removeItem('micDeviceId');
+function micDeviceLabel() { return localStorage.getItem('micDeviceLabel') || ''; }
+function saveMicDevice(id, label) {
+  if (!id) {
+    localStorage.removeItem('micDeviceId');
+    localStorage.removeItem('micDeviceLabel');
+    return;
+  }
+  localStorage.setItem('micDeviceId', id);
+  if (label) localStorage.setItem('micDeviceLabel', label);
+  else localStorage.removeItem('micDeviceLabel');
 }
-function withMicDevice(audio) {
-  const deviceId = micDeviceId();
-  return deviceId ? { ...audio, deviceId: { exact: deviceId } } : audio;
+
+/* A saved deviceId stops being valid without anything visibly changing.
+ * A Bluetooth headset comes back from a reconnect under a new id; Firefox
+ * rotates deviceIds between browser restarts unless the origin holds a
+ * persistent permission. Pinning the stale one with `exact` then fails the
+ * whole request with OverconstrainedError -- whose entire message is
+ * "Constraints could not be satisfied.", naming neither the constraint nor the
+ * device -- and dictation is dead until the user thinks to re-pick a microphone
+ * they never un-picked.
+ *
+ * So the id is a hint, not a requirement: if it is gone, match the remembered
+ * label, and if that is gone too, fall back to the default and say what was
+ * lost. Never refuse to record because a preference went stale. */
+async function resolveMicDevice() {
+  const id = micDeviceId();
+  if (!id) return { id: '' };
+  let devices = [];
+  try {
+    devices = (await navigator.mediaDevices.enumerateDevices())
+      .filter((d) => d.kind === 'audioinput' && d.deviceId);
+  } catch (_) {
+    return { id };
+  }
+  // Before permission is granted the list carries no real ids, so it cannot
+  // tell us the saved one is gone. Keep it and let the retry below cover us.
+  if (!devices.length) return { id };
+  if (devices.some((d) => d.deviceId === id)) return { id };
+
+  const label = micDeviceLabel();
+  const byLabel = label && devices.find((d) => d.label === label);
+  if (byLabel) {
+    saveMicDevice(byLabel.deviceId, byLabel.label);
+    return { id: byLabel.deviceId };
+  }
+  return { id: '', lost: label };
+}
+
+/* Falling back is not the same as forgetting. The preference is never cleared
+ * here: an unplugged headset should still be the chosen microphone when it is
+ * plugged back in, and a device somebody else is holding is still the one that
+ * was picked. Only the user re-picking, or the label match above finding the
+ * same hardware under a new id, ever writes to the store.
+ *
+ * It does mean the same note would be produced on every press for as long as
+ * the device is away, so each one is said once and re-armed by a success. */
+const micWarned = new Set();
+function warnOnce(notes, key, text) {
+  if (micWarned.has(key)) return;
+  micWarned.add(key);
+  notes.push(text);
+}
+
+/* Open the microphone, preferring the chosen device but never failing over it.
+ * Returns the stream plus any notes worth telling the user. */
+async function openMicStream(audio) {
+  const wanted = await resolveMicDevice();
+  const notes = [];
+  if (wanted.lost) {
+    warnOnce(notes, wanted.lost,
+      `${wanted.lost} is no longer connected — using the default microphone.`);
+  }
+  if (!wanted.id) {
+    return { stream: await navigator.mediaDevices.getUserMedia({ audio }), notes };
+  }
+  try {
+    const stream = await navigator.mediaDevices.getUserMedia({
+      audio: { ...audio, deviceId: { exact: wanted.id } },
+    });
+    micWarned.clear();
+    return { stream, notes };
+  } catch (err) {
+    // Listed but not openable: held exclusively by another application, or
+    // unplugged in the moment between enumerating and asking. Recording from
+    // the default beats not recording. If that fails too the error is real and
+    // propagates to the caller.
+    const name = micDeviceLabel() || 'The chosen microphone';
+    const stream = await navigator.mediaDevices.getUserMedia({ audio });
+    warnOnce(notes, name,
+      `${name} could not be opened (${err.name || 'error'}) — using the default microphone.`);
+    return { stream, notes };
+  }
+}
+
+/* An OverconstrainedError's message is "Constraints could not be satisfied." and
+ * a denial's is often empty, so the raw text is shown only when it says
+ * something the reader can act on. */
+function micErrorText(err) {
+  const name = err && err.name;
+  if (name === 'NotAllowedError' || name === 'SecurityError') {
+    return 'Microphone blocked: this page does not have permission to record.';
+  }
+  if (name === 'NotFoundError' || name === 'DevicesNotFoundError') {
+    return 'No microphone: the browser reports no audio input device.';
+  }
+  if (name === 'NotReadableError') {
+    return 'Microphone busy: another application is holding it.';
+  }
+  if (name === 'OverconstrainedError') {
+    // Reachable only for a request with no device pinned, since a pinned one
+    // retries without the pin. `constraint` names the field that could not be
+    // met, which the message never does.
+    const which = err.constraint ? ` (${err.constraint})` : '';
+    return `Microphone unavailable: the requested audio settings are not supported${which}.`;
+  }
+  return `Microphone unavailable: ${(err && (err.message || err.name)) || 'unknown error'}`;
 }
 
 /* The browser only reveals microphone names (and, on some engines, the devices
@@ -2974,14 +3083,15 @@ const Dictation = {
 
     let stream;
     try {
-      stream = await navigator.mediaDevices.getUserMedia({
-        // autoGainControl is off: browser AGC boosts silence up to a target
-        // level, which is why quiet pauses read as loud on the meter.
-        audio: withMicDevice({ echoCancellation: true, noiseSuppression: true, autoGainControl: false, channelCount: 1 }),
-      });
+      // autoGainControl is off: browser AGC boosts silence up to a target
+      // level, which is why quiet pauses read as loud on the meter.
+      const opened = await openMicStream(
+        { echoCancellation: true, noiseSuppression: true, autoGainControl: false, channelCount: 1 });
+      opened.notes.forEach((n) => appendNotice('info', n));
+      stream = opened.stream;
     } catch (err) {
       this.starting = false;
-      appendNotice('error', `Microphone unavailable: ${err.message}`);
+      appendNotice('error', micErrorText(err));
       return;
     }
 
@@ -3084,11 +3194,12 @@ const Dictation = {
   async startStreaming() {
     let stream;
     try {
-      stream = await navigator.mediaDevices.getUserMedia({
-        audio: withMicDevice({ echoCancellation: true, noiseSuppression: true, autoGainControl: false, channelCount: 1 }),
-      });
+      const opened = await openMicStream(
+        { echoCancellation: true, noiseSuppression: true, autoGainControl: false, channelCount: 1 });
+      opened.notes.forEach((n) => appendNotice('info', n));
+      stream = opened.stream;
     } catch (err) {
-      appendNotice('error', `Microphone unavailable: ${err.message}`);
+      appendNotice('error', micErrorText(err));
       return;
     }
     // A toggle-off may have landed while getUserMedia was in flight.
@@ -3448,11 +3559,17 @@ const MicTest = {
         .filter((d) => d.kind === 'audioinput'
           && d.deviceId && d.deviceId !== 'default' && d.deviceId !== 'communications');
     } catch (_) { /* no list is fine; the default device still works */ }
+    // Re-points a saved id that has rotated, so the picker shows the microphone
+    // the user actually chose instead of appearing to have forgotten it.
+    await resolveMicDevice();
     const current = micDeviceId();
     this.els.device.textContent = '';
     this.els.device.appendChild(new Option('Default microphone', ''));
     for (const d of devices) {
       const opt = new Option(d.label || `Microphone ${d.deviceId.slice(0, 8)}`, d.deviceId);
+      // The device's own label, not the option text, which invents a name for
+      // an unlabelled device and would never match on the way back.
+      opt.dataset.label = d.label || '';
       opt.selected = d.deviceId === current;
       this.els.device.appendChild(opt);
     }
@@ -3470,7 +3587,11 @@ const MicTest = {
 
   async selectDevice() {
     this.setDeviceTitle();
-    saveMicDeviceId(this.els.device ? this.els.device.value : '');
+    const sel = this.els.device;
+    const opt = sel && sel.selectedOptions[0];
+    // The label is stored alongside the id so the choice survives the id
+    // changing underneath it -- see resolveMicDevice.
+    saveMicDevice(sel ? sel.value : '', opt ? (opt.dataset.label || '') : '');
     // Restart the capture so the newly chosen device takes effect immediately.
     if (this.active) {
       this.stop();
@@ -3505,11 +3626,12 @@ const MicTest = {
     try {
       // Raw: no echo/noise suppression and, crucially, no auto-gain, so the
       // meter and the recording reflect what the microphone actually hears.
-      stream = await navigator.mediaDevices.getUserMedia({
-        audio: withMicDevice({ echoCancellation: false, noiseSuppression: false, autoGainControl: false, channelCount: 1 }),
-      });
+      const opened = await openMicStream(
+        { echoCancellation: false, noiseSuppression: false, autoGainControl: false, channelCount: 1 });
+      opened.notes.forEach((n) => appendNotice('info', n));
+      stream = opened.stream;
     } catch (err) {
-      appendNotice('error', `Microphone unavailable: ${err.message}`);
+      appendNotice('error', micErrorText(err));
       return;
     }
     this.active = true;

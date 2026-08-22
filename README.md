@@ -190,9 +190,17 @@ them by itself if they are there.
 | `myriadcode restart` | stop it, then start in this terminal |
 | `myriadcode status` | running or not, and on what pid |
 | `myriadcode open` | open a browser at one already running |
+| `myriadcode service install` | run it as a systemd user service |
 
 Add your API key on the home page (or set `DEEPSEEK_API_KEY`, which wins), pick
 a project directory, and create a session.
+
+A server started in a terminal dies with that terminal, and one started by hand
+does not come back after a reboot — both of which are found out the slow way,
+by going to open the app and finding nothing there. `myriadcode service install`
+writes a systemd user unit that starts at login and restarts on failure; after
+that `myriadcode`, `stop` and `restart` all drive the service rather than
+running a second copy. `myriadcode service uninstall` removes it.
 
 > **This is a single-user tool with no authentication.** It reads and writes
 > anywhere your user account can and runs arbitrary shell commands. Bind it to

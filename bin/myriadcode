@@ -39,7 +39,80 @@ open_browser() {
 # would otherwise abort before anything could be reported.
 running_pid() { lsof -ti:"$PORT" -sTCP:LISTEN 2>/dev/null | head -1 || true; }
 
+UNIT="myriadcode.service"
+UNIT_PATH="${XDG_CONFIG_HOME:-$HOME/.config}/systemd/user/$UNIT"
+
+# Installed, not merely running. Once the unit exists it owns the port, and a
+# CLI that only checked `is-active` would answer `restart` on a stopped service
+# by exec'ing a second server in the terminal -- which then holds the port the
+# service needs, so the service can never come back. Installed means every
+# start, stop and restart goes through systemd.
+service_installed() {
+  [ -f "$UNIT_PATH" ] && command -v systemctl >/dev/null 2>&1
+}
+
+service_active() {
+  service_installed && systemctl --user is-active --quiet "$UNIT" 2>/dev/null
+}
+
+# `Restart=always` means killing the pid is not stopping the server: systemd
+# just brings it back two seconds later, which reads as "stop did nothing".
+# Anything that takes the server down has to go through systemd when systemd is
+# the one holding it up.
+install_service() {
+  command -v systemctl >/dev/null 2>&1 || {
+    echo "myriadcode: no systemctl on this machine" >&2; return 1; }
+  mkdir -p "$(dirname "$UNIT_PATH")"
+  cat > "$UNIT_PATH" <<EOF
+[Unit]
+Description=MyriadCode
+Documentation=https://github.com/Tristan367/MyriadCode
+After=network-online.target
+# Without a start limit, a server already holding the port turns Restart into an
+# infinite loop -- and every attempt loads the whisper model onto the GPU before
+# failing to bind, so the flap costs 700MB and three seconds of CPU each time.
+# Five tries in two minutes, then stop and stay stopped for someone to look at.
+StartLimitIntervalSec=120
+StartLimitBurst=5
+
+[Service]
+Type=exec
+WorkingDirectory=$ROOT
+# .env is read by load_dotenv() from the working directory, so there is no
+# EnvironmentFile here on purpose -- one loader, one place to look.
+ExecStart=$ROOT/.venv/bin/python -m uvicorn agent_server.main:app --host $HOST --port $PORT
+# on-failure, not always: a clean exit is someone stopping it deliberately.
+Restart=on-failure
+RestartSec=3
+# SIGTERM and time to use it: uvicorn's shutdown hook checkpoints the WAL, and
+# a SIGKILL part-way through that is how a database ends up needing recovery.
+KillSignal=SIGTERM
+TimeoutStopSec=20
+
+[Install]
+WantedBy=default.target
+EOF
+  systemctl --user daemon-reload
+  systemctl --user enable --now "$UNIT"
+  echo "myriadcode: installed $UNIT_PATH"
+  echo "           starts at login and restarts on failure; $URL"
+  echo "           logs: journalctl --user -u $UNIT -f"
+}
+
+uninstall_service() {
+  command -v systemctl >/dev/null 2>&1 || return 0
+  systemctl --user disable --now "$UNIT" 2>/dev/null || true
+  rm -f "$UNIT_PATH"
+  systemctl --user daemon-reload
+  echo "myriadcode: removed $UNIT_PATH"
+}
+
 stop_server() {
+  if service_installed; then
+    systemctl --user stop "$UNIT"
+    echo "myriadcode: stopped (systemd service)"
+    return 0
+  fi
   local pid
   pid="$(running_pid)"
   [ -n "$pid" ] || { echo "myriadcode: not running"; return 1; }
@@ -60,15 +133,29 @@ case "${1:-}" in
     exit 0
     ;;
   restart)
+    if service_installed; then
+      systemctl --user restart "$UNIT"
+      echo "myriadcode: restarted (systemd service)"
+      exit 0
+    fi
     stop_server || true
     sleep 0.5
+    ;;
+  service)
+    case "${2:-}" in
+      install)   install_service; exit $? ;;
+      uninstall) uninstall_service; exit 0 ;;
+      *) echo "usage: myriadcode service install|uninstall" >&2; exit 2 ;;
+    esac
     ;;
   status)
     pid="$(running_pid)"
     if [ -n "$pid" ]; then
       echo "myriadcode: running at $URL (pid $pid)"
+      service_active && echo "           managed by systemd ($UNIT)"
     else
       echo "myriadcode: not running"
+      service_installed && echo "           installed as $UNIT; start it with 'myriadcode'"
     fi
     exit 0
     ;;
@@ -85,6 +172,11 @@ myriadcode status     is it running, and on what pid
 myriadcode open       just open the browser at a server already running
 myriadcode --no-open  start without opening a browser
 
+myriadcode service install    run it as a systemd user service: starts at
+                              login, restarts on failure, survives closing
+                              the terminal it was started from
+myriadcode service uninstall  remove that again
+
 Ctrl-C stops a server started in this terminal. Use `myriadcode stop` for one
 started somewhere else. Both let the server shut down cleanly; kill -9 does not.
 EOF
@@ -98,6 +190,16 @@ esac
 if curl -sf -o /dev/null --max-time 1 "$URL/"; then
   echo "myriadcode: already running at $URL (pid $(running_pid))"
   echo "           opening it. Use 'myriadcode stop' or 'myriadcode restart' to take it down."
+  [ "${1:-}" = "--no-open" ] || open_browser
+  exit 0
+fi
+
+# With the service installed, starting means starting the service -- never a
+# second server in this terminal, which would take the port the service needs
+# and die with the terminal, which is the whole thing the service exists to fix.
+if service_installed; then
+  systemctl --user start "$UNIT"
+  echo "myriadcode: started (systemd service) at $URL"
   [ "${1:-}" = "--no-open" ] || open_browser
   exit 0
 fi

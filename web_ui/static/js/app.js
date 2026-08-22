@@ -2963,6 +2963,27 @@ async function openMicStream(audio) {
   }
 }
 
+/* A capture device can vanish in the middle of a recording -- a USB microphone
+ * falls off the bus, a headset is switched off -- and from inside the page
+ * nothing about that is visible. The MediaRecorder keeps running, the meter
+ * sits flat, the button still says it is listening, and the words simply stop
+ * arriving. What the user gets is a sentence that ends halfway with no way to
+ * tell whether they are still being heard: "it just stopped, or it was already
+ * stopped, I can't tell."
+ *
+ * `ended` on the track is the browser saying the device is gone. It is the only
+ * honest signal available, so every capture path listens for it and none of
+ * them may go on pretending to record. */
+function watchMicTrack(stream, onLost) {
+  const track = stream.getAudioTracks()[0];
+  if (!track) return;
+  const lost = () => {
+    track.removeEventListener('ended', lost);
+    onLost(track.label || 'The microphone');
+  };
+  track.addEventListener('ended', lost);
+}
+
 /* An OverconstrainedError's message is "Constraints could not be satisfied." and
  * a denial's is often empty, so the raw text is shown only when it says
  * something the reader can act on. */
@@ -3103,6 +3124,7 @@ const Dictation = {
 
     try {
       this.streamRef = stream;
+      this.watchForLoss(stream);
       this.chunks = [];
       this.ensureAudioGraph();
       const mime = ['audio/webm;codecs=opus', 'audio/webm', 'audio/ogg;codecs=opus', 'audio/mp4']
@@ -3209,6 +3231,7 @@ const Dictation = {
     }
 
     this.streamRef = stream;
+    this.watchForLoss(stream);
     this.partial = '';
     const ta = App.els.textarea;
     this.insertAt = ta ? (ta.selectionStart ?? ta.value.length) : 0;
@@ -3381,6 +3404,20 @@ const Dictation = {
     if (this.els.elapsed) this.els.elapsed.textContent = '';
   },
 
+  /* The microphone disappearing mid-sentence goes through the ordinary stop
+   * path, so whatever was captured before it went is transcribed and inserted
+   * rather than thrown away -- losing the device should not also lose the
+   * words. Then say so, because the alternative is a button that still looks
+   * like it is listening. */
+  watchForLoss(stream) {
+    watchMicTrack(stream, async (label) => {
+      if (!this.recording && !this.starting) return;
+      const text = await this.stop();
+      if (text) insertAtCursor(App.els.textarea, text);
+      appendNotice('error', `${label} disconnected — dictation stopped.`);
+    });
+  },
+
   /* Return to a known-clean state from any path. */
   teardown() {
     this.recording = false;
@@ -3548,6 +3585,13 @@ const MicTest = {
       // every microphone appears with its real name.
       this.els.device.addEventListener('focus', () => this.refreshDevices(true));
     }
+    // Plugging a microphone back in should be enough. Without this the picker
+    // keeps showing the devices that existed when the page loaded, so the fix
+    // for "my microphone is not listed" is a reload, which is not a thing
+    // anyone should have to work out.
+    if (navigator.mediaDevices && navigator.mediaDevices.addEventListener) {
+      navigator.mediaDevices.addEventListener('devicechange', () => this.refreshDevices());
+    }
   },
 
   async refreshDevices(ask = false) {
@@ -3636,6 +3680,14 @@ const MicTest = {
     }
     this.active = true;
     this.stream = stream;
+    // A mic test whose microphone has gone is the most misleading screen in the
+    // app: a flat meter reads as "this device records nothing", which is a very
+    // different conclusion from "this device is no longer here".
+    watchMicTrack(stream, (label) => {
+      if (!this.active) return;
+      this.stop();
+      appendNotice('error', `${label} disconnected — mic test stopped.`);
+    });
     // Permission is now granted, so re-read the device list with real names.
     this.refreshDevices();
     this.ctx = new (window.AudioContext || window.webkitAudioContext)();

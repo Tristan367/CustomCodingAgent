@@ -275,6 +275,122 @@ async def test_the_error_text_names_something_actionable(page):
         "the browser's own wording is what made this unreportable")
 
 
+# ── The device vanishing in the middle of a recording ────────────────────────
+
+async def test_a_track_that_ends_is_reported_by_name(page):
+    """The USB microphone fell off the bus mid-sentence. Nothing listened for
+    `ended`, so the recorder kept running against a dead track: flat meter,
+    button still lit, words simply stopping. What the user could say afterwards
+    was "it just stopped, or it was already stopped, I can't tell."
+    """
+    seen = await page.evaluate(
+        """async () => {
+            const track = new EventTarget();
+            track.label = 'CMTECK';
+            const stream = { getAudioTracks: () => [track] };
+            const out = [];
+            watchMicTrack(stream, (label) => out.push(label));
+            track.dispatchEvent(new Event('ended'));
+            return out;
+        }"""
+    )
+    assert seen == ["CMTECK"], "the device's own name is what the user recognises"
+
+
+async def test_a_stream_with_no_audio_track_is_not_an_error(page):
+    ok = await page.evaluate(
+        """() => {
+            try { watchMicTrack({ getAudioTracks: () => [] }, () => {}); return true; }
+            catch (e) { return false; }
+        }"""
+    )
+    assert ok
+
+
+async def test_loss_is_announced_once_however_many_times_it_fires(page):
+    count = await page.evaluate(
+        """async () => {
+            const track = new EventTarget();
+            track.label = 'CMTECK';
+            let n = 0;
+            watchMicTrack({ getAudioTracks: () => [track] }, () => { n += 1; });
+            track.dispatchEvent(new Event('ended'));
+            track.dispatchEvent(new Event('ended'));
+            return n;
+        }"""
+    )
+    assert count == 1, "one disconnection, one notice"
+
+
+async def test_an_unnamed_track_still_produces_a_sentence(page):
+    """A device the browser will not name must not render as "undefined
+    disconnected"."""
+    label = await page.evaluate(
+        """async () => {
+            const track = new EventTarget();
+            const out = [];
+            watchMicTrack({ getAudioTracks: () => [track] }, (l) => out.push(l));
+            track.dispatchEvent(new Event('ended'));
+            return out[0];
+        }"""
+    )
+    assert label and "undefined" not in label
+
+
+async def test_dictation_stops_and_says_so_when_the_microphone_goes(page):
+    """End to end through Dictation's own handler: it must leave the recorder
+    stopped and put a notice in the transcript, not sit there looking live."""
+    result = await page.evaluate(
+        """async () => {
+            const notices = [];
+            const realNotice = window.appendNotice;
+            window.appendNotice = (kind, text) => notices.push([kind, text]);
+            const realStop = Dictation.stop;
+            let stopped = 0;
+            Dictation.stop = async () => { stopped += 1; Dictation.recording = false; return ''; };
+
+            const track = new EventTarget();
+            track.label = 'CMTECK';
+            Dictation.recording = true;
+            Dictation.watchForLoss({ getAudioTracks: () => [track] });
+            track.dispatchEvent(new Event('ended'));
+            await new Promise((r) => setTimeout(r, 0));
+
+            Dictation.stop = realStop;
+            window.appendNotice = realNotice;
+            return { stopped, notices, recording: Dictation.recording };
+        }"""
+    )
+    assert result["stopped"] == 1, "the recorder must actually be stopped"
+    assert not result["recording"]
+    assert result["notices"], "silence here is the whole bug"
+    kind, text = result["notices"][0]
+    assert kind == "error"
+    assert "CMTECK" in text and "disconnected" in text
+
+
+async def test_nothing_is_announced_if_dictation_was_not_running(page):
+    """Stopping normally also ends the track. That is not a disconnection and
+    must not be reported as one."""
+    notices = await page.evaluate(
+        """async () => {
+            const out = [];
+            const real = window.appendNotice;
+            window.appendNotice = (k, t) => out.push(t);
+            const track = new EventTarget();
+            track.label = 'CMTECK';
+            Dictation.recording = false;
+            Dictation.starting = false;
+            Dictation.watchForLoss({ getAudioTracks: () => [track] });
+            track.dispatchEvent(new Event('ended'));
+            await new Promise((r) => setTimeout(r, 0));
+            window.appendNotice = real;
+            return out;
+        }"""
+    )
+    assert notices == [], f"a normal stop is not a disconnection: {notices}"
+
+
 # ── The picker agrees with what will actually be opened ──────────────────────
 
 async def test_the_picker_still_shows_the_chosen_microphone_after_an_id_rotates(page):
